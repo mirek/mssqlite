@@ -32,6 +32,21 @@ importers:
         specifier: workspace:*
         version: link:../tsql
 
+  packages/engine:
+    dependencies:
+      '@mssqlite/catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@mssqlite/tds':
+        specifier: workspace:*
+        version: link:../tds
+      '@mssqlite/transpile':
+        specifier: workspace:*
+        version: link:../transpile
+      '@mssqlite/tsql':
+        specifier: workspace:*
+        version: link:../tsql
+
   packages/tds:
     dependencies:
       '@mssqlite/bytes':

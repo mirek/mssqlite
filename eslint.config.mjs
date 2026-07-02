@@ -17,6 +17,12 @@ export default [
       }
     },
     rules: {
+      // Session and variable slots are intentionally mutable engine state.
+      'no-param-reassign': [ 'error', {
+        props: true,
+        ignorePropertyModificationsFor: [ 'ctx', 'acc', 'r', 'session', 'variable' ],
+        ignorePropertyModificationsForRegex: [ '^mutable', 'Ctx$', '^ref', 'Ref$' ]
+      } ],
       // Mutually recursive grammars and AST types need the type-aware variant
       // with lazy variable references allowed.
       'no-use-before-define': 'off',

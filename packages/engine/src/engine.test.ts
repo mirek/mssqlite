@@ -1,0 +1,237 @@
+import { expect, test } from 'vitest'
+import { DataType } from '@mssqlite/tds'
+import { executeBatch, executeSql, MssqlError, server, session } from './index.ts'
+import type { Item, Rows } from './execute.ts'
+
+const open =
+  (): ReturnType<typeof session> =>
+    session(server())
+
+const rowsOf =
+  (items: readonly Item[]): Rows => {
+    const found = items.find((item): item is Rows => item.kind === 'rows')
+    if (found === undefined) {
+      throw new Error('Expected a result set.')
+    }
+    return found
+  }
+
+test('select constants with metadata', () => {
+  const s = open()
+  const result = rowsOf(executeBatch(s, 'SELECT 1 AS n, \'x\' AS t, 1.5 AS f, NULL AS z'))
+  expect(result.columns.map(column => column.name)).toEqual([ 'n', 't', 'f', 'z' ])
+  expect(result.columns[0]?.typeInfo.type).toBe(DataType.DataType.intN)
+  expect(result.columns[1]?.typeInfo.type).toBe(DataType.DataType.nvarchar)
+  expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.floatN)
+  expect(result.rows).toEqual([ [ 1, 'x', 1.5, null ] ])
+})
+
+test('create, insert, select round trip with catalog metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE dbo.users (
+      id INT IDENTITY(1,1) PRIMARY KEY,
+      name NVARCHAR(100) NOT NULL,
+      age INT NULL
+    )
+  `)
+  const insert = executeBatch(s, 'INSERT INTO users (name, age) VALUES (N\'Alice\', 30), (N\'Bob\', NULL)')
+  expect(insert[0]).toMatchObject({ kind: 'count', rowCount: 2 })
+  const result = rowsOf(executeBatch(s, 'SELECT id, name, age FROM users ORDER BY id'))
+  expect(result.columns[0]).toMatchObject({
+    typeInfo: { type: DataType.DataType.intN, maxLength: 4 },
+    nullable: false
+  })
+  expect(result.columns[1]).toMatchObject({
+    typeInfo: { type: DataType.DataType.nvarchar, maxLength: 200 },
+    nullable: false
+  })
+  expect(result.rows).toEqual([ [ 1, 'Alice', 30 ], [ 2, 'Bob', null ] ])
+})
+
+test('variables, set and select assignment', () => {
+  const s = open()
+  executeBatch(s, 'DECLARE @x INT = 1 SET @x = @x + 10')
+  const result = rowsOf(executeBatch(s, 'SELECT @x AS x'))
+  expect(result.rows).toEqual([ [ 11 ] ])
+  executeBatch(s, 'CREATE TABLE t (v INT); INSERT INTO t VALUES (5), (7)')
+  executeBatch(s, 'DECLARE @m INT SELECT @m = MAX(v) FROM t')
+  expect(rowsOf(executeBatch(s, 'SELECT @m AS m')).rows).toEqual([ [ 7 ] ])
+})
+
+test('globals', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, v INT)')
+  executeBatch(s, 'INSERT INTO t (v) VALUES (1), (2), (3)')
+  const result = rowsOf(executeBatch(s, 'SELECT @@ROWCOUNT AS rc, @@IDENTITY AS id, @@TRANCOUNT AS tc, @@SPID AS spid'))
+  expect(result.rows[0]?.[0]).toBe(3)
+  expect(result.rows[0]?.[1]).toBe(3)
+  expect(result.rows[0]?.[2]).toBe(0)
+  expect(rowsOf(executeBatch(s, 'SELECT SCOPE_IDENTITY() AS i')).rows).toEqual([ [ 3 ] ])
+})
+
+test('control flow', () => {
+  const s = open()
+  const items = executeBatch(s, `
+    DECLARE @i INT = 0, @sum INT = 0
+    WHILE @i < 5
+    BEGIN
+      SET @i = @i + 1
+      IF @i = 3 CONTINUE
+      IF @i = 5 BREAK
+      SET @sum = @sum + @i
+    END
+    SELECT @sum AS total
+  `)
+  expect(rowsOf(items).rows).toEqual([ [ 1 + 2 + 4 ] ])
+})
+
+test('if else and print', () => {
+  const s = open()
+  const items = executeBatch(s, 'IF 1 > 2 PRINT \'yes\' ELSE PRINT \'no\'')
+  expect(items).toEqual([ { kind: 'message', text: 'no' } ])
+})
+
+test('transactions with nesting and rollback', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (v INT)')
+  executeBatch(s, 'BEGIN TRAN INSERT INTO t VALUES (1) BEGIN TRAN INSERT INTO t VALUES (2) COMMIT COMMIT')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 2 ] ])
+  executeBatch(s, 'BEGIN TRAN INSERT INTO t VALUES (3) ROLLBACK')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 2 ] ])
+})
+
+test('savepoints', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (v INT)')
+  executeBatch(s, `
+    BEGIN TRAN
+    INSERT INTO t VALUES (1)
+    SAVE TRAN sp1
+    INSERT INTO t VALUES (2)
+    ROLLBACK TRAN sp1
+    COMMIT
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 1 ] ])
+})
+
+test('sql errors map to mssql numbers', () => {
+  const s = open()
+  expect(() => executeBatch(s, 'SELECT * FROM missing')).toThrowError(
+    expect.objectContaining({ number: 208 }) as Error
+  )
+  executeBatch(s, 'CREATE TABLE u (email VARCHAR(50) UNIQUE)')
+  executeBatch(s, 'INSERT INTO u VALUES (\'a\')')
+  expect(() => executeBatch(s, 'INSERT INTO u VALUES (\'a\')')).toThrowError(
+    expect.objectContaining({ number: 2627 }) as Error
+  )
+  expect(() => executeBatch(s, 'SELEC 1')).toThrowError(MssqlError)
+  // @@ERROR reports the previous statement's error before this one resets it.
+  expect(rowsOf(executeBatch(s, 'SELECT @@ERROR AS e')).rows).toEqual([ [ 102 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@ERROR AS e')).rows).toEqual([ [ 0 ] ])
+})
+
+test('undeclared variable errors', () => {
+  const s = open()
+  expect(() => executeBatch(s, 'SELECT @nope AS x')).toThrowError(
+    expect.objectContaining({ number: 137 }) as Error
+  )
+})
+
+test('executeSql binds parameters and returns outputs', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY, name NVARCHAR(50))')
+  executeSql(s, 'INSERT INTO t VALUES (@id, @name)', [
+    { name: '@id', value: 1 },
+    { name: '@name', value: 'x' }
+  ])
+  const result = executeSql(s, 'SELECT name FROM t WHERE id = @id', [ { name: '@id', value: 1 } ])
+  expect(rowsOf(result.items).rows).toEqual([ [ 'x' ] ])
+  const output = executeSql(s, 'SET @total = (SELECT COUNT(*) FROM t)', [
+    { name: '@total', value: null, output: true }
+  ])
+  expect(output.outputs).toEqual([ { name: '@total', value: 1 } ])
+})
+
+test('exec sp_executesql from tsql', () => {
+  const s = open()
+  const items = executeBatch(s, 'EXEC sp_executesql N\'SELECT @v AS v\', N\'@v int\', @v = 42')
+  expect(rowsOf(items).rows).toEqual([ [ 42 ] ])
+})
+
+test('date and string udfs through full pipeline', () => {
+  const s = open()
+  const result = rowsOf(executeBatch(s, `
+    SELECT
+      DATEADD(month, 1, '2026-01-31') AS m,
+      DATEDIFF(day, '2026-01-01', '2026-02-01') AS d,
+      DATEPART(quarter, '2026-07-01') AS q,
+      DATENAME(month, '2026-07-01') AS mn,
+      RIGHT('hello', 2) AS r,
+      REPLICATE('ab', 3) AS rep,
+      REVERSE('abc') AS rev,
+      STUFF('abcdef', 2, 3, 'x') AS st,
+      PATINDEX('%c%', 'abc') AS pi,
+      CHARINDEX('l', 'hello', 4) AS ci
+  `))
+  expect(result.rows[0]).toEqual([
+    '2026-02-28 00:00:00.000', 31, 3, 'July', 'lo', 'ababab', 'cba', 'axef', 3, 4
+  ])
+})
+
+test('newid produces guids, rand in range', () => {
+  const s = open()
+  const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))
+  expect(String(result.rows[0]?.[0])).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/)
+  expect(Number(result.rows[0]?.[1])).toBeGreaterThanOrEqual(0)
+  expect(Number(result.rows[0]?.[1])).toBeLessThan(1)
+})
+
+test('select into creates table and registers catalog', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE src (v INT); INSERT INTO src VALUES (1), (2)')
+  executeBatch(s, 'SELECT v INTO dst FROM src')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM dst')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM sys.tables WHERE name = \'dst\'')).rows)
+    .toEqual([ [ 1 ] ])
+})
+
+test('truncate resets identity', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, v INT)')
+  executeBatch(s, 'INSERT INTO t (v) VALUES (1), (2)')
+  executeBatch(s, 'TRUNCATE TABLE t')
+  executeBatch(s, 'INSERT INTO t (v) VALUES (9)')
+  expect(rowsOf(executeBatch(s, 'SELECT id FROM t')).rows).toEqual([ [ 1 ] ])
+})
+
+test('catalog queries work end to end', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE users (id INT PRIMARY KEY, name NVARCHAR(50))')
+  const result = rowsOf(executeBatch(s, `
+    SELECT t.name, c.name AS col
+    FROM sys.tables t
+    JOIN sys.columns c ON c.object_id = t.object_id
+    ORDER BY c.column_id
+  `))
+  expect(result.rows).toEqual([ [ 'users', 'id' ], [ 'users', 'name' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT OBJECT_ID(\'users\') AS id')).rows[0]?.[0]).toBeGreaterThan(100000000)
+  expect(rowsOf(executeBatch(s, 'SELECT DB_NAME() AS d')).rows).toEqual([ [ 'master' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT SERVERPROPERTY(\'ProductVersion\') AS v')).rows)
+    .toEqual([ [ '15.0.2000.5' ] ])
+})
+
+test('use and session options', () => {
+  const s = open()
+  executeBatch(s, 'SET NOCOUNT ON')
+  expect(s.options.get('nocount')).toBe('on')
+  executeBatch(s, 'USE tempdb')
+  expect(s.database).toBe('tempdb')
+})
+
+test('throw raises mssql error', () => {
+  const s = open()
+  expect(() => executeBatch(s, 'THROW 51000, \'custom\', 2')).toThrowError(
+    expect.objectContaining({ number: 51000, message: 'custom', state: 2 }) as Error
+  )
+})

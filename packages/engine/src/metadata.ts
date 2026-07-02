@@ -1,0 +1,155 @@
+import { objectIdOf, tableColumns, type ColumnRow } from '@mssqlite/catalog'
+import { TypeInfo } from '@mssqlite/tds'
+import type { Value } from './session.ts'
+import type { DatabaseSync, StatementSync } from 'node:sqlite'
+
+/** Result set column with TDS metadata. */
+export type Column = {
+  readonly name: string,
+  readonly typeInfo: TypeInfo.t,
+  readonly nullable: boolean
+}
+
+export type t =
+  Column
+
+/** @returns TDS TYPE_INFO of a sys.columns catalog row. */
+export const typeInfoOfCatalogRow =
+  (row: ColumnRow): TypeInfo.t => {
+    switch (row.system_type_id) {
+      case 48:
+        return TypeInfo.intN(1)
+      case 52:
+        return TypeInfo.intN(2)
+      case 56:
+        return TypeInfo.intN(4)
+      case 127:
+        return TypeInfo.intN(8)
+      case 104:
+        return TypeInfo.bitN()
+      case 59:
+        return TypeInfo.floatN(4)
+      case 62:
+        return TypeInfo.floatN(8)
+      case 106:
+      case 108:
+        return TypeInfo.decimalN(row.precision, row.scale)
+      case 60:
+      case 122:
+        return TypeInfo.moneyN(row.system_type_id === 60 ? 8 : 4)
+      case 58:
+        return TypeInfo.datetimeN(4)
+      case 61:
+        return TypeInfo.datetimeN(8)
+      case 40:
+        return TypeInfo.dateN()
+      case 41:
+        return TypeInfo.timeN(row.scale)
+      case 42:
+        return TypeInfo.datetime2N(row.scale)
+      case 43:
+        return TypeInfo.datetimeOffsetN(row.scale)
+      case 36:
+        return TypeInfo.guid()
+      case 167:
+      case 175:
+      case 35:
+        return TypeInfo.varchar(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
+      case 231:
+      case 239:
+      case 99:
+      case 241:
+        return TypeInfo.nvarchar(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length / 2)
+      case 165:
+      case 173:
+      case 34:
+        return TypeInfo.varbinary(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
+      default:
+        return TypeInfo.nvarchar('max')
+    }
+  }
+
+/** @returns TDS TYPE_INFO inferred from the values of one result column. */
+export const typeInfoOfValues =
+  (values: readonly Value[]): TypeInfo.t => {
+    let big = false
+    let real = false
+    let blob = false
+    let any = false
+    for (const value of values) {
+      if (value === null) {
+        continue
+      }
+      any = true
+      if (typeof value === 'number') {
+        if (Number.isInteger(value)) {
+          if (value > 2147483647 || value < -2147483648) {
+            big = true
+          }
+        } else {
+          real = true
+        }
+      } else if (typeof value === 'bigint') {
+        big = true
+      } else if (value instanceof Uint8Array) {
+        blob = true
+      } else {
+        return TypeInfo.nvarchar('max')
+      }
+    }
+    if (!any) {
+      return TypeInfo.intN(4)
+    }
+    if (blob) {
+      return TypeInfo.varbinary('max')
+    }
+    if (real) {
+      return TypeInfo.floatN(8)
+    }
+    return TypeInfo.intN(big ? 8 : 4)
+  }
+
+/** Column descriptor from `StatementSync.columns()`. */
+type SourceColumn = {
+  readonly name: string,
+  readonly column: string | null,
+  readonly table: string | null,
+  readonly type: string | null
+}
+
+const catalogColumn =
+  (db: DatabaseSync, table: string, column: string): ColumnRow | undefined => {
+    const objectId = objectIdOf(db, table.split('.'))
+    if (objectId === undefined) {
+      return undefined
+    }
+    return tableColumns(db, objectId)
+      .find(row => row.name.toLowerCase() === column.toLowerCase())
+  }
+
+/**
+ * @returns TDS column metadata for a prepared statement's result — catalog
+ * lookups when the column maps to a table column, value shape otherwise.
+ */
+export const columnsOf =
+  (db: DatabaseSync, statement: StatementSync, rows: readonly Record<string, Value>[]): Column[] => {
+    const sources = statement.columns() as unknown as SourceColumn[]
+    return sources.map(source => {
+      if (source.table !== null && source.column !== null) {
+        const row = catalogColumn(db, source.table, source.column)
+        if (row !== undefined) {
+          return {
+            name: source.name,
+            typeInfo: typeInfoOfCatalogRow(row),
+            nullable: row.is_nullable !== 0
+          }
+        }
+      }
+      const values = rows.map(row => row[source.name] ?? null)
+      return {
+        name: source.name,
+        typeInfo: typeInfoOfValues(values),
+        nullable: true
+      }
+    })
+  }
