@@ -1,0 +1,24 @@
+{
+  "name": "@mssqlite/catalog",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MSSQL system catalog (sys.*) emulation module.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "keywords": [
+    "mssqlite",
+    "sys",
+    "catalog",
+    "metadata",
+    "mssql",
+    "sqlite"
+  ],
+  "author": "Mirek Rusin (https://github.com/mirek)",
+  "license": "MIT",
+  "dependencies": {
+    "@mssqlite/tsql": "workspace:*"
+  }
+}

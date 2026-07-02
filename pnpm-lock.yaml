@@ -26,6 +26,12 @@ importers:
 
   packages/bytes: {}
 
+  packages/catalog:
+    dependencies:
+      '@mssqlite/tsql':
+        specifier: workspace:*
+        version: link:../tsql
+
   packages/tds:
     dependencies:
       '@mssqlite/bytes':
