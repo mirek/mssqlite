@@ -18,10 +18,25 @@ test('select basics', () => {
 })
 
 test('sys and schema-qualified names', () => {
-  expect(sqlOf('SELECT * FROM sys.tables')).toBe('SELECT * FROM "sys.tables"')
-  expect(sqlOf('SELECT * FROM master.sys.Tables')).toBe('SELECT * FROM "sys.tables"')
-  expect(sqlOf('SELECT * FROM app.users')).toBe('SELECT * FROM "app.users"')
-  expect(sqlOf('SELECT * FROM #tmp')).toBe('SELECT * FROM temp."#tmp"')
+  // Flattened names get a bare-table alias so qualified column refs still resolve.
+  expect(sqlOf('SELECT * FROM sys.tables')).toBe('SELECT * FROM "sys.tables" AS "tables"')
+  expect(sqlOf('SELECT * FROM master.sys.Tables')).toBe('SELECT * FROM "sys.tables" AS "Tables"')
+  expect(sqlOf('SELECT * FROM app.users')).toBe('SELECT * FROM "app.users" AS "users"')
+  expect(sqlOf('SELECT * FROM #tmp')).toBe('SELECT * FROM temp."#tmp" AS "#tmp"')
+  expect(sqlOf('SELECT * FROM dbo.users')).toBe('SELECT * FROM "users"')
+})
+
+test('schema-qualified table keeps qualified column refs working', () => {
+  // Regression: unaliased non-dbo table must expose its bare name for `orders.id`.
+  expect(sqlOf('SELECT orders.id FROM sales.orders'))
+    .toBe('SELECT "orders"."id" FROM "sales.orders" AS "orders"')
+  expect(sqlOf('SELECT sales.orders.id FROM sales.orders'))
+    .toBe('SELECT "orders"."id" FROM "sales.orders" AS "orders"')
+})
+
+test('db..table shorthand resolves to the same table as db.dbo.table', () => {
+  expect(sqlOf('SELECT * FROM mydb..orders')).toBe('SELECT * FROM "orders"')
+  expect(sqlOf('SELECT * FROM mydb.dbo.orders')).toBe('SELECT * FROM "orders"')
 })
 
 test('top and offset become limit', () => {
@@ -56,9 +71,38 @@ test('variables become parameters', () => {
 test('plus resolves to add, concat or dynamic dispatch', () => {
   expect(scalarOf('1 + 2')).toBe('(1 + 2)')
   expect(scalarOf('\'a\' + \'b\'')).toBe('(\'a\' || \'b\')')
-  expect(scalarOf('name + \'x\'')).toBe('("name" || \'x\')')
+  // A column of unknown type + a string is dynamic — MSSQL concatenates two
+  // strings but numerically adds a string/number mix, which mssqlite_add does.
+  expect(scalarOf('name + \'x\'')).toBe('mssqlite_add("name", \'x\')')
+  // A literal number + literal string is numeric addition in T-SQL, not concat.
+  expect(scalarOf('3 + \'5\'')).toBe('mssqlite_add(3, \'5\')')
   expect(scalarOf('a + b')).toBe('mssqlite_add("a", "b")')
   expect(scalarOf('LEN(a) + 1')).toBe('(length(rtrim("a")) + 1)')
+})
+
+test('compound update operators reuse add/concat/xor rendering', () => {
+  expect(sqlOf('UPDATE t SET name += \'!\' WHERE id = 1'))
+    .toBe('UPDATE "t" SET "name" = mssqlite_add("name", \'!\') WHERE ("id" = 1)')
+  expect(sqlOf('UPDATE t SET flags ^= 4'))
+    .toBe('UPDATE "t" SET "flags" = (("flags" | 4) - ("flags" & 4))')
+  expect(sqlOf('UPDATE t SET n -= 2')).toBe('UPDATE "t" SET "n" = ("n" - 2)')
+})
+
+test('!> and !< comparison operators', () => {
+  expect(scalarOf('a !> 5')).toBe('("a" <= 5)')
+  expect(scalarOf('a !< 5')).toBe('("a" >= 5)')
+})
+
+test('odd-length binary literal pads to even', () => {
+  expect(scalarOf('0x1')).toBe('x\'01\'')
+  expect(scalarOf('0xABC')).toBe('x\'0ABC\'')
+})
+
+test('TOP inside a set operation is branch-scoped', () => {
+  expect(sqlOf('SELECT TOP 1 x FROM t2 UNION ALL SELECT y FROM u'))
+    .toBe('SELECT * FROM (SELECT "x" FROM "t2" LIMIT 1) UNION ALL SELECT "y" FROM "u"')
+  expect(sqlOf('SELECT x FROM t2 UNION ALL SELECT TOP 1 y FROM u'))
+    .toBe('SELECT "x" FROM "t2" UNION ALL SELECT * FROM (SELECT "y" FROM "u" LIMIT 1)')
 })
 
 test('string literals escape', () => {
@@ -131,7 +175,7 @@ test('insert, update, delete, truncate', () => {
   expect(sqlOf('INSERT INTO t DEFAULT VALUES')).toBe('INSERT INTO "t" DEFAULT VALUES')
   expect(sqlOf('INSERT INTO t SELECT * FROM s')).toBe('INSERT INTO "t" SELECT * FROM "s"')
   expect(sqlOf('UPDATE t SET a = 1, b += 2 WHERE id = @id'))
-    .toBe('UPDATE "t" SET "a" = 1, "b" = "b" + 2 WHERE ("id" = @id)')
+    .toBe('UPDATE "t" SET "a" = 1, "b" = mssqlite_add("b", 2) WHERE ("id" = @id)')
   expect(sqlOf('DELETE FROM t WHERE id = 1')).toBe('DELETE FROM "t" WHERE ("id" = 1)')
   expect(sqlOf('TRUNCATE TABLE t')).toBe('DELETE FROM "t"')
 })

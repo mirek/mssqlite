@@ -58,7 +58,10 @@ const binaryOp =
       case '+': {
         const leftType = infer(expression_.left)
         const rightType = infer(expression_.right)
-        if (leftType === 'text' || rightType === 'text') {
+        // T-SQL concatenates only when both sides are text; a text/number mix
+        // converts the string to a number and adds. mssqlite_add resolves the
+        // remaining unknown cases at runtime (concat two strings, else add).
+        if (leftType === 'text' && rightType === 'text') {
           return `(${left} || ${right})`
         }
         if (leftType === 'number' && rightType === 'number') {
@@ -73,6 +76,10 @@ const binaryOp =
       case '^':
         // SQLite has no xor operator.
         return `((${left} | ${right}) - (${left} & ${right}))`
+      case '!>':
+        return `(${left} <= ${right})`
+      case '!<':
+        return `(${left} >= ${right})`
       default:
         return `(${left} ${expression_.operator} ${right})`
     }
@@ -90,8 +97,12 @@ export const expression =
         return expression_.value
       case 'string':
         return Quote.string(expression_.value)
-      case 'binary':
-        return `x'${expression_.value.slice(2)}'`
+      case 'binary': {
+        // SQLite blob literals need an even number of hex digits.
+        const digits = expression_.value.slice(2)
+        const hex = digits.length % 2 === 0 ? digits : `0${digits}`
+        return `x'${hex}'`
+      }
       case 'variable':
         return Context.parameter(ctx, expression_.name)
       case 'column':

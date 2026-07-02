@@ -44,6 +44,9 @@ export const colMetadata =
           Encode.uint32(column.userType ?? 0),
           Encode.uint16(column.flags ?? flags()),
           TypeInfo.encode(column.typeInfo),
-          Encode.bVarchar(column.name)
+          // Column name rides a single length byte; a name over 128 chars
+          // (past MSSQL's identifier limit) would wrap it and corrupt the
+          // stream, so cap it defensively.
+          Encode.bVarchar(column.name.length > 128 ? column.name.slice(0, 128) : column.name)
         ))
     )

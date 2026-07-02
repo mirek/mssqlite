@@ -134,7 +134,8 @@ export const datepart =
         return Math.floor((days(parts) - DateTime.daysFromCivil(parts.year, 1, 1) + 7) / 7)
       case 'weekday':
         // 1 = Sunday with the default DATEFIRST 7; 1970-01-01 was a Thursday.
-        return ((days(parts) + 4) % 7) + 1
+        // Double-mod keeps the result in 1..7 for pre-epoch (negative) days.
+        return ((((days(parts) + 4) % 7) + 7) % 7) + 1
       case 'hour':
         return parts.hours
       case 'minute':

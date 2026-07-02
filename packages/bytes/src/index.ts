@@ -1,3 +1,4 @@
+export * as Cp1252 from './cp1252.ts'
 export * as Cursor from './cursor.ts'
 export * as Decode from './decode.ts'
 export * as Encode from './encode.ts'

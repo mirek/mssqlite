@@ -1,5 +1,4 @@
-import { Buffer } from 'node:buffer'
-import { Cursor, Decode, Encode, Result, Ucs2, type Read } from '@mssqlite/bytes'
+import { Cp1252, Cursor, Decode, Encode, Result, Ucs2, type Read } from '@mssqlite/bytes'
 import * as DataType from './data-type.ts'
 import * as DateTime from './date-time.ts'
 import * as Decimal from './decimal.ts'
@@ -21,9 +20,19 @@ export type t =
 
 const plpNull = Encode.concat(Encode.uint32(0xffffffff), Encode.uint32(0xffffffff))
 
-const latin1 =
-  (bytes: Uint8Array): string =>
-    Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('latin1')
+/**
+ * @throws if an encoded value exceeds what its length prefix can address —
+ * a silent modulo wrap would corrupt the whole token stream, so fail loudly
+ * (the engine maps this to an MSSQL truncation-style error).
+ */
+const checkLength =
+  (typeInfo: TypeInfo.t, byteLength: number, max: number): void => {
+    if (byteLength > max) {
+      throw new Error(
+        `Value of ${byteLength} bytes exceeds the ${max}-byte limit for type 0x${typeInfo.type.toString(16)}; use a MAX type.`
+      )
+    }
+  }
 
 const number_ =
   (value: Value): number =>
@@ -132,7 +141,7 @@ export const encodeBare =
       case DataType.DataType.bigVarchar:
       case DataType.DataType.bigChar:
       case DataType.DataType.text:
-        return Encode.concat(Uint8Array.from(Buffer.from(stringOf(value), 'latin1')))
+        return Cp1252.encode(stringOf(value))
       case DataType.DataType.bigVarbinary:
       case DataType.DataType.bigBinary:
       case DataType.DataType.image:
@@ -177,6 +186,7 @@ export const encode =
           return Encode.uint8(0)
         }
         const bare = encodeBare(typeInfo, value)
+        checkLength(typeInfo, bare.byteLength, 0xfe)
         return Encode.concat(Encode.uint8(bare.byteLength), bare)
       }
       case 'ushortLen': {
@@ -184,6 +194,7 @@ export const encode =
           return Encode.uint16(0xffff)
         }
         const bare = encodeBare(typeInfo, value)
+        checkLength(typeInfo, bare.byteLength, 0xfffe)
         return Encode.concat(Encode.uint16(bare.byteLength), bare)
       }
       case 'longLen': {
@@ -286,7 +297,7 @@ export const decodeBare =
       case DataType.DataType.bigVarchar:
       case DataType.DataType.bigChar:
       case DataType.DataType.text:
-        return latin1(bytes)
+        return Cp1252.decode(bytes)
       case DataType.DataType.bigVarbinary:
       case DataType.DataType.bigBinary:
       case DataType.DataType.image:
@@ -303,7 +314,20 @@ const nullValue: Read.t<Value> =
 
 const decodeSized =
   (typeInfo: TypeInfo.t, length: number): Read.t<Value> =>
-    Decode.map(Decode.bytes(length), bytes => decodeBare(typeInfo, bytes))
+    cursor => {
+      const result = Decode.bytes(length)(cursor)
+      if (Result.failed(result)) {
+        return result
+      }
+      // decodeBare throws on a length shorter than its reader needs, or an
+      // unhandled type (e.g. sql_variant) — turn that into a decode failure so
+      // hostile wire bytes never escape as an uncaught exception.
+      try {
+        return Result.ok(result.cursor, decodeBare(typeInfo, result.value))
+      } catch (error) {
+        return Result.fail(cursor, error instanceof Error ? error.message : String(error))
+      }
+    }
 
 const decodePlp =
   (typeInfo: TypeInfo.t): Read.t<Value> =>
@@ -328,7 +352,11 @@ const decodePlp =
         }
         chunks.push(chunk.value)
       }
-      return Result.ok(next, decodeBare(typeInfo, Encode.concat(...chunks)))
+      try {
+        return Result.ok(next, decodeBare(typeInfo, Encode.concat(...chunks)))
+      } catch (error) {
+        return Result.fail(cursor, error instanceof Error ? error.message : String(error))
+      }
     }
 
 /** TYPE_VARBYTE decoder for a TYPE_INFO — produces the JS value (`null` for wire NULLs). */

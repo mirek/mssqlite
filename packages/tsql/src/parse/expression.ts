@@ -285,8 +285,9 @@ const binaryLevel =
     }
 
 const multiplicative = binaryLevel([ '*', '/', '%' ], unary)
-const additive = binaryLevel([ '+', '-' ], multiplicative)
-const bitwise = binaryLevel([ '&', '^', '|' ], additive)
+// T-SQL puts + - & ^ | on one precedence level, left-to-right.
+const additive = binaryLevel([ '+', '-', '&', '^', '|' ], multiplicative)
+const bitwise = additive
 
 /** Scalar (non-boolean) operand — used where AND belongs to an enclosing construct. */
 export const operand: Parser.t<Ast.Expression> =

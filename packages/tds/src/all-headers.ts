@@ -35,6 +35,11 @@ export const decode =
         return undefined
       }
       const [ headerLength, headerType ] = header.value
+      // A header must cover its own 4-byte length + 2-byte type; a smaller
+      // value would never advance the cursor (infinite loop on hostile input).
+      if (headerLength < 6) {
+        return undefined
+      }
       if (headerType === Type.transactionDescriptor) {
         const data = Decode.seq(Decode.uint64, Decode.uint32)(header.cursor)
         if (!Result.failed(data)) {

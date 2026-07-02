@@ -55,10 +55,17 @@ test('nvarchar(max) uses PLP encoding', () => {
   expect(nullBytes).toEqual(Hex.of('ff ff ff ff ff ff ff ff'))
 })
 
-test('varchar round trips as latin1', () => {
+test('varchar round trips as CP1252', () => {
   expect(roundTrip(TypeInfo.varchar(10), 'foo')).toBe('foo')
   const bytes = Value.encode(TypeInfo.varchar(10), 'foo')
   expect(bytes).toEqual(Hex.of('03 00 66 6f 6f'))
+})
+
+test('varchar encodes Windows-1252 specials, not latin1', () => {
+  // '€' is byte 0x80 in CP1252; latin1 would corrupt it. '—' is 0x97.
+  expect(roundTrip(TypeInfo.varchar(20), 'price €99 — ok')).toBe('price €99 — ok')
+  const euro = Value.encode(TypeInfo.varchar(1), '€')
+  expect(euro).toEqual(Hex.of('01 00 80'))
 })
 
 test('varbinary round trips', () => {

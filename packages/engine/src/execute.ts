@@ -181,9 +181,11 @@ const applyAssign =
 /** SELECT that assigns variables (`SELECT @x = ...`) — returns no result set. */
 const selectAssign =
   (session: Session, statement: Ast.Select): void => {
-    const items = statement.items.map(item =>
+    // Alias every item to a unique synthetic name so two assignments reading
+    // the same column don't collapse to one key in the result record.
+    const items = statement.items.map((item, index): Ast.SelectItem =>
       item.kind === 'assign' ?
-        { ...item, kind: 'expression' as const } :
+        { kind: 'expression', expression: item.expression, alias: `__assign_${index}` } :
         item)
     const rendered = Transpile.statement({ ...statement, items } as Ast.Statement)
     const prepared = session.db.prepare(rendered.sql)
@@ -193,11 +195,9 @@ const selectAssign =
     if (last === undefined) {
       return
     }
-    const names = Object.keys(last)
     statement.items.forEach((item, index) => {
       if (item.kind === 'assign') {
-        const key = names[index]
-        applyAssign(session, item.variable, item.operator, key === undefined ? null : last[key] ?? null)
+        applyAssign(session, item.variable, item.operator, last[`__assign_${index}`] ?? null)
       }
     })
   }
@@ -255,7 +255,11 @@ const executeStatement =
         const prepared = session.db.prepare(rendered.sql)
         const result = prepared.run(bindings(session, rendered.variables))
         session.rowCount = Number(result.changes)
-        if (hasIdentity(session, statement.table)) {
+        // Only a row actually inserted into an identity table advances
+        // @@IDENTITY / SCOPE_IDENTITY; a zero-row insert leaves them unchanged
+        // (last_insert_rowid is connection-global and would otherwise leak a
+        // stale id from an unrelated table).
+        if (result.changes > 0 && hasIdentity(session, statement.table)) {
           session.lastIdentity = Number(result.lastInsertRowid)
         }
         items.push({ kind: 'count', rowCount: Number(result.changes) })
@@ -401,6 +405,13 @@ const executeStatement =
         }
         return undefined
       case 'saveTransaction':
+        // A bare SAVEPOINT implicitly opens a SQLite transaction; keep
+        // @@TRANCOUNT in step so a later BEGIN TRAN doesn't hit "cannot start a
+        // transaction within a transaction" and the work isn't left untracked.
+        if (session.transactionCount === 0) {
+          session.db.exec('BEGIN')
+          session.transactionCount = 1
+        }
         session.db.exec(`SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
         return undefined
       case 'use':
@@ -426,11 +437,34 @@ const executeStatement =
     }
   }
 
+/** @returns ordered `@name` parameter names from an sp_executesql declaration string. */
+const declaredParameterNames =
+  (declarations: string): string[] => {
+    const names: string[] = []
+    let depth = 0
+    let segment = ''
+    for (const char of declarations) {
+      if (char === '(') {
+        depth++
+      } else if (char === ')') {
+        depth--
+      }
+      if (char === ',' && depth === 0) {
+        names.push(segment)
+        segment = ''
+      } else {
+        segment += char
+      }
+    }
+    names.push(segment)
+    return names.map(part => /@\w+/.exec(part)?.[0] ?? '').filter(part => part !== '')
+  }
+
 const executeProcedure =
   (session: Session, statement: Ast.Statement & { kind: 'execute' }, items: Item[]): Signal => {
     const name = (statement.procedure[statement.procedure.length - 1] ?? '').toLowerCase()
     if (name === 'sp_executesql') {
-      const [ sql, _declarations, ...values ] = statement.args
+      const [ sql, declarations, ...values ] = statement.args
       if (sql === undefined) {
         throw new MssqlError('sp_executesql expects a statement.', 214, 16)
       }
@@ -438,13 +472,28 @@ const executeProcedure =
       if (typeof text !== 'string') {
         throw new MssqlError('sp_executesql expects an nvarchar statement.', 214, 16)
       }
-      const parameters = values.map((argument, index) => ({
-        name: argument.name ?? `@p${index + 1}`,
+      // Positional args bind to the names declared in the @params string, not
+      // synthetic @p1/@p2 — MSSQL matches them by declaration order.
+      const declared = declarations === undefined ?
+        [] :
+        declaredParameterNames(String(evaluate(session, declarations.value) ?? ''))
+      const parameters: Parameter[] = values.map((argument, index) => ({
+        name: argument.name ?? declared[index] ?? `@p${index + 1}`,
         value: evaluate(session, argument.value),
         output: argument.output
       }))
       const nested = executeSql(session, text, parameters)
       items.push(...nested.items)
+      // Copy OUTPUT results back into the caller's variables.
+      values.forEach((argument, index) => {
+        const parameter = parameters[index]
+        if (argument.output && argument.value.kind === 'variable' && parameter !== undefined) {
+          const output = nested.outputs.find(entry => entry.name.toLowerCase() === parameter.name.toLowerCase())
+          if (output !== undefined) {
+            applyAssign(session, argument.value.name, '=', output.value)
+          }
+        }
+      })
       return undefined
     }
     throw new MssqlError(`Could not find stored procedure '${name}'.`, 2812, 16)

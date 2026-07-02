@@ -9,8 +9,17 @@ const tableSource =
   (ctx: Context.t, source: Ast.TableSource): string => {
     switch (source.kind) {
       case 'table': {
-        const alias = source.alias === undefined ? '' : ` AS ${Quote.identifier(source.alias)}`
-        return `${Quote.objectName(source.name)}${alias}`
+        const object = Quote.objectName(source.name)
+        const tablePart = source.name[source.name.length - 1] ?? ''
+        // When flattening changes the exposed name (schema-qualified or temp
+        // tables), alias back to the bare table name so `orders.id` and
+        // `sales.orders.id` still resolve.
+        const alias = source.alias !== undefined ?
+          ` AS ${Quote.identifier(source.alias)}` :
+          object === Quote.identifier(tablePart) ?
+            '' :
+            ` AS ${Quote.identifier(tablePart)}`
+        return `${object}${alias}`
       }
       case 'derived':
         return `(${select(ctx, source.select)}) AS ${Quote.identifier(source.alias)}`
@@ -81,6 +90,16 @@ const selectCore =
     return parts.join(' ')
   }
 
+// A TOP inside a set operation is branch-scoped, so wrap that branch's core
+// in a LIMIT subquery; SQLite otherwise cannot LIMIT a single compound term.
+const setTerm =
+  (ctx: Context.t, term: Ast.Select): string => {
+    const core = selectCore(ctx, term)
+    return term.top === undefined ?
+      core :
+      `SELECT * FROM (${core} LIMIT ${expression(ctx, term.top.count)})`
+  }
+
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => {
@@ -96,7 +115,8 @@ export const select =
         .join(', ')
       parts.push(`WITH ${ctes}`)
     }
-    parts.push(selectCore(ctx, select_))
+    const inSet = select_.union !== undefined
+    parts.push(inSet ? setTerm(ctx, select_) : selectCore(ctx, select_))
     for (let union = select_.union; union !== undefined; union = union.select.union) {
       const keyword = {
         union: 'UNION',
@@ -104,7 +124,7 @@ export const select =
         except: 'EXCEPT',
         intersect: 'INTERSECT'
       }[union.kind]
-      parts.push(keyword, selectCore(ctx, union.select))
+      parts.push(keyword, setTerm(ctx, union.select))
     }
     if (select_.orderBy !== undefined) {
       parts.push(orderBy(ctx, select_.orderBy))
@@ -112,7 +132,7 @@ export const select =
     if (select_.offset !== undefined) {
       const fetch = select_.fetch === undefined ? '-1' : expression(ctx, select_.fetch)
       parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, select_.offset)}`)
-    } else if (select_.top !== undefined) {
+    } else if (select_.top !== undefined && !inSet) {
       parts.push(`LIMIT ${expression(ctx, select_.top.count)}`)
     }
     return parts.join(' ')
@@ -157,10 +177,18 @@ const update =
           return unsupported('Variable assignment in UPDATE is not supported.')
         }
         const column = Quote.identifier(target.name[target.name.length - 1] ?? '')
-        const rendered = expression(ctx, value)
-        return operator === '=' ?
-          `${column} = ${rendered}` :
-          `${column} = ${column} ${operator.slice(0, -1)} ${rendered}`
+        if (operator === '=') {
+          return `${column} = ${expression(ctx, value)}`
+        }
+        // Compound operators reuse binaryOp rendering so += concatenates text,
+        // ^= rewrites to xor, etc. — never raw SQLite operators.
+        const compound: Ast.Expression = {
+          kind: 'binaryOp',
+          operator: operator.slice(0, -1),
+          left: { kind: 'column', name: target.name },
+          right: value
+        }
+        return `${column} = ${expression(ctx, compound)}`
       })
       .join(', ')
     const from = statement_.from === undefined ?

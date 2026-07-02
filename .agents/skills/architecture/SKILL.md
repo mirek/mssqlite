@@ -90,6 +90,23 @@ the engine:
 - New token/protocol feature → `tds/token/*`, wire it in
   `server/respond.ts` or `server/connection.ts`.
 
+## Robustness invariants (enforced, regression-tested)
+
+- **Decoders never hang or throw uncaught on hostile bytes.** `Message.push`
+  rejects a packet whose length is below the header size (malformed framing →
+  connection dropped, not an infinite loop); `AllHeaders.decode` rejects a
+  zero-length inner header; `Value.decode` turns short/unknown-type reads into
+  `Result` failures instead of exceptions. A deterministic fuzz sweep guards
+  all top-level decoders (`packages/tds/src/robustness.test.ts`).
+- **No silent wire corruption from oversized values.** A non-`max` value that
+  would overflow its length prefix throws a clean error (mapped to an MSSQL
+  error) rather than wrapping the prefix; column names are capped at 128 chars.
+- **Canceled requests are honored.** A message whose EOM packet carries the
+  IGNORE status bit (how tedious cancels mid-send) is discarded, not executed.
+- **varchar/char/text use Windows-1252** (`@mssqlite/bytes` `Cp1252`), matching
+  the advertised `SQL_Latin1_General_CP1` collation — `€`, em dash and smart
+  quotes round-trip instead of corrupting as ISO-8859-1.
+
 ## Known limitations (v1)
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with

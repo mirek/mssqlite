@@ -235,3 +235,55 @@ test('throw raises mssql error', () => {
     expect.objectContaining({ number: 51000, message: 'custom', state: 2 }) as Error
   )
 })
+
+test('zero-row insert into identity table leaves @@IDENTITY unchanged', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE ident (id INT IDENTITY(1,1) PRIMARY KEY, v INT)')
+  executeBatch(s, 'CREATE TABLE plain (x INT)')
+  executeBatch(s, 'INSERT INTO ident (v) VALUES (7), (8), (9)')
+  executeBatch(s, 'INSERT INTO plain VALUES (100), (200)')
+  // Zero-row insert into the identity table must not adopt plain's rowid.
+  executeBatch(s, 'INSERT INTO ident (v) SELECT x FROM plain WHERE x > 1000')
+  expect(rowsOf(executeBatch(s, 'SELECT @@IDENTITY AS i, SCOPE_IDENTITY() AS s')).rows)
+    .toEqual([ [ 3, 3 ] ])
+})
+
+test('select assignment of one column to two variables', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (x INT, y INT)')
+  executeBatch(s, 'INSERT INTO t VALUES (10, 20)')
+  const rows = rowsOf(executeBatch(s, 'DECLARE @c INT, @d INT SELECT @c = x, @d = x FROM t SELECT @c AS c, @d AS d')).rows
+  expect(rows).toEqual([ [ 10, 10 ] ])
+})
+
+test('datepart weekday is correct for pre-epoch dates', () => {
+  const s = open()
+  // 1900-01-01 was a Monday → 2 with the default DATEFIRST 7.
+  expect(rowsOf(executeBatch(s, 'SELECT DATEPART(weekday, \'1900-01-01\') AS w, DATENAME(weekday, \'1900-01-01\') AS n')).rows)
+    .toEqual([ [ 2, 'Monday' ] ])
+})
+
+test('exec sp_executesql binds positional params and returns OUTPUT', () => {
+  const s = open()
+  // Positional arg binds to the declared name @x, not @p1.
+  expect(rowsOf(executeBatch(s, 'EXEC sp_executesql N\'SELECT @x AS v\', N\'@x int\', 42')).rows)
+    .toEqual([ [ 42 ] ])
+  // OUTPUT flows back to the caller's variable.
+  const rows = rowsOf(executeBatch(s, `
+    DECLARE @out INT
+    EXEC sp_executesql N'SET @v = 42', N'@v int OUTPUT', @v = @out OUTPUT
+    SELECT @out AS o
+  `)).rows
+  expect(rows).toEqual([ [ 42 ] ])
+})
+
+test('save transaction with no active transaction stays consistent', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (v INT)')
+  // SAVE TRAN with no BEGIN must open and track a transaction, not desync.
+  executeBatch(s, 'SAVE TRANSACTION sp INSERT INTO t VALUES (1) COMMIT')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 1 ] ])
+  // A following BEGIN TRAN must not throw "transaction within a transaction".
+  executeBatch(s, 'BEGIN TRAN INSERT INTO t VALUES (2) COMMIT')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 2 ] ])
+})

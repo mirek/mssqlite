@@ -202,11 +202,12 @@ export const qualifiedName: Parser.t<string[]> =
       }
       const part = anyIdentifier(dot.reader)
       if (Result.failed(part)) {
-        // Empty part as in `db..table` — MSSQL allows it, normalize to skipping.
+        // Empty part as in `db..table` — MSSQL's default-schema shorthand.
         const next = punct('.')(dot.reader)
         if (Result.failed(next)) {
           break
         }
+        parts.push('dbo')
         current = dot.reader
         continue
       }
