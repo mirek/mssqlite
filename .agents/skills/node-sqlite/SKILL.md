@@ -34,3 +34,28 @@ All APIs are **synchronous** — there is no Promise-returning variant. The sing
 - [backup-serialize.md](backup-serialize.md) — async `backup()` with `source` / `target` / `rate` / `progress`, `db.serialize()` and `db.deserialize()` round-trip
 - [constants.md](constants.md) — `sqlite.constants`: authorization action codes (`SQLITE_CREATE_TABLE`, etc.), authorizer return codes (`SQLITE_OK` / `SQLITE_DENY` / `SQLITE_IGNORE`), changeset conflict types and resolutions
 - [examples.md](examples.md) — End-to-end patterns: CRUD with named params, manual transactions, custom functions, tag store, change replication, in-memory clone via serialize, resource cleanup with `using`
+
+## Version availability (verified on Node 22.22)
+
+Not everything documented here exists on every release line. Observed on
+v22.22.2 (mssqlite's floor is Node ≥ 22.18):
+
+- `db.createTagStore` is **undefined** — `SQLTagStore` is a newer (24.x+)
+  addition. Guard usage or require Node 24 before relying on it.
+- `StatementSync.columns()` returns `{ column: null, table: null, type: null }`
+  for computed/expression columns — only direct table columns carry
+  origin info. mssqlite's engine falls back to value-shape inference for
+  such columns (`packages/engine/src/metadata.ts`).
+- The `returnArrays` open option is not available — rows always come back
+  as objects, so duplicate column names collapse.
+- Available and relied on by mssqlite: `DatabaseSync`, `StatementSync`,
+  `db.function()` (with `deterministic` / `varargs`), named parameters
+  with bare keys (bind `{ x: 1 }` for SQL `@x`), math functions
+  (`ceiling`, `power`, `ln`, …) and `concat`/`concat_ws` in the bundled
+  SQLite.
+
+## Usage in mssqlite
+
+`@mssqlite/engine` opens one `DatabaseSync` per server, registers all
+`mssqlite_*` UDFs once (see the `architecture` skill), and binds T-SQL
+variables as native `@name` parameters with prefix-stripped keys.

@@ -1,0 +1,23 @@
+{
+  "name": "@mssqlite/transpile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "T-SQL AST to SQLite SQL transpiler module.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "keywords": [
+    "mssqlite",
+    "tsql",
+    "sqlite",
+    "transpiler",
+    "sql"
+  ],
+  "author": "Mirek Rusin (https://github.com/mirek)",
+  "license": "MIT",
+  "dependencies": {
+    "@mssqlite/tsql": "workspace:*"
+  }
+}

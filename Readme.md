@@ -1,0 +1,64 @@
+# mssqlite
+
+MSSQL compatible, SQLite backed, SQL Server.
+
+A TDS 7.4 server that speaks Microsoft SQL Server's wire protocol and
+T-SQL, storing everything in SQLite via Node's built-in `node:sqlite` —
+no native dependencies. Real MSSQL clients connect unmodified:
+
+```sh
+pnpm install
+pnpm start                     # mssqlite listening on port 1433, database :memory:
+node packages/server/src/bin.ts data.db 1433
+```
+
+```ts
+import { Connection, Request } from 'tedious'
+
+const connection = new Connection({
+  server: '127.0.0.1',
+  authentication: { type: 'default', options: { userName: 'sa', password: '...' } },
+  options: { port: 1433, encrypt: false, trustServerCertificate: true }
+})
+```
+
+## Packages
+
+Bottom-up, each layer fully tested and documented before the next:
+
+| Package | What |
+|---|---|
+| [`@mssqlite/bytes`](packages/bytes) | Binary cursor, decode combinators, encode builders (little-endian, UCS-2) |
+| [`@mssqlite/tds`](packages/tds) | TDS 7.4 wire codecs — packets, prelogin/login7, tokens, TYPE_INFO, values |
+| [`@mssqlite/tsql`](packages/tsql) | T-SQL lexer and parser (token combinators) → typed AST |
+| [`@mssqlite/transpile`](packages/transpile) | T-SQL AST → SQLite SQL, function mapping, parameter tracking |
+| [`@mssqlite/catalog`](packages/catalog) | `sys.*` and `INFORMATION_SCHEMA` emulation, DDL maintenance |
+| [`@mssqlite/engine`](packages/engine) | Execution engine — sessions, variables, control flow, transactions, UDFs |
+| [`@mssqlite/server`](packages/server) | TCP TDS server — e2e tested with the `tedious` client |
+
+Everything is written in a functional, composable style after the
+[`@prelude/*`](https://www.npmjs.com/org/prelude) packages — immutable
+readers, results as values, file-per-function modules, namespace re-exports.
+
+## What works
+
+SELECT (joins, CTEs, set operations, TOP / OFFSET-FETCH, window functions),
+INSERT/UPDATE/DELETE with `@p` parameters over RPC, CREATE/ALTER/DROP TABLE
+with IDENTITY, constraints and foreign keys, indexes and views, DECLARE/SET
+variables, IF/WHILE control flow, nested transactions and savepoints,
+`sys.tables` / `sys.columns` / `INFORMATION_SCHEMA` catalog queries,
+`@@ROWCOUNT` / `@@IDENTITY` / `SCOPE_IDENTITY()`, a large built-in function
+surface (strings, math, date/time with MSSQL boundary semantics,
+CAST/CONVERT with styles), MSSQL error numbers, and case-insensitive
+comparisons via NOCASE collation.
+
+## Development
+
+```sh
+pnpm test         # eslint + tsc + vitest (unit, executable-SQL and tedious e2e)
+pnpm vitest       # watch mode
+```
+
+Node ≥ 22.18 — TypeScript sources run natively via type stripping; no build
+step. Repo conventions, architecture notes and protocol references live in
+[`.agents/skills`](.agents/skills) as living documents.

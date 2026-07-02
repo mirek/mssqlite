@@ -1,0 +1,24 @@
+{
+  "name": "@mssqlite/tds",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TDS (Tabular Data Stream) protocol codecs module.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "keywords": [
+    "mssqlite",
+    "tds",
+    "mssql",
+    "protocol",
+    "wire",
+    "codec"
+  ],
+  "author": "Mirek Rusin (https://github.com/mirek)",
+  "license": "MIT",
+  "dependencies": {
+    "@mssqlite/bytes": "workspace:*"
+  }
+}

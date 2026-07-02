@@ -1,0 +1,26 @@
+{
+  "name": "@mssqlite/engine",
+  "version": "0.0.0",
+  "private": true,
+  "description": "T-SQL execution engine over node:sqlite module.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "keywords": [
+    "mssqlite",
+    "engine",
+    "tsql",
+    "sqlite",
+    "execution"
+  ],
+  "author": "Mirek Rusin (https://github.com/mirek)",
+  "license": "MIT",
+  "dependencies": {
+    "@mssqlite/catalog": "workspace:*",
+    "@mssqlite/tds": "workspace:*",
+    "@mssqlite/transpile": "workspace:*",
+    "@mssqlite/tsql": "workspace:*"
+  }
+}
