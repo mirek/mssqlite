@@ -32,6 +32,14 @@ importers:
         specifier: workspace:*
         version: link:../bytes
 
+  packages/transpile:
+    dependencies:
+      '@mssqlite/tsql':
+        specifier: workspace:*
+        version: link:../tsql
+
+  packages/tsql: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.1':

@@ -275,7 +275,8 @@ const binaryLevel =
         }
         const right = next(Reader.advanced(current))
         if (Result.failed(right)) {
-          return right
+          // Rewind the operator — `TOP 10 *` reads `*` as the select star.
+          break
         }
         left = { kind: 'binaryOp', operator: token.value, left, right: right.value }
         current = right.reader
