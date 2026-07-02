@@ -26,6 +26,12 @@ importers:
 
   packages/bytes: {}
 
+  packages/tds:
+    dependencies:
+      '@mssqlite/bytes':
+        specifier: workspace:*
+        version: link:../bytes
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.1':
