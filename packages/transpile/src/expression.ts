@@ -28,7 +28,10 @@ const cast =
       const style = expression_.style.kind === 'number' ? Number(expression_.style.value) : undefined
       const format = style === undefined ? undefined : convertStyle(style)
       if (format !== undefined && (Type.category(expression_.type) === 'text' || Type.category(expression_.type) === 'ntext')) {
-        return `strftime('${format}', ${inner})`
+        const length = expression_.type.args[0]
+        return typeof length === 'number' ?
+          `substr(strftime('${format}', ${inner}), 1, ${length})` :
+          `strftime('${format}', ${inner})`
       }
     }
     switch (Type.category(expression_.type)) {
