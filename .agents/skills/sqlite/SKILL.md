@@ -45,6 +45,33 @@ PRAGMA defer_foreign_keys = ON;
 
 Default to `BEGIN IMMEDIATE` for any write transaction to avoid `SQLITE_BUSY_SNAPSHOT` mid-transaction (see `transactions.md`).
 
+## How mssqlite uses SQLite (implemented)
+
+The translation layer ([`packages/transpile`](../../../packages/transpile))
+and engine ([`packages/engine`](../../../packages/engine)) rely on:
+
+- **`COLLATE NOCASE` on char/text columns** for MSSQL's case-insensitive
+  default collation — comparisons and UNIQUE constraints follow the
+  column collation; LIKE is ASCII-case-insensitive anyway.
+- **`INTEGER PRIMARY KEY AUTOINCREMENT`** as the IDENTITY mapping
+  (never-reused ids); TRUNCATE deletes the `sqlite_sequence` row to reset.
+- **Native functions**: `concat`/`concat_ws` (NULL-as-empty matches
+  T-SQL CONCAT), `iif`, math functions (`ceiling`, `power`, `ln`,
+  `log10`, `atan2`, …), window functions, `group_concat(x, sep)` for
+  STRING_AGG, `char`, `unicode`, `instr`, `substr`, partial indexes for
+  filtered indexes, `UPDATE ... FROM` for T-SQL update-joins.
+- **`@name` bind parameters** so T-SQL variables pass through unrenamed.
+- **Application-defined functions** (`mssqlite_*`) for everything else —
+  date arithmetic with MSSQL boundary semantics, PATINDEX, dynamic `+`.
+- **Expressions in DEFAULT clauses** — `DEFAULT (strftime(...))` for
+  `DEFAULT GETDATE()`.
+- Dotted object names inside quoted identifiers (`"sys.tables"`,
+  `"app.users"`) to flatten MSSQL schemas without query interception,
+  and the `temp` schema for `#temp` tables.
+- Current engine deviation from the bootstrap recipe above: single shared
+  connection per server with plain `BEGIN` (sync API, single process) —
+  revisit WAL + IMMEDIATE if a multi-connection engine lands.
+
 ## What's NOT covered
 
 - The C API (`sqlite3_*`) — use [node-sqlite](../node-sqlite/SKILL.md) for the JS-facing surface.

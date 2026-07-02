@@ -9,6 +9,32 @@ This skill provides the complete technical specification needed to implement sys
 
 Source: `sql-docs/docs/relational-databases/system-catalog-views/`
 
+## Implementation status — @mssqlite/catalog
+
+This spec is implemented in [`packages/catalog`](../../../packages/catalog):
+
+- **Phase 1 + 2 + most of phase 3 are done** — schemas, types (all 31
+  seed rows), objects, columns, tables/views/procedures views, databases,
+  indexes, index_columns, key_constraints, foreign_keys +
+  foreign_key_columns, check/default constraints, database/server
+  principals, identity_columns (+ `_extra` backing table), plus
+  `INFORMATION_SCHEMA.TABLES` and `.COLUMNS` views.
+- **Query interception is unnecessary** — instead of routing `sys.*`
+  queries (§ Architecture Overview above), the transpiler flattens
+  `sys.tables` to the literal SQLite object name `"sys.tables"`, which is
+  exactly what the catalog creates. Plain SQLite execution then serves
+  catalog queries, including joins with user tables.
+- DDL maintenance hooks (§18) are called by the engine as DDL executes;
+  drop cleanup removes child constraint objects as specified.
+- Object ids allocate from 100000001 via `sys._next_id` (§19).
+- System functions (§17): OBJECT_ID/OBJECT_NAME/SCHEMA_ID/SCHEMA_NAME/
+  TYPE_ID/TYPE_NAME/DB_ID/DB_NAME rewrite to catalog subqueries at
+  transpile time; SERVERPROPERTY/@@VERSION/@@SPID come from engine UDFs
+  and globals.
+- Not yet populated: `sys.computed_columns` (parser accepts computed
+  columns but transpile rejects them), `sys.sql_modules`, extended
+  properties.
+
 ---
 
 ## Architecture Overview

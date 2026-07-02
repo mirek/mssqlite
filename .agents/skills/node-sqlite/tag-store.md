@@ -2,6 +2,11 @@
 
 > Source: [Node.js SQLite docs — Class `SQLTagStore`](https://nodejs.org/api/sqlite.html#class-sqltagstore)
 
+> **Availability:** `db.createTagStore` does not exist on Node 22.x
+> (verified undefined on v22.22.2) — this class is a newer addition.
+> On Node 22, hold `db.prepare()` handles or build your own statement
+> cache instead.
+
 `SQLTagStore` is an LRU cache of prepared statements driven by **tagged template literals**. Each unique SQL string compiles once; subsequent calls with the same template reuse the cached `StatementSync`.
 
 ```javascript

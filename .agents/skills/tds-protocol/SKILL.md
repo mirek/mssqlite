@@ -19,3 +19,35 @@ Source: [MS-TDS Specification](https://learn.microsoft.com/en-us/openspecs/windo
 - [response-patterns.md](response-patterns.md) — Server response patterns (login, query, SP, error, transactions), variable-length data stream definitions
 - [state-machines-and-notes.md](state-machines-and-notes.md) — Client/server state machines, TLS/SSL encryption, routing, MARS, implementation notes, common pitfalls
 - [examples.md](examples.md) — Protocol examples with annotated hex dumps: PreLogin, Login7, SQL Batch, RPC, Attention, SSPI, Bulk Load, Transaction Manager, TVP, SparseColumn, FeatureExt, SESSIONRECOVERY, AZURESQLSUPPORT
+
+## Implementation — @mssqlite/tds
+
+This spec is implemented in [`packages/tds`](../../../packages/tds)
+(tests assert exact bytes from [examples.md](examples.md)):
+
+| Spec area | Module |
+|---|---|
+| Packet header, splitting, reassembly | `packet.ts`, `message.ts` |
+| PreLogin request/response | `prelogin.ts` |
+| Login7 + password descrambling + FeatureExt | `login7.ts` |
+| ALL_HEADERS, SQL batch, RPC, transaction manager | `all-headers.ts`, `sql-batch.ts`, `rpc.ts`, `transaction-manager.ts` |
+| TYPE_INFO + TYPE_VARBYTE values incl. PLP | `type-info.ts`, `value.ts` |
+| Collation, GUID, decimal, date/time wire formats | `collation.ts`, `guid.ts`, `decimal.ts`, `date-time.ts` |
+| Server tokens (COLMETADATA, ROW, DONE*, ERROR/INFO, LOGINACK, ENVCHANGE, RETURNSTATUS, RETURNVALUE, FEATUREEXTACK) | `token/*` |
+
+### Notes discovered implementing
+
+- **RPC OptionFlags is 2 bytes** (USHORT). The example 4.8 prose lists a
+  single `00` byte, but the packet length arithmetic (47 total) only
+  works with two flag bytes.
+- The COLMETADATA example labels flags `0x0020` as "Nullable"; per the
+  flag table `0x0020` is `fComputed` and nullable is bit 0 — trust the
+  bit table, clients don't validate these strictly.
+- tedious addresses `sp_executesql` by **name**, not ProcID — servers
+  must accept both `NameLenProcID` forms.
+- Clients tolerate a missing FEATUREEXTACK even when Login7 carried
+  FeatureExt options.
+- money is genuinely split high-int32-then-low-uint32 — not a plain
+  little-endian int64 (see §14).
+- Time-only strings need parsing support in date/time codecs — `time(n)`
+  values have no date part; MSSQL treats the implied date as 1900-01-01.

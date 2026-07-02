@@ -19,3 +19,41 @@ Source https://learn.microsoft.com/en-us/sql/t-sql/language-reference?view=sql-s
 - [statements-ddl.md](statements-ddl.md) — CREATE/ALTER/DROP TABLE (column definitions, constraints, IDENTITY, computed columns, foreign key actions), CREATE INDEX (clustered/nonclustered, UNIQUE, filtered, INCLUDE, options), CREATE VIEW (SCHEMABINDING, CHECK OPTION, updatable views), CREATE PROCEDURE (parameters, OUTPUT, RECOMPILE), CREATE FUNCTION (scalar, inline TVF, multi-statement TVF), CREATE TRIGGER (AFTER/INSTEAD OF, DML/DDL, inserted/deleted tables), CREATE DATABASE, CREATE SCHEMA, GRANT/DENY/REVOKE permissions
 - [statements-dml.md](statements-dml.md) — INSERT (VALUES, SELECT, EXEC, DEFAULT VALUES, OUTPUT), UPDATE (SET, compound operators, FROM clause for multi-table, .WRITE for LOB), DELETE (FROM...FROM pattern, join-based), MERGE (MATCHED/NOT MATCHED, $action), TRUNCATE TABLE (vs DELETE, IDENTITY reset, restrictions), BULK INSERT (format options, constraints, triggers)
 - [transactions-and-error-handling.md](transactions-and-error-handling.md) — Transaction modes (autocommit/explicit/implicit), BEGIN/COMMIT/ROLLBACK TRANSACTION, SAVE TRANSACTION/savepoints, @@TRANCOUNT semantics, XACT_STATE(), TRY...CATCH (severity rules, error functions, uncommittable transactions), THROW vs RAISERROR, SET statements (ANSI_NULLS, QUOTED_IDENTIFIER, NOCOUNT, XACT_ABORT, IDENTITY_INSERT, TRANSACTION ISOLATION LEVEL, ARITHABORT, CONCAT_NULL_YIELDS_NULL, and more), isolation levels
+
+## Implementation — @mssqlite/tsql + transpile + engine
+
+The language pipeline lives in three packages:
+
+- [`packages/tsql`](../../../packages/tsql) — lexer + parser to a typed
+  AST. Its Readme lists the exact supported surface (queries with joins/
+  CTEs/set ops/window OVER, full expression precedence and predicates,
+  DML, DDL with constraints, DECLARE/SET, control flow, transactions,
+  EXEC, THROW).
+- [`packages/transpile`](../../../packages/transpile) — AST → SQLite SQL
+  with function mapping and CONVERT style support.
+- [`packages/engine`](../../../packages/engine) — interprets what SQLite
+  cannot: variables, IF/WHILE, @@TRANCOUNT nesting, sp_executesql,
+  SELECT INTO, error-number mapping.
+
+### Parsing notes discovered implementing
+
+- Reserved words must be rejected as bare identifiers (else
+  `SELECT FROM` "succeeds" selecting a column named FROM) but allowed as
+  function names directly before `(` — `LEFT(x, 1)`, `RIGHT(...)`.
+- `TOP 10 *` is ambiguous with multiplication: binary-operator parsing
+  must rewind when the right operand fails so `*` can be the select star.
+  Bare `TOP n` only takes a constant; expressions require `TOP (expr)`.
+- `CASE x WHEN …` vs `CASE WHEN …`: the optional operand parser must not
+  swallow the `WHEN` keyword as a column reference.
+- `GO` is a client-side batch separator — it never arrives over TDS and
+  is deliberately not in the grammar.
+- Statements separate on semicolons *or* juxtaposition; both appear in
+  real client traffic.
+- `@@ERROR` reads as the previous statement's error number — it resets
+  *after* the statement referencing it, and it persists across batches.
+
+### Not yet implemented (raise clean errors)
+
+CREATE PROCEDURE/FUNCTION/TRIGGER, MERGE, PIVOT/UNPIVOT, APPLY, cursors,
+TRY/CATCH, RAISERROR, WAITFOR, GOTO, OUTPUT clause, TOP PERCENT,
+UPDATE/DELETE TOP, DELETE double-FROM.
