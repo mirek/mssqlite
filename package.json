@@ -1,0 +1,26 @@
+{
+  "name": "mssqlite",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MSSQL compatible, SQLite backed, SQL Server.",
+  "type": "module",
+  "author": "Mirek Rusin (https://github.com/mirek)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "lint": "eslint packages",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm lint && pnpm typecheck && vitest run",
+    "start": "node packages/server/src/bin.ts"
+  },
+  "devDependencies": {
+    "@prelude/eslint-config": "0.0.1",
+    "@types/node": "^22.15.0",
+    "eslint": "9.5.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
