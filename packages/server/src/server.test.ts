@@ -214,3 +214,24 @@ test('second connection works concurrently', async () => {
     other.close()
   }
 })
+
+test('try/catch over the wire returns the catch result set', async () => {
+  await query('CREATE TABLE trycatch (email VARCHAR(50) UNIQUE)')
+  await query('INSERT INTO trycatch VALUES (\'a\')')
+  const result = await query(`
+    BEGIN TRY
+      INSERT INTO trycatch VALUES ('a')
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n, XACT_STATE() AS x
+    END CATCH
+  `)
+  expect(result.rows).toEqual([ { n: 2627, x: 0 } ])
+})
+
+test('raiserror severity 16 surfaces as a request error', async () => {
+  await expect(query('RAISERROR (\'wire fail\', 16, 1)')).rejects.toMatchObject({
+    number: 50000,
+    message: expect.stringContaining('wire fail') as unknown
+  })
+})

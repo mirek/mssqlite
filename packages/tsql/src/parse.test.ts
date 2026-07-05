@@ -57,6 +57,28 @@ test('top percent and with ties parse', () => {
   })
 })
 
+test('try/catch and raiserror parse', () => {
+  expect(parseStatement(`
+    BEGIN TRY
+      INSERT INTO t VALUES (1);
+      SELECT 1
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n
+    END CATCH
+  `)).toMatchObject({
+    kind: 'tryCatch',
+    try_: [ { kind: 'insert' }, { kind: 'select' } ],
+    catch_: [ { kind: 'select' } ]
+  })
+  expect(parseStatement('RAISERROR (\'oops %s\', 16, 1, \'x\') WITH NOWAIT')).toMatchObject({
+    kind: 'raiserror',
+    args: [ { kind: 'string', value: 'oops %s' }, {}, {}, {} ],
+    options: [ 'nowait' ]
+  })
+  expect(parseStatement('THROW')).toMatchObject({ kind: 'throw' })
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'

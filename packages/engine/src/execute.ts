@@ -112,6 +112,30 @@ const truthy =
     return row?.value === 1
   }
 
+/** @returns RAISERROR printf-style template with % substitutions applied. */
+const raiserrorFormat =
+  (template: string, values: readonly Value[]): string => {
+    let index = 0
+    return template.replace(/%(%|\d*(?:\.\d+)?[sdiuoxX])/g, (_whole, spec: string) => {
+      if (spec === '%') {
+        return '%'
+      }
+      const value = values[index]
+      index++
+      if (value === null || value === undefined) {
+        return '(null)'
+      }
+      const kind = spec[spec.length - 1] ?? 's'
+      if (kind === 's') {
+        return String(value)
+      }
+      const numeric = Math.trunc(Number(value))
+      return kind === 'x' ?
+        numeric.toString(16) :
+        kind === 'X' ? numeric.toString(16).toUpperCase() : String(numeric)
+    })
+  }
+
 const hasIdentity =
   (session: Session, table: Ast.QualifiedName): boolean => {
     const objectId = Catalog.objectIdOf(session.db, table)
@@ -232,6 +256,66 @@ const selectInto =
     const count = session.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
     session.rowCount = count.n
     items.push({ kind: 'count', rowCount: count.n })
+  }
+
+type TransactionStatement =
+  Ast.Statement & {
+    kind: 'beginTransaction' | 'commitTransaction' | 'rollbackTransaction' | 'saveTransaction'
+  }
+
+const executeTransaction =
+  (session: Session, statement: TransactionStatement): void => {
+    switch (statement.kind) {
+      case 'beginTransaction':
+        if (session.transactionCount === 0) {
+          session.db.exec('BEGIN')
+          session.transactionDoomed = false
+        }
+        session.transactionCount++
+        return
+      case 'commitTransaction':
+        if (session.transactionCount === 0) {
+          throw new MssqlError('The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION.', 3902, 16)
+        }
+        if (session.transactionDoomed) {
+          throw new MssqlError(
+            'The current transaction cannot be committed and cannot support operations that write to the log file. Roll back the transaction.',
+            3930, 16)
+        }
+        if (session.transactionCount === 1) {
+          session.db.exec('COMMIT')
+        }
+        session.transactionCount--
+        return
+      case 'rollbackTransaction':
+        if (statement.name !== undefined && !statement.name.startsWith('@')) {
+          // Named rollback targets a savepoint when one exists.
+          try {
+            session.db.exec(`ROLLBACK TO SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+            return
+          } catch {
+            // Fall through to a full rollback of the named transaction.
+          }
+        }
+        if (session.transactionCount > 0) {
+          session.db.exec('ROLLBACK')
+          session.transactionCount = 0
+        }
+        session.transactionDoomed = false
+        return
+      case 'saveTransaction':
+        // A bare SAVEPOINT implicitly opens a SQLite transaction; keep
+        // @@TRANCOUNT in step so a later BEGIN TRAN doesn't hit "cannot start a
+        // transaction within a transaction" and the work isn't left untracked.
+        if (session.transactionCount === 0) {
+          session.db.exec('BEGIN')
+          session.transactionCount = 1
+        }
+        session.db.exec(`SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+        return
+      default:
+        return
+    }
   }
 
 const executeStatement =
@@ -375,44 +459,10 @@ const executeStatement =
       case 'return':
         return 'return'
       case 'beginTransaction':
-        if (session.transactionCount === 0) {
-          session.db.exec('BEGIN')
-        }
-        session.transactionCount++
-        return undefined
       case 'commitTransaction':
-        if (session.transactionCount === 0) {
-          throw new MssqlError('The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION.', 3902, 16)
-        }
-        if (session.transactionCount === 1) {
-          session.db.exec('COMMIT')
-        }
-        session.transactionCount--
-        return undefined
       case 'rollbackTransaction':
-        if (statement.name !== undefined && !statement.name.startsWith('@')) {
-          // Named rollback targets a savepoint when one exists.
-          try {
-            session.db.exec(`ROLLBACK TO SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
-            return undefined
-          } catch {
-            // Fall through to a full rollback of the named transaction.
-          }
-        }
-        if (session.transactionCount > 0) {
-          session.db.exec('ROLLBACK')
-          session.transactionCount = 0
-        }
-        return undefined
       case 'saveTransaction':
-        // A bare SAVEPOINT implicitly opens a SQLite transaction; keep
-        // @@TRANCOUNT in step so a later BEGIN TRAN doesn't hit "cannot start a
-        // transaction within a transaction" and the work isn't left untracked.
-        if (session.transactionCount === 0) {
-          session.db.exec('BEGIN')
-          session.transactionCount = 1
-        }
-        session.db.exec(`SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+        executeTransaction(session, statement)
         return undefined
       case 'use':
         session.database = statement.database
@@ -421,12 +471,82 @@ const executeStatement =
         items.push({ kind: 'message', text: String(evaluate(session, statement.expression) ?? '') })
         return undefined
       case 'throw': {
-        const number = statement.number === undefined ? 50000 : Number(evaluate(session, statement.number))
+        if (statement.number === undefined) {
+          // Bare THROW re-raises the error being handled by the enclosing CATCH.
+          const caught = session.caughtError
+          if (caught === undefined) {
+            throw new MssqlError(
+              'To rethrow an error, a THROW statement must be used inside a CATCH block.', 10704, 15)
+          }
+          throw new MssqlError(caught.message, caught.number, caught.severity, caught.state)
+        }
+        const number = Number(evaluate(session, statement.number))
         const message = statement.message === undefined ?
           'An error was raised.' :
           String(evaluate(session, statement.message) ?? '')
         const state = statement.state === undefined ? 1 : Number(evaluate(session, statement.state))
         throw new MssqlError(message, number, 16, state)
+      }
+      case 'raiserror': {
+        const [ first, severityArg, stateArg, ...rest ] = statement.args
+        if (first === undefined || severityArg === undefined || stateArg === undefined) {
+          throw new MssqlError('RAISERROR requires a message, a severity and a state.', 102, 15)
+        }
+        const value = evaluate(session, first)
+        const severity = Number(evaluate(session, severityArg))
+        const state = Number(evaluate(session, stateArg))
+        const substitutions = rest.map(argument => evaluate(session, argument))
+        const number = typeof value === 'number' || typeof value === 'bigint' ? Number(value) : 50000
+        const template = typeof value === 'string' ?
+          value :
+          `Error ${number}, severity ${severity}, state ${state} was raised.`
+        const text = raiserrorFormat(template, substitutions)
+        // Severity 10 and below is informational — printed, not thrown.
+        if (severity <= 10) {
+          items.push({ kind: 'message', text })
+          return undefined
+        }
+        throw new MssqlError(text, number, severity, state)
+      }
+      case 'tryCatch': {
+        try {
+          for (const inner of statement.try_) {
+            const signal = executeStatement(session, inner, items)
+            if (signal !== undefined) {
+              return signal
+            }
+          }
+        } catch (error) {
+          const mapped = errorOf(error)
+          // Severity 20+ ends the connection in MSSQL — not catchable.
+          if (mapped.severity > 19) {
+            throw mapped
+          }
+          session.lastError = mapped.number
+          if (session.transactionCount > 0 && session.options.get('xact_abort') === 'on') {
+            session.transactionDoomed = true
+          }
+          const previous = session.caughtError
+          session.caughtError = {
+            number: mapped.number,
+            severity: mapped.severity,
+            state: mapped.state,
+            message: mapped.message,
+            procedure: null,
+            line: 1
+          }
+          try {
+            for (const inner of statement.catch_) {
+              const signal = executeStatement(session, inner, items)
+              if (signal !== undefined) {
+                return signal
+              }
+            }
+          } finally {
+            session.caughtError = previous
+          }
+        }
+        return undefined
       }
       case 'execute':
         return executeProcedure(session, statement, items)

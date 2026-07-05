@@ -13,6 +13,16 @@ export type Variable = {
   value: Value
 }
 
+/** Error captured by the innermost active CATCH block, read by ERROR_*. */
+export type CaughtError = {
+  readonly number: number,
+  readonly severity: number,
+  readonly state: number,
+  readonly message: string,
+  readonly procedure: string | null,
+  readonly line: number
+}
+
 /** Server-wide state shared by sessions. */
 export type Server = {
   readonly db: DatabaseSync,
@@ -42,7 +52,10 @@ export type Session = {
   rowCount: number,
   lastIdentity: Value,
   transactionCount: number,
-  lastError: number
+  lastError: number,
+  caughtError: CaughtError | undefined,
+  /** Uncommittable after an error under SET XACT_ABORT ON — XACT_STATE() −1. */
+  transactionDoomed: boolean
 }
 
 export type t =
@@ -84,5 +97,7 @@ export const session =
       rowCount: 0,
       lastIdentity: null,
       transactionCount: 0,
-      lastError: 0
+      lastError: 0,
+      caughtError: undefined,
+      transactionDoomed: false
     })

@@ -307,6 +307,16 @@ export type Statement =
       readonly message?: Expression,
       readonly state?: Expression
     }
+  | {
+      readonly kind: 'tryCatch',
+      readonly try_: readonly Statement[],
+      readonly catch_: readonly Statement[]
+    }
+  | {
+      readonly kind: 'raiserror',
+      readonly args: readonly Expression[],
+      readonly options: readonly string[]
+    }
   | { readonly kind: 'break' }
   | { readonly kind: 'continue' }
   | { readonly kind: 'empty' }

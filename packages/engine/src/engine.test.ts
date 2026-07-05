@@ -287,3 +287,91 @@ test('save transaction with no active transaction stays consistent', () => {
   executeBatch(s, 'BEGIN TRAN INSERT INTO t VALUES (2) COMMIT')
   expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 2 ] ])
 })
+
+test('try/catch catches a thrown error and exposes ERROR_* in catch scope', () => {
+  const s = open()
+  const items = executeBatch(s, `
+    BEGIN TRY
+      THROW 51000, 'boom', 2
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n, ERROR_MESSAGE() AS m, ERROR_SEVERITY() AS sev, ERROR_STATE() AS st
+    END CATCH
+  `)
+  expect(rowsOf(items).rows).toEqual([ [ 51000, 'boom', 16, 2 ] ])
+  // Outside a CATCH block the error functions return NULL.
+  expect(rowsOf(executeBatch(s, 'SELECT ERROR_NUMBER() AS n')).rows).toEqual([ [ null ] ])
+})
+
+test('try/catch catches constraint violations and continues the batch', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (email VARCHAR(50) UNIQUE); INSERT INTO t VALUES (\'a\')')
+  const items = executeBatch(s, `
+    DECLARE @n INT = 0
+    BEGIN TRY
+      INSERT INTO t VALUES ('a')
+      SET @n = 99
+    END TRY
+    BEGIN CATCH
+      SET @n = ERROR_NUMBER()
+    END CATCH
+    SELECT @n AS n
+  `)
+  expect(rowsOf(items).rows).toEqual([ [ 2627 ] ])
+})
+
+test('bare throw rethrows inside catch and errors outside', () => {
+  const s = open()
+  expect(() => executeBatch(s, `
+    BEGIN TRY
+      THROW 51000, 'boom', 2
+    END TRY
+    BEGIN CATCH
+      THROW
+    END CATCH
+  `)).toThrowError(expect.objectContaining({ number: 51000, message: 'boom', state: 2 }) as Error)
+  expect(() => executeBatch(s, 'THROW')).toThrowError(
+    expect.objectContaining({ number: 10704 }) as Error
+  )
+})
+
+test('raiserror formats, prints low severities and throws high ones', () => {
+  const s = open()
+  const items = executeBatch(s, 'RAISERROR (\'at %d of %s\', 10, 1, 5, \'load\') WITH NOWAIT')
+  expect(items).toEqual([ { kind: 'message', text: 'at 5 of load' } ])
+  expect(() => executeBatch(s, 'RAISERROR (\'fail %s\', 16, 2, \'hard\')')).toThrowError(
+    expect.objectContaining({ number: 50000, severity: 16, state: 2, message: 'fail hard' }) as Error
+  )
+  // Caught by TRY/CATCH like any error.
+  const caught = executeBatch(s, `
+    BEGIN TRY
+      RAISERROR ('caught', 16, 1)
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_MESSAGE() AS m
+    END CATCH
+  `)
+  expect(rowsOf(caught).rows).toEqual([ [ 'caught' ] ])
+})
+
+test('xact_state reflects doomed transactions under xact_abort', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (email VARCHAR(50) UNIQUE); INSERT INTO t VALUES (\'a\')')
+  expect(rowsOf(executeBatch(s, 'SELECT XACT_STATE() AS x')).rows).toEqual([ [ 0 ] ])
+  const items = executeBatch(s, `
+    SET XACT_ABORT ON
+    BEGIN TRANSACTION
+    BEGIN TRY
+      INSERT INTO t VALUES ('a')
+    END TRY
+    BEGIN CATCH
+      SELECT XACT_STATE() AS x
+    END CATCH
+  `)
+  expect(rowsOf(items).rows).toEqual([ [ -1 ] ])
+  expect(() => executeBatch(s, 'COMMIT')).toThrowError(
+    expect.objectContaining({ number: 3930 }) as Error
+  )
+  executeBatch(s, 'ROLLBACK')
+  expect(rowsOf(executeBatch(s, 'SELECT XACT_STATE() AS x')).rows).toEqual([ [ 0 ] ])
+})
