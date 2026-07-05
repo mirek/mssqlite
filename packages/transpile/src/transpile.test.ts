@@ -45,7 +45,6 @@ test('top and offset become limit', () => {
     .toBe('SELECT * FROM "t" ORDER BY "id" LIMIT 5 OFFSET 10')
   expect(sqlOf('SELECT * FROM t ORDER BY id OFFSET 10 ROWS'))
     .toBe('SELECT * FROM "t" ORDER BY "id" LIMIT -1 OFFSET 10')
-  expect(() => sqlOf('SELECT TOP 10 PERCENT * FROM t')).toThrow(UnsupportedError)
 })
 
 test('joins', () => {
@@ -178,6 +177,35 @@ test('insert, update, delete, truncate', () => {
     .toBe('UPDATE "t" SET "a" = 1, "b" = mssqlite_add("b", 2) WHERE ("id" = @id)')
   expect(sqlOf('DELETE FROM t WHERE id = 1')).toBe('DELETE FROM "t" WHERE ("id" = 1)')
   expect(sqlOf('TRUNCATE TABLE t')).toBe('DELETE FROM "t"')
+})
+
+test('top percent and with ties become computed limits', () => {
+  expect(sqlOf('SELECT TOP 10 PERCENT * FROM t'))
+    .toBe('SELECT * FROM "t" LIMIT ' +
+      '(SELECT CAST(ceiling(COUNT(*) * (10) / 100.0) AS INTEGER) FROM (SELECT 1 FROM "t"))')
+  expect(sqlOf('SELECT TOP 2 WITH TIES a FROM t ORDER BY a'))
+    .toBe('SELECT "a" FROM "t" ORDER BY "a" LIMIT ' +
+      '(SELECT COUNT(*) FROM (SELECT rank() OVER (ORDER BY "a") AS "__mssqlite_rank" FROM "t") ' +
+      'WHERE "__mssqlite_rank" <= 2)')
+  expect(() => sqlOf('SELECT TOP 2 WITH TIES a FROM t')).toThrow(UnsupportedError)
+})
+
+test('update and delete top pick rows by rowid', () => {
+  expect(sqlOf('UPDATE TOP (2) t SET a = 1 WHERE b = 0'))
+    .toBe('UPDATE "t" SET "a" = 1 WHERE rowid IN (SELECT rowid FROM "t" WHERE ("b" = 0) LIMIT 2)')
+  expect(sqlOf('DELETE TOP (2) FROM t WHERE b = 0'))
+    .toBe('DELETE FROM "t" WHERE rowid IN (SELECT rowid FROM "t" WHERE ("b" = 0) LIMIT 2)')
+})
+
+test('delete with a second from clause resolves the alias to its table', () => {
+  expect(sqlOf('DELETE a FROM t AS a JOIN s ON a.id = s.a_id WHERE s.done = 1'))
+    .toBe('DELETE FROM "t" WHERE rowid IN ' +
+      '(SELECT "a".rowid FROM "t" AS "a" INNER JOIN "s" ON ("a"."id" = "s"."a_id") ' +
+      'WHERE ("s"."done" = 1))')
+  expect(sqlOf('DELETE FROM t FROM t JOIN s ON t.id = s.a_id'))
+    .toBe('DELETE FROM "t" WHERE rowid IN ' +
+      '(SELECT "t".rowid FROM "t" INNER JOIN "s" ON ("t"."id" = "s"."a_id"))')
+  expect(() => sqlOf('DELETE x FROM t JOIN s ON t.id = s.a_id')).toThrow(UnsupportedError)
 })
 
 test('create table', () => {

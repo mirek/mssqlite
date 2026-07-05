@@ -137,9 +137,14 @@ const top: Parser.t<Ast.Select['top']> =
         C.parens(expression),
         operand
       ),
-      C.maybe(C.keyword('percent'))
+      C.maybe(C.keyword('percent')),
+      C.maybe(C.seq(C.keyword('with'), C.keyword('ties')))
     ),
-    ([ , count, percent ]) => ({ count, percent: percent !== undefined })
+    ([ , count, percent, ties ]) => ({
+      count,
+      percent: percent !== undefined,
+      ...ties === undefined ? {} : { withTies: true }
+    })
   )
 
 const cte: Parser.t<Ast.Cte> =

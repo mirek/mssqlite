@@ -126,7 +126,7 @@ export type Select = {
   readonly kind: 'select',
   readonly ctes?: readonly Cte[],
   readonly distinct: boolean,
-  readonly top?: { readonly count: Expression, readonly percent: boolean },
+  readonly top?: { readonly count: Expression, readonly percent: boolean, readonly withTies?: boolean },
   readonly items: readonly SelectItem[],
   readonly into?: QualifiedName,
   readonly from?: TableSource,

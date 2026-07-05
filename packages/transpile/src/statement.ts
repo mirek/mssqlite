@@ -67,9 +67,6 @@ const orderBy =
 
 const selectCore =
   (ctx: Context.t, select_: Ast.Select): string => {
-    if (select_.top?.percent === true) {
-      return unsupported('TOP ... PERCENT is not supported.')
-    }
     const parts: string[] = [
       'SELECT',
       ...select_.distinct ? [ 'DISTINCT' ] : [],
@@ -90,6 +87,63 @@ const selectCore =
     return parts.join(' ')
   }
 
+// ORDER BY keys with select-list aliases substituted by their expressions, so
+// the keys stay valid inside a derived subquery that replaces the select list.
+const orderKeys =
+  (select_: Ast.Select): readonly Ast.OrderBy[] =>
+    (select_.orderBy ?? []).map(item => {
+      if (item.expression.kind === 'column' && item.expression.name.length === 1) {
+        const name = (item.expression.name[0] ?? '').toLowerCase()
+        const aliased = select_.items.find(candidate =>
+          candidate.kind === 'expression' && candidate.alias?.toLowerCase() === name)
+        if (aliased !== undefined && aliased.kind === 'expression') {
+          return { ...item, expression: aliased.expression }
+        }
+      }
+      return item
+    })
+
+// TOP row budget as a LIMIT expression. PERCENT counts the underlying rows at
+// run time via a scalar subquery; WITH TIES widens the budget to every row
+// whose RANK() over the ORDER BY keys fits within it.
+const topLimit =
+  (ctx: Context.t, select_: Ast.Select): string => {
+    const top = select_.top
+    if (top === undefined) {
+      return unsupported('TOP is missing.')
+    }
+    const { top: _top, orderBy: _orderBy, union: _union, ctes: _ctes, ...bare } = select_
+    let budget = expression(ctx, top.count)
+    if (top.percent) {
+      // DISTINCT needs the real select list to count distinct rows; otherwise
+      // a constant keeps the count subquery free of duplicate-name issues.
+      const counted = selectCore(ctx, select_.distinct ?
+        bare :
+        { ...bare, items: [ { kind: 'expression', expression: { kind: 'number', value: '1' } } ] })
+      budget = `(SELECT CAST(ceiling(COUNT(*) * (${budget}) / 100.0) AS INTEGER) FROM (${counted}))`
+    }
+    if (top.withTies !== true) {
+      return budget
+    }
+    if (select_.orderBy === undefined) {
+      return unsupported('TOP ... WITH TIES requires ORDER BY.')
+    }
+    if (select_.distinct) {
+      return unsupported('SELECT DISTINCT TOP ... WITH TIES is not supported.')
+    }
+    const rank: Ast.Expression = {
+      kind: 'call',
+      name: [ 'rank' ],
+      args: [],
+      over: { partitionBy: [], orderBy: orderKeys(select_) }
+    }
+    const ranked = selectCore(ctx, {
+      ...bare,
+      items: [ { kind: 'expression', expression: rank, alias: '__mssqlite_rank' } ]
+    })
+    return `(SELECT COUNT(*) FROM (${ranked}) WHERE "__mssqlite_rank" <= ${budget})`
+  }
+
 // A TOP inside a set operation is branch-scoped, so wrap that branch's core
 // in a LIMIT subquery; SQLite otherwise cannot LIMIT a single compound term.
 const setTerm =
@@ -97,7 +151,7 @@ const setTerm =
     const core = selectCore(ctx, term)
     return term.top === undefined ?
       core :
-      `SELECT * FROM (${core} LIMIT ${expression(ctx, term.top.count)})`
+      `SELECT * FROM (${core} LIMIT ${topLimit(ctx, term)})`
   }
 
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
@@ -133,7 +187,7 @@ export const select =
       const fetch = select_.fetch === undefined ? '-1' : expression(ctx, select_.fetch)
       parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, select_.offset)}`)
     } else if (select_.top !== undefined && !inSet) {
-      parts.push(`LIMIT ${expression(ctx, select_.top.count)}`)
+      parts.push(`LIMIT ${topLimit(ctx, select_)}`)
     }
     return parts.join(' ')
   }
@@ -168,8 +222,8 @@ const insert =
 
 const update =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'update' }): string => {
-    if (statement_.top !== undefined) {
-      return unsupported('UPDATE TOP is not supported.')
+    if (statement_.top !== undefined && statement_.from !== undefined) {
+      return unsupported('UPDATE TOP with a FROM clause is not supported.')
     }
     const assignments = statement_.set
       .map(({ target, operator, value }) => {
@@ -191,27 +245,58 @@ const update =
         return `${column} = ${expression(ctx, compound)}`
       })
       .join(', ')
+    const target = Quote.objectName(statement_.target)
+    const where = statement_.where === undefined ?
+      '' :
+      ` WHERE ${expression(ctx, statement_.where)}`
+    if (statement_.top !== undefined) {
+      // MSSQL updates an arbitrary n rows — pick them by rowid.
+      return `UPDATE ${target} SET ${assignments} WHERE rowid IN ` +
+        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})`
+    }
     const from = statement_.from === undefined ?
       '' :
       ` FROM ${tableSource(ctx, statement_.from)}`
-    const where = statement_.where === undefined ?
-      '' :
-      ` WHERE ${expression(ctx, statement_.where)}`
-    return `UPDATE ${Quote.objectName(statement_.target)} SET ${assignments}${from}${where}`
+    return `UPDATE ${target} SET ${assignments}${from}${where}`
   }
+
+/** @returns the plain-table leaves of a join tree. */
+const tableLeaves =
+  (source: Ast.TableSource): readonly (Ast.TableSource & { kind: 'table' })[] =>
+    source.kind === 'table' ?
+      [ source ] :
+      source.kind === 'join' ?
+        [ ...tableLeaves(source.left), ...tableLeaves(source.right) ] :
+        []
 
 const delete_ =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'delete' }): string => {
-    if (statement_.top !== undefined) {
-      return unsupported('DELETE TOP is not supported.')
-    }
-    if (statement_.from !== undefined) {
-      return unsupported('DELETE with a second FROM clause is not supported.')
+    if (statement_.top !== undefined && statement_.from !== undefined) {
+      return unsupported('DELETE TOP with a second FROM clause is not supported.')
     }
     const where = statement_.where === undefined ?
       '' :
       ` WHERE ${expression(ctx, statement_.where)}`
-    return `DELETE FROM ${Quote.objectName(statement_.target)}${where}`
+    if (statement_.from !== undefined) {
+      // DELETE alias FROM t AS alias JOIN ... — the target names a table or
+      // alias inside the FROM join tree; delete its rows by rowid membership.
+      const targetName = (statement_.target[statement_.target.length - 1] ?? '').toLowerCase()
+      const match = tableLeaves(statement_.from).find(leaf =>
+        (leaf.alias ?? leaf.name[leaf.name.length - 1] ?? '').toLowerCase() === targetName)
+      if (match === undefined) {
+        return unsupported(`DELETE target ${targetName} is not in the FROM clause.`)
+      }
+      const qualifier = Quote.identifier(match.alias ?? (match.name[match.name.length - 1] ?? ''))
+      return `DELETE FROM ${Quote.objectName(match.name)} WHERE rowid IN ` +
+        `(SELECT ${qualifier}.rowid FROM ${tableSource(ctx, statement_.from)}${where})`
+    }
+    const target = Quote.objectName(statement_.target)
+    if (statement_.top !== undefined) {
+      // MSSQL deletes an arbitrary n rows — pick them by rowid.
+      return `DELETE FROM ${target} WHERE rowid IN ` +
+        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})`
+    }
+    return `DELETE FROM ${target}${where}`
   }
 
 const referentialAction =

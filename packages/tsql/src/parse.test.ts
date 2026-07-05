@@ -38,6 +38,25 @@ test('select with from, where, order by', () => {
   })
 })
 
+test('top percent and with ties parse', () => {
+  expect(parseStatement('SELECT TOP 10 PERCENT * FROM t')).toMatchObject({
+    kind: 'select',
+    top: { count: { kind: 'number', value: '10' }, percent: true }
+  })
+  expect(parseStatement('SELECT TOP (10) PERCENT WITH TIES * FROM t ORDER BY x')).toMatchObject({
+    kind: 'select',
+    top: { count: { kind: 'number', value: '10' }, percent: true, withTies: true }
+  })
+  expect(parseStatement('UPDATE TOP (2) t SET a = 1')).toMatchObject({
+    kind: 'update',
+    top: { kind: 'number', value: '2' }
+  })
+  expect(parseStatement('DELETE TOP (2) FROM t')).toMatchObject({
+    kind: 'delete',
+    top: { kind: 'number', value: '2' }
+  })
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'
