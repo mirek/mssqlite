@@ -235,3 +235,38 @@ test('raiserror severity 16 surfaces as a request error', async () => {
     message: expect.stringContaining('wire fail') as unknown
   })
 })
+
+test('stored procedures execute over the wire via RPC callProcedure', async () => {
+  await query(`
+    CREATE PROCEDURE dbo.add_numbers @a INT, @b INT, @sum INT OUTPUT AS
+    BEGIN
+      SET @sum = @a + @b
+      RETURN 7
+    END
+  `)
+  const outcome = await new Promise<{ outputs: Record<string, unknown>, rows: Row[] }>((resolve, reject) => {
+    const outputs: Record<string, unknown> = {}
+    const rows: Row[] = []
+    const request = new Request('dbo.add_numbers', error => {
+      if (error) {
+        reject(error)
+      } else {
+        resolve({ outputs, rows })
+      }
+    })
+    request.addParameter('a', TYPES.Int, 2)
+    request.addParameter('b', TYPES.Int, 40)
+    request.addOutputParameter('sum', TYPES.Int)
+    request.on('returnValue', (name, value) => {
+      outputs[name] = value
+    })
+    connection.callProcedure(request)
+  })
+  expect(outcome.outputs['sum']).toBe(42)
+})
+
+test('exec with return status over a batch', async () => {
+  await query('CREATE PROCEDURE dbo.status_only AS RETURN 5')
+  const result = await query('DECLARE @rc INT EXEC @rc = status_only SELECT @rc AS rc')
+  expect(result.rows).toEqual([ { rc: 5 } ])
+})

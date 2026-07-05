@@ -485,6 +485,33 @@ export const dropView =
     }
   }
 
+/** Registers a created procedure with its module definition. */
+export const createProcedure =
+  (db: DatabaseSync, name: Ast.QualifiedName, definition: string): number => {
+    const at = objectNameOf(name)
+    const objectId = allocateId(db)
+    insertObject(db, {
+      objectId,
+      name: at.name,
+      schemaId: schemaIdOf(db, at.schema),
+      type: 'P',
+      typeDesc: 'SQL_STORED_PROCEDURE'
+    })
+    db.prepare('INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)')
+      .run(objectId, definition)
+    return objectId
+  }
+
+/** Removes a dropped procedure and its module row. */
+export const dropProcedure =
+  (db: DatabaseSync, name: Ast.QualifiedName): void => {
+    const objectId = objectIdOf(db, name)
+    if (objectId !== undefined) {
+      db.prepare('DELETE FROM "sys.sql_modules" WHERE object_id = ?').run(objectId)
+      db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(objectId)
+    }
+  }
+
 /** Registers columns added by ALTER TABLE ADD. */
 export const addColumns =
   (db: DatabaseSync, name: Ast.QualifiedName, columns: readonly Ast.ColumnDefinition[]): void => {

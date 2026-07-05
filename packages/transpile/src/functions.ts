@@ -208,6 +208,8 @@ const handlers: Record<string, Handler> = {
     `(SELECT object_id FROM "sys.objects" WHERE name = mssqlite_name(${arg(call, render, 0)}) COLLATE NOCASE LIMIT 1)`,
   object_name: (call, render) =>
     `(SELECT name FROM "sys.objects" WHERE object_id = ${arg(call, render, 0)})`,
+  object_definition: (call, render) =>
+    `(SELECT definition FROM "sys.sql_modules" WHERE object_id = ${arg(call, render, 0)})`,
   schema_id: (call, render) =>
     call.args.length === 0 ?
       '1' :

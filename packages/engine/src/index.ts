@@ -14,4 +14,13 @@ export {
   type SqlResult
 } from './execute.ts'
 export { registerFunctions } from './udf.ts'
-export { server, session, type Server, type Session, type Value, type Variable } from './session.ts'
+export {
+  procedureKey,
+  server,
+  session,
+  type Procedure,
+  type Server,
+  type Session,
+  type Value,
+  type Variable
+} from './session.ts'

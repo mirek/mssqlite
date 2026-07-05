@@ -201,6 +201,18 @@ export const tables: readonly string[] = [
     is_not_for_replication INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (object_id, column_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS "sys.sql_modules" (
+    object_id INTEGER PRIMARY KEY,
+    definition TEXT,
+    uses_ansi_nulls INTEGER NOT NULL DEFAULT 1,
+    uses_quoted_identifier INTEGER NOT NULL DEFAULT 1,
+    is_schema_bound INTEGER NOT NULL DEFAULT 0,
+    uses_database_collation INTEGER NOT NULL DEFAULT 0,
+    is_recompiled INTEGER NOT NULL DEFAULT 0,
+    null_on_null_input INTEGER NOT NULL DEFAULT 0,
+    execute_as_principal_id INTEGER,
+    uses_native_compilation INTEGER NOT NULL DEFAULT 0
+  )`,
   `CREATE TABLE IF NOT EXISTS "sys._next_id" (
     next_id INTEGER NOT NULL
   )`

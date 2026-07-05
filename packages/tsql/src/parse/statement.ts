@@ -318,6 +318,78 @@ const throwStatement: Parser.t<Ast.Statement> =
         { kind: 'throw' as const, number: args.number, message: args.message, state: args.state }
   )
 
+const procedureKeyword: Parser.t<string> =
+  C.first(C.keyword('procedure'), C.keyword('proc'))
+
+const procedureParameter: Parser.t<Ast.ProcedureParameter> =
+  C.map(
+    C.seq(
+      C.variable,
+      C.maybe(C.keyword('as')),
+      typeName,
+      C.maybe(C.map(C.seq(C.punct('='), expression), ([ , value ]) => value)),
+      C.maybe(C.first(C.keyword('output'), C.keyword('out'))),
+      C.maybe(C.keyword('readonly'))
+    ),
+    ([ name, , type, default_, output ]) => ({
+      name,
+      type,
+      ...default_ === undefined ? {} : { default_ },
+      output: output !== undefined
+    })
+  )
+
+/** Statements to the end of the batch — a procedure body owns the rest. */
+const statementsUntilInputEnd: Parser.t<Ast.Statement[]> =
+  reader => {
+    const statements: Ast.Statement[] = []
+    let current = reader
+    for (;;) {
+      while (!Result.failed(C.punct(';')(current))) {
+        current = Reader.advanced(current)
+      }
+      if (Reader.end(current)) {
+        return Result.ok(current, statements)
+      }
+      const inner = statementRef(current)
+      if (Result.failed(inner)) {
+        return inner
+      }
+      statements.push(inner.value)
+      current = inner.reader
+    }
+  }
+
+const createProcedure: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.first(
+        C.map(
+          C.seq(C.keyword('create'), C.keyword('or'), C.keyword('alter'), procedureKeyword),
+          () => 'createOrAlter' as const
+        ),
+        C.map(C.seq(C.keyword('create'), procedureKeyword), () => 'create' as const),
+        C.map(C.seq(C.keyword('alter'), procedureKeyword), () => 'alter' as const)
+      ),
+      C.qualifiedName,
+      C.maybe(C.first(
+        C.parens(C.sepBy1(procedureParameter, C.punct(','))),
+        C.sepBy1(procedureParameter, C.punct(','))
+      )),
+      C.keyword('as'),
+      statementsUntilInputEnd
+    ),
+    ([ action, name, parameters, , body ]) => ({
+      kind: 'createProcedure' as const,
+      name,
+      action,
+      parameters: parameters ?? [],
+      body,
+      // Patched with the batch source by `parse` — sys.sql_modules stores it.
+      definition: ''
+    })
+  )
+
 /** Single statement parser. */
 export const statement: Parser.t<Ast.Statement> =
   C.first<Parser.t<Ast.Statement>[]>(
@@ -328,6 +400,7 @@ export const statement: Parser.t<Ast.Statement> =
     createTable,
     createIndex,
     createView,
+    createProcedure,
     alterTable,
     dropIndex,
     drop,

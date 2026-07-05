@@ -1,3 +1,6 @@
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { DataType } from '@mssqlite/tds'
 import { executeBatch, executeSql, MssqlError, server, session } from './index.ts'
@@ -374,4 +377,83 @@ test('xact_state reflects doomed transactions under xact_abort', () => {
   )
   executeBatch(s, 'ROLLBACK')
   expect(rowsOf(executeBatch(s, 'SELECT XACT_STATE() AS x')).rows).toEqual([ [ 0 ] ])
+})
+
+test('stored procedures: defaults, named args, output and return status', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE PROCEDURE dbo.add_numbers @a INT, @b INT = 10, @sum INT OUTPUT AS
+    BEGIN
+      SET @sum = @a + @b
+      RETURN 7
+    END
+  `)
+  const items = executeBatch(s, `
+    DECLARE @result INT, @rc INT
+    EXEC @rc = add_numbers @a = 5, @sum = @result OUTPUT
+    SELECT @result AS total, @rc AS rc
+  `)
+  expect(rowsOf(items).rows).toEqual([ [ 15, 7 ] ])
+  // Positional arguments and result sets from the body.
+  executeBatch(s, 'CREATE PROCEDURE dbo.double_it @n INT AS SELECT @n * 2 AS d')
+  expect(rowsOf(executeBatch(s, 'EXEC double_it 21')).rows).toEqual([ [ 42 ] ])
+  // Missing required parameter.
+  expect(() => executeBatch(s, 'EXEC add_numbers')).toThrowError(
+    expect.objectContaining({ number: 201 }) as Error
+  )
+})
+
+test('procedure scope is isolated from the caller', () => {
+  const s = open()
+  executeBatch(s, 'CREATE PROCEDURE dbo.leaky AS SELECT @x AS x')
+  expect(() => executeBatch(s, 'DECLARE @x INT = 1 EXEC leaky')).toThrowError(
+    expect.objectContaining({ number: 137 }) as Error
+  )
+  // Caller variables survive the call unchanged.
+  executeBatch(s, 'CREATE PROCEDURE dbo.shadow @x INT AS SET @x = 99')
+  const items = executeBatch(s, 'DECLARE @x INT = 1 EXEC shadow @x SELECT @x AS x')
+  expect(rowsOf(items).rows).toEqual([ [ 1 ] ])
+})
+
+test('nested procedures report @@NESTLEVEL', () => {
+  const s = open()
+  executeBatch(s, 'CREATE PROCEDURE dbo.inner_level AS SELECT @@NESTLEVEL AS level')
+  executeBatch(s, 'CREATE PROCEDURE dbo.outer_level AS EXEC inner_level')
+  expect(rowsOf(executeBatch(s, 'EXEC outer_level')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@NESTLEVEL AS level')).rows).toEqual([ [ 0 ] ])
+})
+
+test('procedures register in the catalog and drop cleanly', () => {
+  const s = open()
+  executeBatch(s, 'CREATE PROCEDURE dbo.listed AS SELECT 1 AS one')
+  expect(rowsOf(executeBatch(s, 'SELECT name FROM sys.procedures')).rows).toEqual([ [ 'listed' ] ])
+  const definition = rowsOf(executeBatch(s, 'SELECT OBJECT_DEFINITION(OBJECT_ID(\'listed\')) AS d'))
+  expect(String(definition.rows[0]?.[0])).toContain('CREATE PROCEDURE')
+  // CREATE over an existing name fails; CREATE OR ALTER replaces.
+  expect(() => executeBatch(s, 'CREATE PROCEDURE dbo.listed AS SELECT 2 AS two')).toThrowError(
+    expect.objectContaining({ number: 2714 }) as Error
+  )
+  executeBatch(s, 'CREATE OR ALTER PROCEDURE dbo.listed AS SELECT 2 AS two')
+  expect(rowsOf(executeBatch(s, 'EXEC listed')).rows).toEqual([ [ 2 ] ])
+  executeBatch(s, 'DROP PROCEDURE listed')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM sys.procedures')).rows).toEqual([ [ 0 ] ])
+  expect(() => executeBatch(s, 'EXEC listed')).toThrowError(
+    expect.objectContaining({ number: 2812 }) as Error
+  )
+  expect(() => executeBatch(s, 'DROP PROCEDURE listed')).toThrowError(
+    expect.objectContaining({ number: 3701 }) as Error
+  )
+  executeBatch(s, 'DROP PROCEDURE IF EXISTS listed')
+})
+
+test('procedures reload from sys.sql_modules on server restart', () => {
+  const path = join(tmpdir(), `mssqlite-procs-${process.pid}-${Math.floor(Math.random() * 1e9)}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, 'CREATE PROCEDURE dbo.hello AS SELECT 42 AS answer')
+    const second = session(server({ path }))
+    expect(rowsOf(executeBatch(second, 'EXEC hello')).rows).toEqual([ [ 42 ] ])
+  } finally {
+    rmSync(path, { force: true })
+  }
 })

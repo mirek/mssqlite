@@ -159,9 +159,20 @@ const onRpc =
           return
         default: {
           // Fall back to EXEC procedure via the engine (raises 2812 for unknown).
+          // Parameters bind as shadowed variables and pass through by name so
+          // OUTPUT values flow back as RETURNVALUE tokens.
           const name = typeof rpc.procedure === 'string' ? rpc.procedure : `#${rpc.procedure}`
-          const items = executeBatch(session_, `EXEC ${name}`)
-          respond(connection, rpcResponse(items, connection.engine.serverName))
+          const parameters = parameterValues(rpc.parameters)
+          const rendered = rpc.parameters.map((parameter, index) => {
+            const bound = parameters[index]?.name ?? `@p${index + 1}`
+            const output = parameters[index]?.output === true ? ' OUTPUT' : ''
+            return parameter.name === '' ? `${bound}${output}` : `${parameter.name} = ${bound}${output}`
+          })
+          const argumentList = rendered.length > 0 ? ` ${rendered.join(', ')}` : ''
+          const sql = `EXEC ${name}${argumentList}`
+          const result = executeSql(session_, sql, parameters)
+          respond(connection, rpcResponse(
+            result.items, connection.engine.serverName, result.outputs, session_.lastReturnStatus))
           return
         }
       }

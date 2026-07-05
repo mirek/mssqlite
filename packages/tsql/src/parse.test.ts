@@ -79,6 +79,39 @@ test('try/catch and raiserror parse', () => {
   expect(parseStatement('THROW')).toMatchObject({ kind: 'throw' })
 })
 
+test('create, alter and drop procedure parse', () => {
+  expect(parseStatement(`
+    CREATE PROCEDURE dbo.p @a INT, @b NVARCHAR(50) = N'x', @c INT OUTPUT AS
+    BEGIN
+      SET @c = @a
+    END
+  `)).toMatchObject({
+    kind: 'createProcedure',
+    name: [ 'dbo', 'p' ],
+    action: 'create',
+    parameters: [
+      { name: '@a', output: false },
+      { name: '@b', default_: { kind: 'string', value: 'x' }, output: false },
+      { name: '@c', output: true }
+    ],
+    body: [ { kind: 'block' } ],
+    definition: expect.stringContaining('CREATE PROCEDURE') as unknown
+  })
+  expect(parseStatement('CREATE OR ALTER PROC p AS SELECT 1')).toMatchObject({
+    kind: 'createProcedure',
+    action: 'createOrAlter'
+  })
+  expect(parseStatement('ALTER PROCEDURE p AS SELECT 2')).toMatchObject({
+    kind: 'createProcedure',
+    action: 'alter'
+  })
+  expect(parseStatement('DROP PROCEDURE IF EXISTS p, q')).toMatchObject({
+    kind: 'dropProcedure',
+    ifExists: true,
+    names: [ [ 'p' ], [ 'q' ] ]
+  })
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'

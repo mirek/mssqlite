@@ -4,7 +4,7 @@ import { parse } from '@mssqlite/tsql'
 import { MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import type { Ast } from '@mssqlite/tsql'
-import type { Session, Value, Variable } from './session.ts'
+import { procedureKey, type Procedure, type Session, type Value, type Variable } from './session.ts'
 
 /** Result set of a SELECT. */
 export type Rows = {
@@ -85,7 +85,7 @@ export const globalOf =
       case '@@max_precision':
         return 38
       case '@@nestlevel':
-        return 0
+        return session.nestLevel
       case '@@fetch_status':
         return -1
       case '@@datefirst':
@@ -457,7 +457,28 @@ const executeStatement =
       case 'continue':
         return 'continue'
       case 'return':
+        if (statement.expression !== undefined) {
+          session.returnValue = evaluate(session, statement.expression)
+        }
         return 'return'
+      case 'createProcedure':
+        defineProcedure(session, statement)
+        return undefined
+      case 'dropProcedure':
+        for (const name of statement.names) {
+          const key = procedureKey(name)
+          if (!session.server.procedures.has(key)) {
+            if (!statement.ifExists) {
+              throw new MssqlError(
+                `Cannot drop the procedure '${name.join('.')}', because it does not exist or you do not have permission.`,
+                3701, 16)
+            }
+            continue
+          }
+          Catalog.dropProcedure(session.db, name)
+          session.server.procedures.delete(key)
+        }
+        return undefined
       case 'beginTransaction':
       case 'commitTransaction':
       case 'rollbackTransaction':
@@ -580,6 +601,114 @@ const declaredParameterNames =
     return names.map(part => /@\w+/.exec(part)?.[0] ?? '').filter(part => part !== '')
   }
 
+const defineProcedure =
+  (session: Session, statement: Ast.Statement & { kind: 'createProcedure' }): void => {
+    const key = procedureKey(statement.name)
+    const name = statement.name[statement.name.length - 1] ?? ''
+    const exists = session.server.procedures.has(key)
+    if (statement.action === 'create' && exists) {
+      throw new MssqlError(`There is already an object named '${name}' in the database.`, 2714, 16)
+    }
+    if (statement.action === 'alter' && !exists) {
+      throw new MssqlError(`Invalid object name '${name}'.`, 208, 16)
+    }
+    if (exists) {
+      Catalog.dropProcedure(session.db, statement.name)
+    }
+    Catalog.createProcedure(session.db, statement.name, statement.definition)
+    session.server.procedures.set(key, {
+      name,
+      parameters: statement.parameters,
+      body: statement.body,
+      definition: statement.definition
+    })
+  }
+
+const callUserProcedure =
+  (session: Session, procedure: Procedure, statement: Ast.Statement & { kind: 'execute' }, items: Item[]): void => {
+    if (session.nestLevel >= 32) {
+      throw new MssqlError(
+        'Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32).', 217, 16)
+    }
+    const byName = new Map(procedure.parameters.map(parameter =>
+      [ parameter.name.toLowerCase(), parameter ]))
+    // Arguments evaluate in the caller's scope before the parameter scope swaps in.
+    const supplied = new Map<string, Value>()
+    const outputTargets = new Map<string, string>()
+    statement.args.forEach((argument, index) => {
+      const parameter = argument.name !== undefined ?
+        byName.get(argument.name.toLowerCase()) :
+        procedure.parameters[index]
+      if (parameter === undefined) {
+        throw argument.name !== undefined ?
+          new MssqlError(`${argument.name} is not a parameter for procedure ${procedure.name}.`, 8145, 16) :
+          new MssqlError(`Procedure or function ${procedure.name} has too many arguments specified.`, 8144, 16)
+      }
+      const key = parameter.name.toLowerCase()
+      if (argument.value.kind !== 'default') {
+        supplied.set(key, evaluate(session, argument.value))
+      }
+      if (argument.output && argument.value.kind === 'variable') {
+        outputTargets.set(key, argument.value.name)
+      }
+    })
+    const scope = new Map<string, Variable>()
+    for (const parameter of procedure.parameters) {
+      const key = parameter.name.toLowerCase()
+      let value: Value
+      if (supplied.has(key)) {
+        value = supplied.get(key) ?? null
+      } else if (parameter.default_ !== undefined) {
+        value = evaluate(session, parameter.default_)
+      } else {
+        throw new MssqlError(
+          `Procedure or function '${procedure.name}' expects parameter '${parameter.name}', which was not supplied.`,
+          201, 16)
+      }
+      scope.set(key, { type: parameter.type, value } as Variable)
+    }
+    // The variables map reference is shared session state — swap contents
+    // rather than the reference, restoring the caller's scope afterwards.
+    const saved = new Map(session.variables)
+    const savedReturn = session.returnValue
+    session.variables.clear()
+    for (const [ key, variable ] of scope) {
+      session.variables.set(key, variable)
+    }
+    session.returnValue = null
+    session.nestLevel++
+    const outputs = new Map<string, Value>()
+    let status: Value = null
+    try {
+      for (const inner of procedure.body) {
+        const signal = executeStatement(session, inner, items)
+        if (signal === 'return') {
+          break
+        }
+      }
+      status = session.returnValue
+      for (const key of outputTargets.keys()) {
+        outputs.set(key, session.variables.get(key)?.value ?? null)
+      }
+    } finally {
+      session.nestLevel--
+      session.returnValue = savedReturn
+      session.variables.clear()
+      for (const [ key, variable ] of saved) {
+        session.variables.set(key, variable)
+      }
+    }
+    // OUTPUT parameters copy back into the caller's variables.
+    for (const [ key, target ] of outputTargets) {
+      applyAssign(session, target, '=', outputs.get(key) ?? null)
+    }
+    const numericStatus = typeof status === 'number' || typeof status === 'bigint' ? Number(status) : 0
+    session.lastReturnStatus = numericStatus
+    if (statement.result !== undefined) {
+      applyAssign(session, statement.result, '=', numericStatus)
+    }
+  }
+
 const executeProcedure =
   (session: Session, statement: Ast.Statement & { kind: 'execute' }, items: Item[]): Signal => {
     const name = (statement.procedure[statement.procedure.length - 1] ?? '').toLowerCase()
@@ -614,6 +743,11 @@ const executeProcedure =
           }
         }
       })
+      return undefined
+    }
+    const procedure = session.server.procedures.get(procedureKey(statement.procedure))
+    if (procedure !== undefined) {
+      callUserProcedure(session, procedure, statement, items)
       return undefined
     }
     throw new MssqlError(`Could not find stored procedure '${name}'.`, 2812, 16)

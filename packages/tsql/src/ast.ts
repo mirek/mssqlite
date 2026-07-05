@@ -193,6 +193,14 @@ export type TableConstraint =
     }
   | { readonly kind: 'check', readonly name?: string, readonly expression: Expression }
 
+/** Parameter declaration of CREATE PROCEDURE. */
+export type ProcedureParameter = {
+  readonly name: string,
+  readonly type: TypeName.t,
+  readonly default_?: Expression,
+  readonly output: boolean
+}
+
 /** SET assignment in UPDATE. */
 export type Assignment = {
   readonly target:
@@ -306,6 +314,20 @@ export type Statement =
       readonly number?: Expression,
       readonly message?: Expression,
       readonly state?: Expression
+    }
+  | {
+      readonly kind: 'createProcedure',
+      readonly name: QualifiedName,
+      readonly action: 'create' | 'alter' | 'createOrAlter',
+      readonly parameters: readonly ProcedureParameter[],
+      readonly body: readonly Statement[],
+      /** Source text of the whole batch, stored in sys.sql_modules. */
+      readonly definition: string
+    }
+  | {
+      readonly kind: 'dropProcedure',
+      readonly names: readonly QualifiedName[],
+      readonly ifExists: boolean
     }
   | {
       readonly kind: 'tryCatch',
