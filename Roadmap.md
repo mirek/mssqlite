@@ -28,10 +28,10 @@ Real applications assume these everywhere; ORMs and migration tools
   engine.
 - ☑ **Stored procedures** — `CREATE/ALTER/DROP PROCEDURE`, `EXEC` with
   positional/named/default/OUTPUT parameters, `RETURN n` status,
-  `EXEC @rc = proc`, nested procs with `@@NESTLEVEL`, definitions in
-  `sys.procedures` + `sys.sql_modules` (`OBJECT_DEFINITION`,
-  `sp_helptext`). Layers: tsql, catalog, engine, server (RETURNVALUE /
-  ReturnStatus already wired for RPC).
+  `EXEC @rc = proc`, nested procs with `@@NESTLEVEL` (cap 32),
+  definitions persisted in `sys.procedures` + `sys.sql_modules`
+  (`OBJECT_DEFINITION()`, reload on restart), RPC `callProcedure` with
+  RETURNVALUE / ReturnStatus. Layers: tsql, catalog, engine, server.
 
 ## Phase 2 — query and DML surface
 
@@ -76,6 +76,14 @@ Real applications assume these everywhere; ORMs and migration tools
 
 ## Phase 3 — semantics and type fidelity
 
+- ☐ **Statement-level error semantics** — today any statement error
+  aborts the whole batch; MSSQL continues past most statement-level
+  errors (constraint violations) and only some errors are batch-aborting.
+  Needs error + continue in `executeBatch` and multi-error responses in
+  the server layer. Layers: engine, server.
+- ☐ **Arithmetic errors** — division by zero yields NULL (SQLite)
+  instead of error 8134; overflow checks (error 8115) similarly missing.
+  Layers: transpile (guard rewrites or UDFs).
 - ☐ **Exact DECIMAL/NUMERIC arithmetic** — results currently ride SQLite
   float affinity; route decimal ops through a scaled-integer or string
   UDF path and emit exact TDS decimals (`tds/decimal.ts` already
@@ -104,10 +112,10 @@ Real applications assume these everywhere; ORMs and migration tools
 - ☐ **TLS** — prelogin ENCRYPT negotiation + TLS wrap of the stream;
   modern drivers (tedious ≥ 16, go-mssqldb, JDBC) default to encrypted
   connections, so this gates real-tool adoption. Layers: tds, server.
-- ☐ **System stored procedures** — `sp_help`, `sp_columns`, `sp_tables`,
-  `sp_who`, `sp_helpdb`, `sp_rename`, `sp_spaceused` — SSMS/Azure Data
-  Studio and ODBC catalog calls use them. Layers: engine (interpreted,
-  reading the catalog).
+- ☐ **System stored procedures** — `sp_help`, `sp_helptext`,
+  `sp_columns`, `sp_tables`, `sp_who`, `sp_helpdb`, `sp_rename`,
+  `sp_spaceused` — SSMS/Azure Data Studio and ODBC catalog calls use
+  them. Layers: engine (interpreted, reading the catalog).
 - ☐ **More catalog** — `INFORMATION_SCHEMA.ROUTINES/VIEWS/
   TABLE_CONSTRAINTS/KEY_COLUMN_USAGE/REFERENTIAL_CONSTRAINTS`,
   `sys.sql_modules`, `sys.default_constraints` details, minimal
