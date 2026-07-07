@@ -45,6 +45,13 @@ test('multi-character operators', () => {
   ])
 })
 
+test('dollar-prefixed pseudo-columns lex as words', () => {
+  expect(kinds('OUTPUT $action, $ACTION')).toEqual([
+    'word:OUTPUT', 'word:$action', 'punct:,', 'word:$ACTION'
+  ])
+  expect(() => lex('$')).toThrow(LexError)
+})
+
 test('offsets track source positions', () => {
   const tokens = lex('SELECT x')
   expect(tokens[0]?.offset).toBe(0)

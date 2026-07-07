@@ -666,7 +666,7 @@ test('merge is atomic when a later arm fails', () => {
   expect(rowsOf(executeBatch(s, 'SELECT @@TRANCOUNT AS tc')).rows).toEqual([ [ 0 ] ])
 })
 
-test('merge validates arms and rejects OUTPUT', () => {
+test('merge validates arms', () => {
   const s = open()
   executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY); CREATE TABLE src (id INT)')
   expect(() => executeBatch(s, `
@@ -678,11 +678,120 @@ test('merge validates arms and rejects OUTPUT', () => {
     MERGE t USING src ON t.id = src.id
     WHEN NOT MATCHED THEN INSERT (id) VALUES (src.id, 1);
   `)).toThrowError(expect.objectContaining({ number: 110 }) as Error)
+})
+
+test('merge output returns $action with inserted and deleted images', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE prices (sku NVARCHAR(20) PRIMARY KEY, price INT);
+    INSERT INTO prices VALUES (N'a', 100), (N'b', 200);
+  `)
+  const result = rowsOf(executeBatch(s, `
+    MERGE prices AS t
+    USING (VALUES (N'a', 110), (N'd', 400)) AS s (sku, price)
+    ON t.sku = s.sku
+    WHEN MATCHED THEN UPDATE SET price = s.price
+    WHEN NOT MATCHED THEN INSERT (sku, price) VALUES (s.sku, s.price)
+    WHEN NOT MATCHED BY SOURCE THEN DELETE
+    OUTPUT $action, deleted.sku AS old_sku, deleted.price AS old_price,
+      inserted.sku AS new_sku, inserted.price AS new_price;
+  `))
+  expect(result.columns.map(column => column.name))
+    .toEqual([ '$action', 'old_sku', 'old_price', 'new_sku', 'new_price' ])
+  const sorted = [ ...result.rows ].sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+  expect(sorted).toEqual([
+    [ 'DELETE', 'b', 200, null, null ],
+    [ 'INSERT', null, null, 'd', 400 ],
+    [ 'UPDATE', 'a', 100, 'a', 110 ]
+  ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@ROWCOUNT AS rc')).rows).toEqual([ [ 3 ] ])
+})
+
+test('merge output expands stars and sees identity values', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE users (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50));
+    INSERT INTO users (name) VALUES (N'a');
+  `)
+  const result = rowsOf(executeBatch(s, `
+    MERGE users AS t
+    USING (VALUES (N'a'), (N'b')) AS s (name)
+    ON t.name = s.name
+    WHEN MATCHED THEN UPDATE SET name = s.name + N'!'
+    WHEN NOT MATCHED THEN INSERT (name) VALUES (s.name)
+    OUTPUT inserted.*;
+  `))
+  expect(result.columns.map(column => column.name)).toEqual([ 'id', 'name' ])
+  expect([ ...result.rows ].sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([
+    [ 1, 'a!' ],
+    [ 2, 'b' ]
+  ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@IDENTITY AS i')).rows).toEqual([ [ 2 ] ])
+})
+
+test('merge output with insert default values captures each row', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE d (id INT IDENTITY(1,1) PRIMARY KEY, tag NVARCHAR(10) DEFAULT N'x');
+  `)
+  const result = rowsOf(executeBatch(s, `
+    MERGE d AS t
+    USING (VALUES (1), (2)) AS s (n)
+    ON t.id = s.n
+    WHEN NOT MATCHED THEN INSERT DEFAULT VALUES
+    OUTPUT $action AS act, inserted.id, inserted.tag;
+  `))
+  expect([ ...result.rows ].sort((a, b) => Number(a[1]) - Number(b[1]))).toEqual([
+    [ 'INSERT', 1, 'x' ],
+    [ 'INSERT', 2, 'x' ]
+  ])
+})
+
+test('merge output into routes rows and stays atomic', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE stock (sku NVARCHAR(20) PRIMARY KEY, qty INT);
+    CREATE TABLE audit (act NVARCHAR(10), sku NVARCHAR(20), qty INT);
+    INSERT INTO stock VALUES (N'a', 1);
+  `)
+  const items = executeBatch(s, `
+    MERGE stock AS t
+    USING (VALUES (N'a', 2), (N'b', 3)) AS s (sku, qty)
+    ON t.sku = s.sku
+    WHEN MATCHED THEN UPDATE SET qty = s.qty
+    WHEN NOT MATCHED THEN INSERT (sku, qty) VALUES (s.sku, s.qty)
+    OUTPUT $action, inserted.sku, inserted.qty INTO audit (act, sku, qty);
+  `)
+  expect(items).toEqual([ { kind: 'count', rowCount: 2 } ])
+  expect(rowsOf(executeBatch(s, 'SELECT act, sku, qty FROM audit ORDER BY sku')).rows).toEqual([
+    [ 'UPDATE', 'a', 2 ],
+    [ 'INSERT', 'b', 3 ]
+  ])
+  // A failing INTO write rolls the whole merge back.
+  executeBatch(s, 'CREATE TABLE strict_audit (sku NVARCHAR(20) NOT NULL)')
   expect(() => executeBatch(s, `
-    MERGE t USING src ON t.id = src.id
-    WHEN MATCHED THEN DELETE
-    OUTPUT deleted.id;
+    MERGE stock AS t
+    USING (VALUES (N'c', NULL)) AS s (sku, qty)
+    ON t.sku = s.sku
+    WHEN NOT MATCHED THEN INSERT (sku, qty) VALUES (s.sku, s.qty)
+    OUTPUT inserted.qty INTO strict_audit (sku);
+  `)).toThrowError(expect.objectContaining({ number: 515 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM stock')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@TRANCOUNT AS tc')).rows).toEqual([ [ 0 ] ])
+})
+
+test('merge output rejects source columns and $action outside merge', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY); INSERT INTO t VALUES (0)')
+  expect(() => executeBatch(s, `
+    MERGE t USING (VALUES (1)) AS s (id) ON t.id = s.id
+    WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)
+    OUTPUT s.id;
   `)).toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+  expect(() => executeBatch(s, 'INSERT INTO t OUTPUT $action, inserted.id VALUES (2)'))
+    .toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+  // Failed merges leave no partial rows behind.
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 1 ] ])
 })
 
 test('merge inside an explicit transaction respects rollback', () => {

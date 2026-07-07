@@ -52,9 +52,11 @@ Real applications assume these everywhere; ORMs and migration tools
   snapshot temp table into DELETE/UPDATE/INSERT inside one implicit
   transaction; multi-match error 8672, `@@ROWCOUNT` totals all actions.
   Layers: tsql, engine.
-- ☐ **MERGE OUTPUT** — `$action` pseudo-column and inserted/deleted
-  images assembled from the merge snapshot; OUTPUT on MERGE currently
-  raises a clean error. Layers: tsql (lex `$action`), engine.
+- ☑ **MERGE OUTPUT** — `$action` pseudo-column and inserted/deleted
+  images assembled per arm from the merge snapshot (insert-arm rowids
+  captured via RETURNING), `OUTPUT … INTO` routing included;
+  source-column references raise a clean error. Layers: tsql (lex
+  `$action`), engine.
 - ☐ **Table variables** — `DECLARE @t TABLE (…)` as session-scoped temp
   tables with generated names; INSERT/SELECT against them. Layers: tsql,
   transpile (name mapping), engine.

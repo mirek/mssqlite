@@ -89,12 +89,16 @@ The language pipeline lives in three packages:
   AND condition are accepted (the second is just dead); the same table
   can be target and source (the snapshot makes it safe); arm-count and
   duplicate-action violations raise 10714, multi-source matches for one
-  target row raise 8672; OUTPUT (`$action`) is not yet supported.
+  target row raise 8672. MERGE OUTPUT supports `$action` (lexed as a
+  plain word — a leading `$` may start a word token), `inserted.` /
+  `deleted.` items and stars, and `OUTPUT … INTO`; unlike SQL Server,
+  source columns in MERGE OUTPUT are rejected (the row images are
+  assembled after the arms apply, when source pairing is gone).
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
-GOTO, table variables (DECLARE @t TABLE), MERGE OUTPUT (`$action`),
+GOTO, table variables (DECLARE @t TABLE), source columns in MERGE OUTPUT,
 table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

@@ -79,6 +79,10 @@ const rewrite =
     const inner = (nested: Ast.Expression): Ast.Expression => rewrite(nested, allowed, statementName)
     switch (expression_.kind) {
       case 'column': {
+        if (expression_.name.length === 1 && (expression_.name[0] ?? '').toLowerCase() === '$action') {
+          return unsupported(
+            'The identifier "$action" can only be specified in the OUTPUT clause of a MERGE statement.')
+        }
         const pseudo = pseudoTable(expression_.name)
         if (pseudo === allowed) {
           return { kind: 'column', name: expression_.name.slice(1) }

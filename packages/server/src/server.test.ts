@@ -300,3 +300,26 @@ test('merge over the wire reports the combined row count', async () => {
   const result = await query('SELECT sku, qty FROM stock ORDER BY sku')
   expect(result.rows).toEqual([ { sku: 'a', qty: 10 }, { sku: 'c', qty: 30 } ])
 })
+
+test('merge output over the wire returns $action with row images', async () => {
+  await query(`
+    CREATE TABLE mo (id INT PRIMARY KEY, v INT);
+    INSERT INTO mo VALUES (1, 10), (2, 20);
+  `)
+  const merged = await query(`
+    MERGE mo AS t
+    USING (VALUES (1, 11), (3, 30)) AS s (id, v)
+    ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = s.v
+    WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)
+    WHEN NOT MATCHED BY SOURCE THEN DELETE
+    OUTPUT $action AS act, deleted.id AS old_id, inserted.id AS new_id;
+  `)
+  const sorted = [ ...merged.rows ].sort((a, b) =>
+    String(a['act']).localeCompare(String(b['act'])))
+  expect(sorted).toEqual([
+    { act: 'DELETE', old_id: 2, new_id: null },
+    { act: 'INSERT', old_id: null, new_id: 3 },
+    { act: 'UPDATE', old_id: 1, new_id: 1 }
+  ])
+})

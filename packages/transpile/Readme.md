@@ -48,7 +48,8 @@ const { sql, variables } = statement(parseStatement(
   qualifier stripped (INSERT and DELETE expose exactly those values;
   UPDATE only `inserted.`). `Output.readsDeleted` tells the engine when
   an UPDATE needs its pre-update snapshot path instead, and the wrong
-  pseudo-table (`deleted` in INSERT, `inserted` in DELETE) is rejected.
+  pseudo-table (`deleted` in INSERT, `inserted` in DELETE) is rejected,
+  as is `$action` outside a MERGE statement.
 - **Functions** — built-ins map to native SQLite (`isnull` → `ifnull`,
   `substring` → `substr`, `string_agg` → `group_concat`, `ceiling`, `power`,
   window functions, …), transpile-time rewrites (`YEAR(d)` →

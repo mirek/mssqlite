@@ -56,6 +56,8 @@ const statements = parse(`
   NOT MATCHED [BY TARGET] / NOT MATCHED BY SOURCE arms and AND conditions;
   USING accepts a table, `(SELECT …) AS s (cols)` or `(VALUES …) AS s
   (cols)` — column lists desugar into select-item aliases at parse time.
+  `$action` lexes as a plain word (a leading `$` may start a word), so
+  MERGE OUTPUT items carry it as an ordinary column reference.
 - **DDL** — CREATE TABLE (column constraints in any order: NULL/NOT NULL,
   IDENTITY(s,i), PRIMARY KEY, UNIQUE, DEFAULT, CHECK, REFERENCES with
   ON DELETE/UPDATE actions, COLLATE, named constraints; table constraints:
