@@ -161,6 +161,133 @@ const query =
     return { kind: 'rows', columns, rows, rowCount: rows.length }
   }
 
+/** Emits OUTPUT rows to the client, or routes them into the INTO target table. */
+const emitOutput =
+  (session: Session, output: Ast.Output, result: Rows, items: Item[]): void => {
+    if (output.into === undefined) {
+      items.push(result)
+      return
+    }
+    const table = Transpile.Quote.objectName(output.into.table)
+    const columns = output.into.columns === undefined ?
+      '' :
+      ` (${output.into.columns.map(Transpile.Quote.identifier).join(', ')})`
+    const placeholders = result.columns.map(() => '?').join(', ')
+    const insert = session.db.prepare(`INSERT INTO ${table}${columns} VALUES (${placeholders})`)
+    for (const row of result.rows) {
+      insert.run(...row.map(bindable))
+    }
+    // OUTPUT INTO returns no result set — the count reflects the DML itself.
+    items.push({ kind: 'count', rowCount: result.rowCount })
+  }
+
+/** Runs a DML statement whose OUTPUT clause renders as SQLite RETURNING. */
+const runWithOutput =
+  (session: Session, statement: Ast.Statement & { kind: 'insert' | 'update' | 'delete' }, output: Ast.Output, items: Item[]): void => {
+    const rendered = Transpile.statement(statement)
+    const prepared = session.db.prepare(rendered.sql)
+    const records = prepared.all(bindings(session, rendered.variables)) as Record<string, Value>[]
+    const columns = columnsOf(session.db, prepared, records)
+    const rows = records.map(record => columns.map(column => record[column.name] ?? null))
+    session.rowCount = rows.length
+    if (statement.kind === 'insert' && rows.length > 0 && hasIdentity(session, statement.table)) {
+      const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
+      session.lastIdentity = Number(last.id)
+    }
+    emitOutput(session, output, { kind: 'rows', columns, rows, rowCount: rows.length }, items)
+  }
+
+/** @returns OUTPUT items with `inserted.*` / `deleted.*` expanded to the target table's columns. */
+const expandOutputStars =
+  (session: Session, target: Ast.QualifiedName, items: readonly Ast.SelectItem[]): Ast.SelectItem[] =>
+    items.flatMap(item => {
+      if (item.kind !== 'star') {
+        return [ item ]
+      }
+      const qualifier = (item.qualifier?.[item.qualifier.length - 1] ?? '').toLowerCase()
+      if (qualifier !== 'inserted' && qualifier !== 'deleted') {
+        throw new MssqlError('OUTPUT * must be qualified with the INSERTED or DELETED pseudo-table.', 102, 15)
+      }
+      const columns = session.db
+        .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(target)})`)
+        .all() as { name: string }[]
+      return columns.map(column => ({
+        kind: 'expression' as const,
+        expression: { kind: 'column' as const, name: [ qualifier, column.name ] },
+        alias: column.name
+      }))
+    })
+
+/**
+ * UPDATE with an OUTPUT clause reading DELETED values — SQLite RETURNING only
+ * exposes post-update rows, so snapshot the affected rows into a temp table,
+ * update exactly those rows, then join the old and new images under the
+ * `deleted` / `inserted` aliases the OUTPUT items already use.
+ */
+const updateWithOutput =
+  (session: Session, statement: Ast.Statement & { kind: 'update' }, output: Ast.Output, items: Item[]): void => {
+    if (statement.from !== undefined) {
+      throw new MssqlError('UPDATE with both a FROM clause and OUTPUT DELETED is not supported.', 40000, 16)
+    }
+    const snapshot: Ast.Select = {
+      kind: 'select',
+      distinct: false,
+      ...statement.top === undefined ? {} : { top: { count: statement.top, percent: false } },
+      items: [
+        { kind: 'expression', expression: { kind: 'column', name: [ 'rowid' ] }, alias: '__mssqlite_rowid' },
+        { kind: 'star' }
+      ],
+      from: { kind: 'table', name: statement.target },
+      ...statement.where === undefined ? {} : { where: statement.where }
+    }
+    const captured = Transpile.statement(snapshot)
+    session.db.exec('DROP TABLE IF EXISTS temp."__mssqlite_output"')
+    session.db.prepare(`CREATE TEMP TABLE "__mssqlite_output" AS ${captured.sql}`)
+      .run(bindings(session, captured.variables))
+    try {
+      const update: Ast.Statement = {
+        kind: 'update',
+        target: statement.target,
+        set: statement.set,
+        where: {
+          kind: 'in',
+          expression: { kind: 'column', name: [ 'rowid' ] },
+          values: {
+            kind: 'select',
+            distinct: false,
+            items: [ { kind: 'expression', expression: { kind: 'column', name: [ '__mssqlite_rowid' ] } } ],
+            from: { kind: 'table', name: [ '__mssqlite_output' ] }
+          },
+          negated: false
+        }
+      }
+      const rendered = Transpile.statement(update)
+      const changes = session.db.prepare(rendered.sql).run(bindings(session, rendered.variables)).changes
+      const outputSelect: Ast.Select = {
+        kind: 'select',
+        distinct: false,
+        items: expandOutputStars(session, statement.target, output.items),
+        from: {
+          kind: 'join',
+          join: 'inner',
+          left: { kind: 'table', name: statement.target, alias: 'inserted' },
+          right: { kind: 'table', name: [ '__mssqlite_output' ], alias: 'deleted' },
+          on: {
+            kind: 'binaryOp',
+            operator: '=',
+            left: { kind: 'column', name: [ 'inserted', 'rowid' ] },
+            right: { kind: 'column', name: [ 'deleted', '__mssqlite_rowid' ] }
+          }
+        }
+      }
+      const renderedOutput = Transpile.statement(outputSelect)
+      emitOutput(session, output, query(session, renderedOutput.sql, renderedOutput.variables), items)
+      session.rowCount = Number(changes)
+    } finally {
+      session.db.exec('DROP TABLE IF EXISTS temp."__mssqlite_output"')
+    }
+  }
+
 const applyAssign =
   (session: Session, name: string, operator: string, value: Value): void => {
     const key = name.toLowerCase()
@@ -335,6 +462,10 @@ const executeStatement =
         return undefined
       }
       case 'insert': {
+        if (statement.output !== undefined) {
+          runWithOutput(session, statement, statement.output, items)
+          return undefined
+        }
         const rendered = Transpile.statement(statement)
         const prepared = session.db.prepare(rendered.sql)
         const result = prepared.run(bindings(session, rendered.variables))
@@ -351,6 +482,14 @@ const executeStatement =
       }
       case 'update':
       case 'delete':
+        if (statement.output !== undefined) {
+          if (statement.kind === 'update' && Transpile.Output.readsDeleted(statement.output)) {
+            updateWithOutput(session, statement, statement.output, items)
+          } else {
+            runWithOutput(session, statement, statement.output, items)
+          }
+          return undefined
+        }
         runRendered(session, Transpile.statement(statement), items)
         return undefined
       case 'truncate': {

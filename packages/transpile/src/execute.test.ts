@@ -186,3 +186,38 @@ test('delete with a join executes against the aliased target', () => {
   run(db, 'DELETE o FROM orders AS o JOIN customers c ON o.customer_id = c.id WHERE c.closed = 1')
   expect(all(db, 'SELECT id FROM orders ORDER BY id')).toEqual([ { id: 12 } ])
 })
+
+test('output renders as returning and executes', () => {
+  const db = database()
+  run(db, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50))')
+  expect(all(db, 'INSERT INTO t (name) OUTPUT inserted.id, inserted.name VALUES (\'a\'), (\'b\')')).toEqual([
+    { id: 1, name: 'a' },
+    { id: 2, name: 'b' }
+  ])
+  expect(all(db, 'INSERT INTO t (name) OUTPUT inserted.* SELECT name FROM t WHERE id = 1')).toEqual([
+    { id: 3, name: 'a' }
+  ])
+  expect(all(db, 'UPDATE t SET name = \'z\' OUTPUT inserted.name AS renamed WHERE id = 2')).toEqual([
+    { renamed: 'z' }
+  ])
+  expect(all(db, 'DELETE FROM t OUTPUT deleted.* WHERE id = 1')).toEqual([
+    { id: 1, name: 'a' }
+  ])
+  expect(all(db, 'DELETE TOP (2) FROM t OUTPUT deleted.id')).toEqual([
+    { id: 2 }, { id: 3 }
+  ])
+})
+
+test('output validates pseudo-table references', () => {
+  expect(() => statement(parseStatement('INSERT INTO t (a) OUTPUT deleted.a VALUES (1)')))
+    .toThrow(/DELETED pseudo-table cannot be referenced .* INSERT/)
+  expect(() => statement(parseStatement('DELETE FROM t OUTPUT inserted.a')))
+    .toThrow(/INSERTED pseudo-table cannot be referenced .* DELETE/)
+  expect(() => statement(parseStatement('INSERT INTO t (a) OUTPUT a VALUES (1)')))
+    .toThrow(/must be qualified/)
+  expect(() => statement(parseStatement('INSERT INTO t (a) OUTPUT deleted.* VALUES (1)')))
+    .toThrow(/DELETED pseudo-table cannot be referenced .* INSERT/)
+  // Pre-update values need the engine's snapshot — no direct rendering.
+  expect(() => statement(parseStatement('UPDATE t SET a = 1 OUTPUT deleted.a')))
+    .toThrow(/no direct SQLite rendering/)
+})

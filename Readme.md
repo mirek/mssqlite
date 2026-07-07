@@ -44,7 +44,8 @@ readers, results as values, file-per-function modules, namespace re-exports.
 
 SELECT (joins, CTEs, set operations, TOP with PERCENT / WITH TIES,
 OFFSET-FETCH, window functions), INSERT/UPDATE/DELETE with `@p` parameters
-over RPC (including UPDATE/DELETE TOP and DELETE ... FROM with joins),
+over RPC (including UPDATE/DELETE TOP, DELETE ... FROM with joins, and the
+OUTPUT clause with `inserted.*` / `deleted.*` and OUTPUT ... INTO),
 stored procedures (CREATE/ALTER/DROP PROCEDURE, EXEC with named/default/
 OUTPUT parameters, RETURN status, `sys.sql_modules` persistence),
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,

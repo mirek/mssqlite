@@ -270,3 +270,15 @@ test('exec with return status over a batch', async () => {
   const result = await query('DECLARE @rc INT EXEC @rc = status_only SELECT @rc AS rc')
   expect(result.rows).toEqual([ { rc: 5 } ])
 })
+
+test('output clause over the wire', async () => {
+  await query('CREATE TABLE oc (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50))')
+  const inserted = await query('INSERT INTO oc (name) OUTPUT inserted.id, inserted.name VALUES (N\'a\'), (N\'b\')')
+  expect(inserted.rows).toEqual([ { id: 1, name: 'a' }, { id: 2, name: 'b' } ])
+  expect(inserted.rowCount).toBe(2)
+  const updated = await query(
+    'UPDATE oc SET name = name + N\'!\' OUTPUT deleted.name AS was, inserted.name AS became WHERE id = 1')
+  expect(updated.rows).toEqual([ { was: 'a', became: 'a!' } ])
+  const deleted = await query('DELETE FROM oc OUTPUT deleted.id WHERE id = 2')
+  expect(deleted.rows).toEqual([ { id: 2 } ])
+})

@@ -50,7 +50,9 @@ const statements = parse(`
   window `OVER (PARTITION BY ... ORDER BY ...)`, parenless
   `CURRENT_TIMESTAMP`, variables `@x` and globals `@@ROWCOUNT`.
 - **DML** — INSERT (column list, multi-row VALUES, SELECT, DEFAULT VALUES),
-  UPDATE (compound assignment, FROM, WHERE), DELETE, TRUNCATE TABLE.
+  UPDATE (compound assignment, FROM, WHERE), DELETE, TRUNCATE TABLE, and
+  the OUTPUT clause on all three (`inserted.` / `deleted.` items with
+  aliases, `OUTPUT ... INTO table (columns)`).
 - **DDL** — CREATE TABLE (column constraints in any order: NULL/NOT NULL,
   IDENTITY(s,i), PRIMARY KEY, UNIQUE, DEFAULT, CHECK, REFERENCES with
   ON DELETE/UPDATE actions, COLLATE, named constraints; table constraints:

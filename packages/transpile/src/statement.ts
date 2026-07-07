@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Output from './output.ts'
 import * as Quote from './quote.ts'
 import * as Type from './type.ts'
 import expression, { useSelectRender } from './expression.ts'
@@ -200,11 +201,14 @@ const insert =
     const columns = statement_.columns === undefined ?
       '' :
       ` (${statement_.columns.map(Quote.identifier).join(', ')})`
+    const returning = statement_.output === undefined ?
+      '' :
+      Output.returning(ctx, statement_.output, 'inserted', 'INSERT')
     switch (statement_.source.kind) {
       case 'defaultValues':
-        return `INSERT INTO ${table}${columns} DEFAULT VALUES`
+        return `INSERT INTO ${table}${columns} DEFAULT VALUES${returning}`
       case 'select':
-        return `INSERT INTO ${table}${columns} ${select(ctx, statement_.source.select)}`
+        return `INSERT INTO ${table}${columns} ${select(ctx, statement_.source.select)}${returning}`
       case 'values': {
         const rows = statement_.source.rows
           .map(row =>
@@ -213,7 +217,7 @@ const insert =
                 unsupported('DEFAULT in VALUES is not supported.') :
                 expression(ctx, value)).join(', ')})`)
           .join(', ')
-        return `INSERT INTO ${table}${columns} VALUES ${rows}`
+        return `INSERT INTO ${table}${columns} VALUES ${rows}${returning}`
       }
       default:
         return unsupported('Unsupported INSERT source.')
@@ -225,6 +229,13 @@ const update =
     if (statement_.top !== undefined && statement_.from !== undefined) {
       return unsupported('UPDATE TOP with a FROM clause is not supported.')
     }
+    // Pre-update values are not observable through RETURNING — the engine
+    // snapshots the affected rows and never reaches this rendering.
+    const returning = statement_.output === undefined ?
+      '' :
+      Output.readsDeleted(statement_.output) ?
+        unsupported('UPDATE OUTPUT reading DELETED values has no direct SQLite rendering.') :
+        Output.returning(ctx, statement_.output, 'inserted', 'UPDATE')
     const assignments = statement_.set
       .map(({ target, operator, value }) => {
         if (target.kind === 'variable') {
@@ -252,12 +263,12 @@ const update =
     if (statement_.top !== undefined) {
       // MSSQL updates an arbitrary n rows — pick them by rowid.
       return `UPDATE ${target} SET ${assignments} WHERE rowid IN ` +
-        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})`
+        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})${returning}`
     }
     const from = statement_.from === undefined ?
       '' :
       ` FROM ${tableSource(ctx, statement_.from)}`
-    return `UPDATE ${target} SET ${assignments}${from}${where}`
+    return `UPDATE ${target} SET ${assignments}${from}${where}${returning}`
   }
 
 /** @returns the plain-table leaves of a join tree. */
@@ -277,6 +288,9 @@ const delete_ =
     const where = statement_.where === undefined ?
       '' :
       ` WHERE ${expression(ctx, statement_.where)}`
+    const returning = statement_.output === undefined ?
+      '' :
+      Output.returning(ctx, statement_.output, 'deleted', 'DELETE')
     if (statement_.from !== undefined) {
       // DELETE alias FROM t AS alias JOIN ... — the target names a table or
       // alias inside the FROM join tree; delete its rows by rowid membership.
@@ -288,15 +302,15 @@ const delete_ =
       }
       const qualifier = Quote.identifier(match.alias ?? (match.name[match.name.length - 1] ?? ''))
       return `DELETE FROM ${Quote.objectName(match.name)} WHERE rowid IN ` +
-        `(SELECT ${qualifier}.rowid FROM ${tableSource(ctx, statement_.from)}${where})`
+        `(SELECT ${qualifier}.rowid FROM ${tableSource(ctx, statement_.from)}${where})${returning}`
     }
     const target = Quote.objectName(statement_.target)
     if (statement_.top !== undefined) {
       // MSSQL deletes an arbitrary n rows — pick them by rowid.
       return `DELETE FROM ${target} WHERE rowid IN ` +
-        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})`
+        `(SELECT rowid FROM ${target}${where} LIMIT ${expression(ctx, statement_.top)})${returning}`
     }
-    return `DELETE FROM ${target}${where}`
+    return `DELETE FROM ${target}${where}${returning}`
   }
 
 const referentialAction =

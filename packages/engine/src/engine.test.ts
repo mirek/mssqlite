@@ -457,3 +457,73 @@ test('procedures reload from sys.sql_modules on server restart', () => {
     rmSync(path, { force: true })
   }
 })
+
+test('insert output returns rows, advances identity and @@ROWCOUNT', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50) NOT NULL)')
+  const items = executeBatch(s, `
+    INSERT INTO t (name) OUTPUT inserted.id, inserted.name VALUES (N'a'), (N'b');
+    SELECT @@ROWCOUNT AS rc, @@IDENTITY AS id
+  `)
+  const [ output, globals ] = items.filter((item): item is Rows => item.kind === 'rows')
+  expect(output?.columns.map(column => column.name)).toEqual([ 'id', 'name' ])
+  expect(output?.rows).toEqual([ [ 1, 'a' ], [ 2, 'b' ] ])
+  expect(output?.rowCount).toBe(2)
+  expect(globals?.rows).toEqual([ [ 2, 2 ] ])
+})
+
+test('update output joins deleted and inserted values', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE p (id INT PRIMARY KEY, price INT);
+    INSERT INTO p VALUES (1, 10), (2, 20), (3, 30)
+  `)
+  const items = executeBatch(s, `
+    DECLARE @limit INT = 3;
+    UPDATE p SET price = price * 2
+    OUTPUT deleted.id, deleted.price AS old_price, inserted.price AS new_price
+    WHERE id < @limit;
+    SELECT @@ROWCOUNT AS rc
+  `)
+  const [ output, globals ] = items.filter((item): item is Rows => item.kind === 'rows')
+  expect(output?.columns.map(column => column.name)).toEqual([ 'id', 'old_price', 'new_price' ])
+  expect(output?.rows).toEqual([ [ 1, 10, 20 ], [ 2, 20, 40 ] ])
+  expect(globals?.rows).toEqual([ [ 2 ] ])
+  // The snapshot temp table is cleaned up.
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM p')).rows).toEqual([ [ 3 ] ])
+  expect(() => executeBatch(s, 'SELECT * FROM __mssqlite_output')).toThrow()
+  // deleted.* expands to the target's columns; zero-row updates return empty sets.
+  const star = rowsOf(executeBatch(s, 'UPDATE p SET price = 0 OUTPUT deleted.* WHERE id = 3'))
+  expect(star.columns.map(column => column.name)).toEqual([ 'id', 'price' ])
+  expect(star.rows).toEqual([ [ 3, 30 ] ])
+  const empty = rowsOf(executeBatch(s, 'UPDATE p SET price = 1 OUTPUT deleted.price WHERE id = 99'))
+  expect(empty.rows).toEqual([])
+})
+
+test('delete output returns the removed rows', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, name NVARCHAR(50));
+    INSERT INTO t VALUES (1, N'a'), (2, N'b'), (3, N'c')
+  `)
+  const result = rowsOf(executeBatch(s, 'DELETE FROM t OUTPUT deleted.* WHERE id <= 2'))
+  expect(result.columns.map(column => column.name)).toEqual([ 'id', 'name' ])
+  expect(result.rows).toEqual([ [ 1, 'a' ], [ 2, 'b' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 1 ] ])
+})
+
+test('output into routes rows into a table instead of the client', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50));
+    CREATE TABLE audit (id INT, name NVARCHAR(50))
+  `)
+  const items = executeBatch(s,
+    'INSERT INTO t (name) OUTPUT inserted.id, inserted.name INTO audit (id, name) VALUES (N\'a\'), (N\'b\')')
+  expect(items).toEqual([ { kind: 'count', rowCount: 2 } ])
+  expect(rowsOf(executeBatch(s, 'SELECT id, name FROM audit ORDER BY id')).rows)
+    .toEqual([ [ 1, 'a' ], [ 2, 'b' ] ])
+  // UPDATE OUTPUT deleted ... INTO exercises the snapshot path with routing.
+  executeBatch(s, 'UPDATE t SET name = N\'z\' OUTPUT deleted.id, deleted.name INTO audit WHERE id = 1')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM audit')).rows).toEqual([ [ 3 ] ])
+})
