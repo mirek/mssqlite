@@ -61,7 +61,7 @@ export const batchResponse =
 
 /** @returns full response payload for an RPC — DONEINPROC stream, RETURNVALUEs, RETURNSTATUS, DONEPROC. */
 export const rpcResponse =
-  (items: readonly Item[], serverName: string, outputs: readonly { name: string, value: Value }[] = []): Uint8Array =>
+  (items: readonly Item[], serverName: string, outputs: readonly { name: string, value: Value }[] = [], returnStatus = 0): Uint8Array =>
     Encode.concat(
       ...itemTokens(items, serverName, true),
       ...outputs.map((output, index) =>
@@ -71,7 +71,7 @@ export const rpcResponse =
           typeInfo: outputTypeInfo(output.value),
           value: output.value
         })),
-      Token.returnStatus(0),
+      Token.returnStatus(returnStatus),
       Token.doneProc(Token.Status.final, 0xe0, 0n)
     )
 

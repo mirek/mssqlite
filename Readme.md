@@ -42,15 +42,21 @@ readers, results as values, file-per-function modules, namespace re-exports.
 
 ## What works
 
-SELECT (joins, CTEs, set operations, TOP / OFFSET-FETCH, window functions),
-INSERT/UPDATE/DELETE with `@p` parameters over RPC, CREATE/ALTER/DROP TABLE
-with IDENTITY, constraints and foreign keys, indexes and views, DECLARE/SET
-variables, IF/WHILE control flow, nested transactions and savepoints,
-`sys.tables` / `sys.columns` / `INFORMATION_SCHEMA` catalog queries,
-`@@ROWCOUNT` / `@@IDENTITY` / `SCOPE_IDENTITY()`, a large built-in function
-surface (strings, math, date/time with MSSQL boundary semantics,
-CAST/CONVERT with styles), MSSQL error numbers, and case-insensitive
-comparisons via NOCASE collation.
+SELECT (joins, CTEs, set operations, TOP with PERCENT / WITH TIES,
+OFFSET-FETCH, window functions), INSERT/UPDATE/DELETE with `@p` parameters
+over RPC (including UPDATE/DELETE TOP and DELETE ... FROM with joins),
+stored procedures (CREATE/ALTER/DROP PROCEDURE, EXEC with named/default/
+OUTPUT parameters, RETURN status, `sys.sql_modules` persistence),
+TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
+CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
+indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested
+transactions and savepoints, `sys.tables` / `sys.columns` /
+`INFORMATION_SCHEMA` catalog queries, `@@ROWCOUNT` / `@@IDENTITY` /
+`SCOPE_IDENTITY()`, a large built-in function surface (strings, math,
+date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
+error numbers, and case-insensitive comparisons via NOCASE collation.
+
+What's still missing is tracked in [Roadmap.md](Roadmap.md).
 
 ## Development
 

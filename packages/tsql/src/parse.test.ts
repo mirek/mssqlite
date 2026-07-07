@@ -38,6 +38,80 @@ test('select with from, where, order by', () => {
   })
 })
 
+test('top percent and with ties parse', () => {
+  expect(parseStatement('SELECT TOP 10 PERCENT * FROM t')).toMatchObject({
+    kind: 'select',
+    top: { count: { kind: 'number', value: '10' }, percent: true }
+  })
+  expect(parseStatement('SELECT TOP (10) PERCENT WITH TIES * FROM t ORDER BY x')).toMatchObject({
+    kind: 'select',
+    top: { count: { kind: 'number', value: '10' }, percent: true, withTies: true }
+  })
+  expect(parseStatement('UPDATE TOP (2) t SET a = 1')).toMatchObject({
+    kind: 'update',
+    top: { kind: 'number', value: '2' }
+  })
+  expect(parseStatement('DELETE TOP (2) FROM t')).toMatchObject({
+    kind: 'delete',
+    top: { kind: 'number', value: '2' }
+  })
+})
+
+test('try/catch and raiserror parse', () => {
+  expect(parseStatement(`
+    BEGIN TRY
+      INSERT INTO t VALUES (1);
+      SELECT 1
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n
+    END CATCH
+  `)).toMatchObject({
+    kind: 'tryCatch',
+    try_: [ { kind: 'insert' }, { kind: 'select' } ],
+    catch_: [ { kind: 'select' } ]
+  })
+  expect(parseStatement('RAISERROR (\'oops %s\', 16, 1, \'x\') WITH NOWAIT')).toMatchObject({
+    kind: 'raiserror',
+    args: [ { kind: 'string', value: 'oops %s' }, {}, {}, {} ],
+    options: [ 'nowait' ]
+  })
+  expect(parseStatement('THROW')).toMatchObject({ kind: 'throw' })
+})
+
+test('create, alter and drop procedure parse', () => {
+  expect(parseStatement(`
+    CREATE PROCEDURE dbo.p @a INT, @b NVARCHAR(50) = N'x', @c INT OUTPUT AS
+    BEGIN
+      SET @c = @a
+    END
+  `)).toMatchObject({
+    kind: 'createProcedure',
+    name: [ 'dbo', 'p' ],
+    action: 'create',
+    parameters: [
+      { name: '@a', output: false },
+      { name: '@b', default_: { kind: 'string', value: 'x' }, output: false },
+      { name: '@c', output: true }
+    ],
+    body: [ { kind: 'block' } ],
+    definition: expect.stringContaining('CREATE PROCEDURE') as unknown
+  })
+  expect(parseStatement('CREATE OR ALTER PROC p AS SELECT 1')).toMatchObject({
+    kind: 'createProcedure',
+    action: 'createOrAlter'
+  })
+  expect(parseStatement('ALTER PROCEDURE p AS SELECT 2')).toMatchObject({
+    kind: 'createProcedure',
+    action: 'alter'
+  })
+  expect(parseStatement('DROP PROCEDURE IF EXISTS p, q')).toMatchObject({
+    kind: 'dropProcedure',
+    ifExists: true,
+    names: [ [ 'p' ], [ 'q' ] ]
+  })
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'

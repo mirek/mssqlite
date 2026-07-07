@@ -208,6 +208,8 @@ const handlers: Record<string, Handler> = {
     `(SELECT object_id FROM "sys.objects" WHERE name = mssqlite_name(${arg(call, render, 0)}) COLLATE NOCASE LIMIT 1)`,
   object_name: (call, render) =>
     `(SELECT name FROM "sys.objects" WHERE object_id = ${arg(call, render, 0)})`,
+  object_definition: (call, render) =>
+    `(SELECT definition FROM "sys.sql_modules" WHERE object_id = ${arg(call, render, 0)})`,
   schema_id: (call, render) =>
     call.args.length === 0 ?
       '1' :
@@ -228,7 +230,15 @@ const handlers: Record<string, Handler> = {
   user: fixed('mssqlite_user_name'),
   user_name: fixed('mssqlite_user_name'),
   host_name: fixed('mssqlite_host_name'),
-  app_name: fixed('mssqlite_app_name')
+  app_name: fixed('mssqlite_app_name'),
+  // Error handling — CATCH-scoped session state via engine UDFs.
+  error_number: fixed('mssqlite_error_number'),
+  error_message: fixed('mssqlite_error_message'),
+  error_severity: fixed('mssqlite_error_severity'),
+  error_state: fixed('mssqlite_error_state'),
+  error_line: fixed('mssqlite_error_line'),
+  error_procedure: fixed('mssqlite_error_procedure'),
+  xact_state: fixed('mssqlite_xact_state')
 } as const
 
 /**

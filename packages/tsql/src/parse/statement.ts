@@ -90,7 +90,32 @@ const set: Parser.t<Ast.Statement> =
       )
     ))
 
-/** BEGIN ... END block or BEGIN TRAN[SACTION]. */
+/** Statements up to the two-word terminator END TRY / END CATCH. */
+const statementsUntilEnd =
+  (terminator: 'try' | 'catch'): Parser.t<Ast.Statement[]> =>
+    reader => {
+      const statements: Ast.Statement[] = []
+      let current = reader
+      for (;;) {
+        const end = C.seq(C.keyword('end'), C.keyword(terminator))(current)
+        if (!Result.failed(end)) {
+          return Result.ok(end.reader, statements)
+        }
+        const semicolon = C.punct(';')(current)
+        if (!Result.failed(semicolon)) {
+          current = semicolon.reader
+          continue
+        }
+        const inner = statementRef(current)
+        if (Result.failed(inner)) {
+          return inner
+        }
+        statements.push(inner.value)
+        current = inner.reader
+      }
+    }
+
+/** BEGIN ... END block, BEGIN TRAN[SACTION], or BEGIN TRY ... BEGIN CATCH. */
 const beginBlockOrTransaction: Parser.t<Ast.Statement> =
   reader => {
     const begin = C.keyword('begin')(reader)
@@ -106,6 +131,26 @@ const beginBlockOrTransaction: Parser.t<Ast.Statement> =
       return Result.ok(name.reader, {
         kind: 'beginTransaction',
         ...name.value === undefined ? {} : { name: name.value }
+      })
+    }
+    const try_ = C.keyword('try')(begin.reader)
+    if (!Result.failed(try_)) {
+      const tryBody = statementsUntilEnd('try')(try_.reader)
+      if (Result.failed(tryBody)) {
+        return tryBody
+      }
+      const beginCatch = C.seq(C.keyword('begin'), C.keyword('catch'))(tryBody.reader)
+      if (Result.failed(beginCatch)) {
+        return beginCatch
+      }
+      const catchBody = statementsUntilEnd('catch')(beginCatch.reader)
+      if (Result.failed(catchBody)) {
+        return catchBody
+      }
+      return Result.ok(catchBody.reader, {
+        kind: 'tryCatch',
+        try_: tryBody.value,
+        catch_: catchBody.value
       })
     }
     // BEGIN ... END block.
@@ -241,6 +286,23 @@ const returnStatement: Parser.t<Ast.Statement> =
     })
   )
 
+const raiserror: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('raiserror'),
+      C.parens(C.sepBy1(expression, C.punct(','))),
+      C.maybe(C.map(
+        C.seq(C.keyword('with'), C.sepBy1(C.anyIdentifier, C.punct(','))),
+        ([ , options ]) => options
+      ))
+    ),
+    ([ , args, options ]) => ({
+      kind: 'raiserror' as const,
+      args,
+      options: (options ?? []).map(option => option.toLowerCase())
+    })
+  )
+
 const throwStatement: Parser.t<Ast.Statement> =
   C.map(
     C.seq(
@@ -256,6 +318,78 @@ const throwStatement: Parser.t<Ast.Statement> =
         { kind: 'throw' as const, number: args.number, message: args.message, state: args.state }
   )
 
+const procedureKeyword: Parser.t<string> =
+  C.first(C.keyword('procedure'), C.keyword('proc'))
+
+const procedureParameter: Parser.t<Ast.ProcedureParameter> =
+  C.map(
+    C.seq(
+      C.variable,
+      C.maybe(C.keyword('as')),
+      typeName,
+      C.maybe(C.map(C.seq(C.punct('='), expression), ([ , value ]) => value)),
+      C.maybe(C.first(C.keyword('output'), C.keyword('out'))),
+      C.maybe(C.keyword('readonly'))
+    ),
+    ([ name, , type, default_, output ]) => ({
+      name,
+      type,
+      ...default_ === undefined ? {} : { default_ },
+      output: output !== undefined
+    })
+  )
+
+/** Statements to the end of the batch — a procedure body owns the rest. */
+const statementsUntilInputEnd: Parser.t<Ast.Statement[]> =
+  reader => {
+    const statements: Ast.Statement[] = []
+    let current = reader
+    for (;;) {
+      while (!Result.failed(C.punct(';')(current))) {
+        current = Reader.advanced(current)
+      }
+      if (Reader.end(current)) {
+        return Result.ok(current, statements)
+      }
+      const inner = statementRef(current)
+      if (Result.failed(inner)) {
+        return inner
+      }
+      statements.push(inner.value)
+      current = inner.reader
+    }
+  }
+
+const createProcedure: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.first(
+        C.map(
+          C.seq(C.keyword('create'), C.keyword('or'), C.keyword('alter'), procedureKeyword),
+          () => 'createOrAlter' as const
+        ),
+        C.map(C.seq(C.keyword('create'), procedureKeyword), () => 'create' as const),
+        C.map(C.seq(C.keyword('alter'), procedureKeyword), () => 'alter' as const)
+      ),
+      C.qualifiedName,
+      C.maybe(C.first(
+        C.parens(C.sepBy1(procedureParameter, C.punct(','))),
+        C.sepBy1(procedureParameter, C.punct(','))
+      )),
+      C.keyword('as'),
+      statementsUntilInputEnd
+    ),
+    ([ action, name, parameters, , body ]) => ({
+      kind: 'createProcedure' as const,
+      name,
+      action,
+      parameters: parameters ?? [],
+      body,
+      // Patched with the batch source by `parse` — sys.sql_modules stores it.
+      definition: ''
+    })
+  )
+
 /** Single statement parser. */
 export const statement: Parser.t<Ast.Statement> =
   C.first<Parser.t<Ast.Statement>[]>(
@@ -266,6 +400,7 @@ export const statement: Parser.t<Ast.Statement> =
     createTable,
     createIndex,
     createView,
+    createProcedure,
     alterTable,
     dropIndex,
     drop,
@@ -281,6 +416,7 @@ export const statement: Parser.t<Ast.Statement> =
     print,
     returnStatement,
     throwStatement,
+    raiserror,
     C.map(C.keyword('break'), () => ({ kind: 'break' as const })),
     C.map(C.keyword('continue'), () => ({ kind: 'continue' as const }))
   )

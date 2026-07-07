@@ -231,4 +231,17 @@ export const registerFunctions =
       property === null ?
         null :
         serverProperties(server)[text(property).toLowerCase()] ?? null, { deterministic: false })
+    // ERROR_* read the CATCH-scoped error slot; NULL outside a CATCH block.
+    define('mssqlite_error_number', () => server.current?.caughtError?.number ?? null, { deterministic: false })
+    define('mssqlite_error_message', () => server.current?.caughtError?.message ?? null, { deterministic: false })
+    define('mssqlite_error_severity', () => server.current?.caughtError?.severity ?? null, { deterministic: false })
+    define('mssqlite_error_state', () => server.current?.caughtError?.state ?? null, { deterministic: false })
+    define('mssqlite_error_line', () => server.current?.caughtError?.line ?? null, { deterministic: false })
+    define('mssqlite_error_procedure', () => server.current?.caughtError?.procedure ?? null, { deterministic: false })
+    define('mssqlite_xact_state', () => {
+      const current = server.current
+      return current === undefined || current.transactionCount === 0 ?
+        0 :
+        current.transactionDoomed ? -1 : 1
+    }, { deterministic: false })
   }

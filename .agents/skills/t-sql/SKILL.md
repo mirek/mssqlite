@@ -52,8 +52,26 @@ The language pipeline lives in three packages:
 - `@@ERROR` reads as the previous statement's error number — it resets
   *after* the statement referencing it, and it persists across batches.
 
+### Implementation notes — later additions
+
+- TRY/CATCH parses in `beginBlockOrTransaction` (BEGIN TRAN → BEGIN TRY →
+  block, in that order); bodies terminate on the two-word `END TRY` /
+  `END CATCH`, so nested plain `BEGIN … END` blocks parse through
+  `statementRef` and never confuse the terminator scan.
+- RAISERROR takes a parenthesized argument list plus optional
+  `WITH option[, …]` (options parsed, lowercased, NOWAIT/LOG ignored).
+- CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
+  (MSSQL requires it to be alone in a batch); `parse()` patches the
+  statement's `definition` with the trimmed batch source for
+  sys.sql_modules. Parameters accept optional parens, defaults,
+  OUT/OUTPUT and READONLY.
+- TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
+  accept `TOP (expr)` only, per MSSQL.
+
 ### Not yet implemented (raise clean errors)
 
-CREATE PROCEDURE/FUNCTION/TRIGGER, MERGE, PIVOT/UNPIVOT, APPLY, cursors,
-TRY/CATCH, RAISERROR, WAITFOR, GOTO, OUTPUT clause, TOP PERCENT,
-UPDATE/DELETE TOP, DELETE double-FROM.
+CREATE FUNCTION/TRIGGER, MERGE, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
+GOTO, OUTPUT clause, table variables (DECLARE @t TABLE),
+table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
+GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
+AT TIME ZONE, ALTER TABLE ALTER COLUMN.

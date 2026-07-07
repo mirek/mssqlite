@@ -31,9 +31,12 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   TYPE_ID/TYPE_NAME/DB_ID/DB_NAME rewrite to catalog subqueries at
   transpile time; SERVERPROPERTY/@@VERSION/@@SPID come from engine UDFs
   and globals.
+- `sys.sql_modules` stores stored-procedure definitions (whole batch
+  source); the engine reloads procedures from it on server start, and
+  `OBJECT_DEFINITION()` rewrites to a subquery over it. View definitions
+  are not yet stored there.
 - Not yet populated: `sys.computed_columns` (parser accepts computed
-  columns but transpile rejects them), `sys.sql_modules`, extended
-  properties.
+  columns but transpile rejects them), extended properties.
 
 ---
 

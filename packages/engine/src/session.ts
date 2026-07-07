@@ -1,7 +1,8 @@
 import { bootstrap } from '@mssqlite/catalog'
+import { parse } from '@mssqlite/tsql'
 import { registerFunctions } from './udf.ts'
 import { DatabaseSync } from 'node:sqlite'
-import type { TypeName } from '@mssqlite/tsql'
+import type { Ast, TypeName } from '@mssqlite/tsql'
 
 /** Runtime value of a variable or column. */
 export type Value =
@@ -13,12 +14,32 @@ export type Variable = {
   value: Value
 }
 
+/** Error captured by the innermost active CATCH block, read by ERROR_*. */
+export type CaughtError = {
+  readonly number: number,
+  readonly severity: number,
+  readonly state: number,
+  readonly message: string,
+  readonly procedure: string | null,
+  readonly line: number
+}
+
+/** Registered stored procedure. */
+export type Procedure = {
+  readonly name: string,
+  readonly parameters: readonly Ast.ProcedureParameter[],
+  readonly body: readonly Ast.Statement[],
+  readonly definition: string
+}
+
 /** Server-wide state shared by sessions. */
 export type Server = {
   readonly db: DatabaseSync,
   readonly databaseName: string,
   readonly serverName: string,
   readonly version: string,
+  /** Stored procedures keyed by lowercased `schema.name`. */
+  readonly procedures: Map<string, Procedure>,
   /** Session whose batch is executing — read by session-scoped UDFs. */
   current: Session | undefined
 }
@@ -42,13 +63,56 @@ export type Session = {
   rowCount: number,
   lastIdentity: Value,
   transactionCount: number,
-  lastError: number
+  lastError: number,
+  caughtError: CaughtError | undefined,
+  /** Uncommittable after an error under SET XACT_ABORT ON — XACT_STATE() −1. */
+  transactionDoomed: boolean,
+  /** RETURN value of the executing procedure scope. */
+  returnValue: Value,
+  /** Completed status of the most recent procedure call — RPC RETURNSTATUS. */
+  lastReturnStatus: number,
+  /** Procedure call depth — @@NESTLEVEL. */
+  nestLevel: number
 }
 
 export type t =
   Session
 
 let nextSpid = 51
+
+/** @returns registry key of a procedure name — lowercased `schema.name`. */
+export const procedureKey =
+  (name: Ast.QualifiedName): string => {
+    const parts = name.length > 2 ? name.slice(-2) : [ ...name ]
+    return (parts.length === 2 ? `${parts[0]}.${parts[1]}` : `dbo.${parts[0]}`).toLowerCase()
+  }
+
+// Re-registers procedures persisted in sys.sql_modules (file-backed
+// databases survive restarts) by re-parsing their stored definitions.
+const loadProcedures =
+  (server_: Server): void => {
+    const rows = server_.db.prepare(
+      `SELECT m.definition FROM "sys.sql_modules" m
+        JOIN "sys.objects" o ON o.object_id = m.object_id
+        WHERE o.type = 'P' AND m.definition IS NOT NULL`
+    ).all() as { definition: string }[]
+    for (const row of rows) {
+      try {
+        for (const statement of parse(row.definition)) {
+          if (statement.kind === 'createProcedure') {
+            server_.procedures.set(procedureKey(statement.name), {
+              name: statement.name[statement.name.length - 1] ?? '',
+              parameters: statement.parameters,
+              body: statement.body,
+              definition: row.definition
+            })
+          }
+        }
+      } catch {
+        // A definition this build can no longer parse stays catalog-only.
+      }
+    }
+  }
 
 /** @returns server over a SQLite database path (`:memory:` by default). */
 export const server =
@@ -62,9 +126,11 @@ export const server =
       databaseName,
       serverName: options.serverName ?? 'mssqlite',
       version: 'Microsoft SQL Server 2019 (mssqlite) - 15.0.2000.5 (X64)',
+      procedures: new Map(),
       current: undefined
     }
     registerFunctions(server_)
+    loadProcedures(server_)
     return server_
   }
 
@@ -84,5 +150,10 @@ export const session =
       rowCount: 0,
       lastIdentity: null,
       transactionCount: 0,
-      lastError: 0
+      lastError: 0,
+      caughtError: undefined,
+      transactionDoomed: false,
+      returnValue: null,
+      lastReturnStatus: 0,
+      nestLevel: 0
     })

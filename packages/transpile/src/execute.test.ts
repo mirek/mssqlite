@@ -141,3 +141,48 @@ test('update from and offset fetch execute', () => {
     { v: 40 }, { v: 60 }
   ])
 })
+
+test('top percent and with ties execute', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE scores (name NVARCHAR(10), score INT);
+    INSERT INTO scores VALUES ('a', 90), ('b', 80), ('c', 80), ('d', 70), ('e', 60),
+      ('f', 50), ('g', 40), ('h', 30), ('i', 20), ('j', 10);
+  `)
+  // 25 percent of 10 rows rounds up to 3.
+  expect(all(db, 'SELECT TOP 25 PERCENT name FROM scores ORDER BY score DESC')).toEqual([
+    { name: 'a' }, { name: 'b' }, { name: 'c' }
+  ])
+  // TOP 2 WITH TIES includes the second 80.
+  expect(all(db, 'SELECT TOP 2 WITH TIES name, score FROM scores ORDER BY score DESC')).toEqual([
+    { name: 'a', score: 90 }, { name: 'b', score: 80 }, { name: 'c', score: 80 }
+  ])
+  // Ties over an aliased order key.
+  expect(all(db, 'SELECT TOP 2 WITH TIES score AS s FROM scores ORDER BY s DESC')).toEqual([
+    { s: 90 }, { s: 80 }, { s: 80 }
+  ])
+})
+
+test('update top and delete top execute', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE t (id INT PRIMARY KEY, done INT);
+    INSERT INTO t VALUES (1, 0), (2, 0), (3, 0), (4, 1);
+  `)
+  run(db, 'UPDATE TOP (2) t SET done = 1 WHERE done = 0')
+  expect(all(db, 'SELECT COUNT(*) AS n FROM t WHERE done = 1')).toEqual([ { n: 3 } ])
+  run(db, 'DELETE TOP (2) FROM t WHERE done = 1')
+  expect(all(db, 'SELECT COUNT(*) AS n FROM t WHERE done = 1')).toEqual([ { n: 1 } ])
+})
+
+test('delete with a join executes against the aliased target', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT);
+    CREATE TABLE customers (id INT PRIMARY KEY, closed INT);
+    INSERT INTO customers VALUES (1, 1), (2, 0);
+    INSERT INTO orders VALUES (10, 1), (11, 1), (12, 2);
+  `)
+  run(db, 'DELETE o FROM orders AS o JOIN customers c ON o.customer_id = c.id WHERE c.closed = 1')
+  expect(all(db, 'SELECT id FROM orders ORDER BY id')).toEqual([ { id: 12 } ])
+})

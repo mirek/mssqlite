@@ -70,7 +70,22 @@ the engine:
 - **Session model** — one `DatabaseSync` per server, shared by sessions;
   SQLite serializes writes, one transaction at a time across sessions.
   Nested BEGIN TRAN counts `@@TRANCOUNT`; only the outermost pair touches
-  SQLite; SAVE TRAN → savepoints.
+  SQLite; SAVE TRAN → savepoints. Under `SET XACT_ABORT ON` a caught
+  error dooms the transaction (`XACT_STATE()` −1, COMMIT raises 3930).
+- **Error handling** — TRY/CATCH is engine control flow: the try body's
+  thrown `MssqlError` (severity ≤ 19) lands in a CATCH-scoped
+  `session.caughtError` slot that `ERROR_NUMBER()`-family UDFs read;
+  bare `THROW` rethrows it. RAISERROR severity ≤ 10 becomes a `message`
+  item, higher throws.
+- **Stored procedures are interpreted AST** — `CREATE PROCEDURE` stores
+  the parsed body in a server-wide registry (`server.procedures`, keyed
+  `schema.name` lowercased) and persists the batch source in
+  `sys.sql_modules` (reloaded and re-parsed on server start). EXEC
+  swaps the session's variable-scope contents (the map reference is
+  shared), binds positional/named/default/OUTPUT parameters, honors
+  RETURN status and `@@NESTLEVEL` (cap 32). The RPC fallback renders
+  `EXEC name @p = @p OUTPUT` over `executeSql` so driver `callProcedure`
+  round-trips OUTPUT values and return status.
 - **Column metadata** — `StatementSync.columns()` origins resolve through
   the catalog for exact declared types; computed columns infer from value
   shape (int32/int64/float/nvarchar(max)/varbinary(max)).
@@ -109,10 +124,17 @@ the engine:
 
 ## Known limitations (v1)
 
+See [Roadmap.md](../../../Roadmap.md) for the prioritized gap analysis
+toward full MSSQL support.
+
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE PROCEDURE/FUNCTION/TRIGGER, MERGE, PIVOT, APPLY, cursors,
-  TRY/CATCH, TOP PERCENT, UPDATE/DELETE TOP, DELETE double-FROM.
+- No CREATE FUNCTION/TRIGGER, MERGE, PIVOT, APPLY, cursors, OUTPUT
+  clause, table variables, sequences.
+- Batch error semantics are all-or-nothing: any statement error aborts
+  the rest of the batch (MSSQL continues past most statement-level
+  errors); TRY/CATCH is the supported way to continue. Division by zero
+  yields NULL (SQLite) instead of error 8134.
 - Duplicate column names in one result set collapse (rows read as
   objects; `returnArrays` lands in newer node:sqlite).
 - `USE db` switches the session label only — one database per server.
@@ -120,4 +142,5 @@ the engine:
   wire encoding exists in `tds/decimal.ts` but result-set decimals lose
   exactness beyond doubles.
 - `@@ROWCOUNT` after SELECT reflects rows returned; unsupported globals
-  raise error 137.
+  raise error 137. `ERROR_LINE()` is always 1 (no statement positions in
+  the AST).

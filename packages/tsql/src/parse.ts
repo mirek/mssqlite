@@ -7,6 +7,14 @@ import type * as Ast from './ast.ts'
 
 export { ParseError } from './parse/parser.ts'
 
+// CREATE PROCEDURE must be alone in its batch (MSSQL rule), so the whole
+// batch source is the module definition stored in sys.sql_modules.
+const withDefinition =
+  (statement_: Ast.Statement, sql: string): Ast.Statement =>
+    statement_.kind === 'createProcedure' ?
+      { ...statement_, definition: sql.trim() } :
+      statement_
+
 /**
  * @returns statements of a T-SQL batch.
  * @throws LexError | ParseError on invalid input.
@@ -14,6 +22,7 @@ export { ParseError } from './parse/parser.ts'
 export const parse =
   (sql: string): Ast.Statement[] =>
     ParserModule.run(batch, Reader.of(lex(sql)))
+      .map(statement_ => withDefinition(statement_, sql))
 
 /**
  * @returns single parsed statement.
@@ -21,7 +30,7 @@ export const parse =
  */
 export const parseStatement =
   (sql: string): Ast.Statement =>
-    ParserModule.run(statement, Reader.of(lex(sql)))
+    withDefinition(ParserModule.run(statement, Reader.of(lex(sql))), sql)
 
 /**
  * @returns parsed expression.

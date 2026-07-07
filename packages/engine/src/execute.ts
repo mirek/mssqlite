@@ -4,7 +4,7 @@ import { parse } from '@mssqlite/tsql'
 import { MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import type { Ast } from '@mssqlite/tsql'
-import type { Session, Value, Variable } from './session.ts'
+import { procedureKey, type Procedure, type Session, type Value, type Variable } from './session.ts'
 
 /** Result set of a SELECT. */
 export type Rows = {
@@ -85,7 +85,7 @@ export const globalOf =
       case '@@max_precision':
         return 38
       case '@@nestlevel':
-        return 0
+        return session.nestLevel
       case '@@fetch_status':
         return -1
       case '@@datefirst':
@@ -110,6 +110,30 @@ const truthy =
     const statement = session.db.prepare(`SELECT (CASE WHEN ${rendered.sql} THEN 1 ELSE 0 END) AS value`)
     const row = statement.get(bindings(session, rendered.variables)) as { value: Value } | undefined
     return row?.value === 1
+  }
+
+/** @returns RAISERROR printf-style template with % substitutions applied. */
+const raiserrorFormat =
+  (template: string, values: readonly Value[]): string => {
+    let index = 0
+    return template.replace(/%(%|\d*(?:\.\d+)?[sdiuoxX])/g, (_whole, spec: string) => {
+      if (spec === '%') {
+        return '%'
+      }
+      const value = values[index]
+      index++
+      if (value === null || value === undefined) {
+        return '(null)'
+      }
+      const kind = spec[spec.length - 1] ?? 's'
+      if (kind === 's') {
+        return String(value)
+      }
+      const numeric = Math.trunc(Number(value))
+      return kind === 'x' ?
+        numeric.toString(16) :
+        kind === 'X' ? numeric.toString(16).toUpperCase() : String(numeric)
+    })
   }
 
 const hasIdentity =
@@ -232,6 +256,66 @@ const selectInto =
     const count = session.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
     session.rowCount = count.n
     items.push({ kind: 'count', rowCount: count.n })
+  }
+
+type TransactionStatement =
+  Ast.Statement & {
+    kind: 'beginTransaction' | 'commitTransaction' | 'rollbackTransaction' | 'saveTransaction'
+  }
+
+const executeTransaction =
+  (session: Session, statement: TransactionStatement): void => {
+    switch (statement.kind) {
+      case 'beginTransaction':
+        if (session.transactionCount === 0) {
+          session.db.exec('BEGIN')
+          session.transactionDoomed = false
+        }
+        session.transactionCount++
+        return
+      case 'commitTransaction':
+        if (session.transactionCount === 0) {
+          throw new MssqlError('The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION.', 3902, 16)
+        }
+        if (session.transactionDoomed) {
+          throw new MssqlError(
+            'The current transaction cannot be committed and cannot support operations that write to the log file. Roll back the transaction.',
+            3930, 16)
+        }
+        if (session.transactionCount === 1) {
+          session.db.exec('COMMIT')
+        }
+        session.transactionCount--
+        return
+      case 'rollbackTransaction':
+        if (statement.name !== undefined && !statement.name.startsWith('@')) {
+          // Named rollback targets a savepoint when one exists.
+          try {
+            session.db.exec(`ROLLBACK TO SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+            return
+          } catch {
+            // Fall through to a full rollback of the named transaction.
+          }
+        }
+        if (session.transactionCount > 0) {
+          session.db.exec('ROLLBACK')
+          session.transactionCount = 0
+        }
+        session.transactionDoomed = false
+        return
+      case 'saveTransaction':
+        // A bare SAVEPOINT implicitly opens a SQLite transaction; keep
+        // @@TRANCOUNT in step so a later BEGIN TRAN doesn't hit "cannot start a
+        // transaction within a transaction" and the work isn't left untracked.
+        if (session.transactionCount === 0) {
+          session.db.exec('BEGIN')
+          session.transactionCount = 1
+        }
+        session.db.exec(`SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+        return
+      default:
+        return
+    }
   }
 
 const executeStatement =
@@ -373,46 +457,33 @@ const executeStatement =
       case 'continue':
         return 'continue'
       case 'return':
+        if (statement.expression !== undefined) {
+          session.returnValue = evaluate(session, statement.expression)
+        }
         return 'return'
-      case 'beginTransaction':
-        if (session.transactionCount === 0) {
-          session.db.exec('BEGIN')
-        }
-        session.transactionCount++
+      case 'createProcedure':
+        defineProcedure(session, statement)
         return undefined
-      case 'commitTransaction':
-        if (session.transactionCount === 0) {
-          throw new MssqlError('The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION.', 3902, 16)
-        }
-        if (session.transactionCount === 1) {
-          session.db.exec('COMMIT')
-        }
-        session.transactionCount--
-        return undefined
-      case 'rollbackTransaction':
-        if (statement.name !== undefined && !statement.name.startsWith('@')) {
-          // Named rollback targets a savepoint when one exists.
-          try {
-            session.db.exec(`ROLLBACK TO SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
-            return undefined
-          } catch {
-            // Fall through to a full rollback of the named transaction.
+      case 'dropProcedure':
+        for (const name of statement.names) {
+          const key = procedureKey(name)
+          if (!session.server.procedures.has(key)) {
+            if (!statement.ifExists) {
+              throw new MssqlError(
+                `Cannot drop the procedure '${name.join('.')}', because it does not exist or you do not have permission.`,
+                3701, 16)
+            }
+            continue
           }
-        }
-        if (session.transactionCount > 0) {
-          session.db.exec('ROLLBACK')
-          session.transactionCount = 0
+          Catalog.dropProcedure(session.db, name)
+          session.server.procedures.delete(key)
         }
         return undefined
+      case 'beginTransaction':
+      case 'commitTransaction':
+      case 'rollbackTransaction':
       case 'saveTransaction':
-        // A bare SAVEPOINT implicitly opens a SQLite transaction; keep
-        // @@TRANCOUNT in step so a later BEGIN TRAN doesn't hit "cannot start a
-        // transaction within a transaction" and the work isn't left untracked.
-        if (session.transactionCount === 0) {
-          session.db.exec('BEGIN')
-          session.transactionCount = 1
-        }
-        session.db.exec(`SAVEPOINT "${statement.name.replaceAll('"', '""')}"`)
+        executeTransaction(session, statement)
         return undefined
       case 'use':
         session.database = statement.database
@@ -421,12 +492,82 @@ const executeStatement =
         items.push({ kind: 'message', text: String(evaluate(session, statement.expression) ?? '') })
         return undefined
       case 'throw': {
-        const number = statement.number === undefined ? 50000 : Number(evaluate(session, statement.number))
+        if (statement.number === undefined) {
+          // Bare THROW re-raises the error being handled by the enclosing CATCH.
+          const caught = session.caughtError
+          if (caught === undefined) {
+            throw new MssqlError(
+              'To rethrow an error, a THROW statement must be used inside a CATCH block.', 10704, 15)
+          }
+          throw new MssqlError(caught.message, caught.number, caught.severity, caught.state)
+        }
+        const number = Number(evaluate(session, statement.number))
         const message = statement.message === undefined ?
           'An error was raised.' :
           String(evaluate(session, statement.message) ?? '')
         const state = statement.state === undefined ? 1 : Number(evaluate(session, statement.state))
         throw new MssqlError(message, number, 16, state)
+      }
+      case 'raiserror': {
+        const [ first, severityArg, stateArg, ...rest ] = statement.args
+        if (first === undefined || severityArg === undefined || stateArg === undefined) {
+          throw new MssqlError('RAISERROR requires a message, a severity and a state.', 102, 15)
+        }
+        const value = evaluate(session, first)
+        const severity = Number(evaluate(session, severityArg))
+        const state = Number(evaluate(session, stateArg))
+        const substitutions = rest.map(argument => evaluate(session, argument))
+        const number = typeof value === 'number' || typeof value === 'bigint' ? Number(value) : 50000
+        const template = typeof value === 'string' ?
+          value :
+          `Error ${number}, severity ${severity}, state ${state} was raised.`
+        const text = raiserrorFormat(template, substitutions)
+        // Severity 10 and below is informational — printed, not thrown.
+        if (severity <= 10) {
+          items.push({ kind: 'message', text })
+          return undefined
+        }
+        throw new MssqlError(text, number, severity, state)
+      }
+      case 'tryCatch': {
+        try {
+          for (const inner of statement.try_) {
+            const signal = executeStatement(session, inner, items)
+            if (signal !== undefined) {
+              return signal
+            }
+          }
+        } catch (error) {
+          const mapped = errorOf(error)
+          // Severity 20+ ends the connection in MSSQL — not catchable.
+          if (mapped.severity > 19) {
+            throw mapped
+          }
+          session.lastError = mapped.number
+          if (session.transactionCount > 0 && session.options.get('xact_abort') === 'on') {
+            session.transactionDoomed = true
+          }
+          const previous = session.caughtError
+          session.caughtError = {
+            number: mapped.number,
+            severity: mapped.severity,
+            state: mapped.state,
+            message: mapped.message,
+            procedure: null,
+            line: 1
+          }
+          try {
+            for (const inner of statement.catch_) {
+              const signal = executeStatement(session, inner, items)
+              if (signal !== undefined) {
+                return signal
+              }
+            }
+          } finally {
+            session.caughtError = previous
+          }
+        }
+        return undefined
       }
       case 'execute':
         return executeProcedure(session, statement, items)
@@ -458,6 +599,114 @@ const declaredParameterNames =
     }
     names.push(segment)
     return names.map(part => /@\w+/.exec(part)?.[0] ?? '').filter(part => part !== '')
+  }
+
+const defineProcedure =
+  (session: Session, statement: Ast.Statement & { kind: 'createProcedure' }): void => {
+    const key = procedureKey(statement.name)
+    const name = statement.name[statement.name.length - 1] ?? ''
+    const exists = session.server.procedures.has(key)
+    if (statement.action === 'create' && exists) {
+      throw new MssqlError(`There is already an object named '${name}' in the database.`, 2714, 16)
+    }
+    if (statement.action === 'alter' && !exists) {
+      throw new MssqlError(`Invalid object name '${name}'.`, 208, 16)
+    }
+    if (exists) {
+      Catalog.dropProcedure(session.db, statement.name)
+    }
+    Catalog.createProcedure(session.db, statement.name, statement.definition)
+    session.server.procedures.set(key, {
+      name,
+      parameters: statement.parameters,
+      body: statement.body,
+      definition: statement.definition
+    })
+  }
+
+const callUserProcedure =
+  (session: Session, procedure: Procedure, statement: Ast.Statement & { kind: 'execute' }, items: Item[]): void => {
+    if (session.nestLevel >= 32) {
+      throw new MssqlError(
+        'Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32).', 217, 16)
+    }
+    const byName = new Map(procedure.parameters.map(parameter =>
+      [ parameter.name.toLowerCase(), parameter ]))
+    // Arguments evaluate in the caller's scope before the parameter scope swaps in.
+    const supplied = new Map<string, Value>()
+    const outputTargets = new Map<string, string>()
+    statement.args.forEach((argument, index) => {
+      const parameter = argument.name !== undefined ?
+        byName.get(argument.name.toLowerCase()) :
+        procedure.parameters[index]
+      if (parameter === undefined) {
+        throw argument.name !== undefined ?
+          new MssqlError(`${argument.name} is not a parameter for procedure ${procedure.name}.`, 8145, 16) :
+          new MssqlError(`Procedure or function ${procedure.name} has too many arguments specified.`, 8144, 16)
+      }
+      const key = parameter.name.toLowerCase()
+      if (argument.value.kind !== 'default') {
+        supplied.set(key, evaluate(session, argument.value))
+      }
+      if (argument.output && argument.value.kind === 'variable') {
+        outputTargets.set(key, argument.value.name)
+      }
+    })
+    const scope = new Map<string, Variable>()
+    for (const parameter of procedure.parameters) {
+      const key = parameter.name.toLowerCase()
+      let value: Value
+      if (supplied.has(key)) {
+        value = supplied.get(key) ?? null
+      } else if (parameter.default_ !== undefined) {
+        value = evaluate(session, parameter.default_)
+      } else {
+        throw new MssqlError(
+          `Procedure or function '${procedure.name}' expects parameter '${parameter.name}', which was not supplied.`,
+          201, 16)
+      }
+      scope.set(key, { type: parameter.type, value } as Variable)
+    }
+    // The variables map reference is shared session state — swap contents
+    // rather than the reference, restoring the caller's scope afterwards.
+    const saved = new Map(session.variables)
+    const savedReturn = session.returnValue
+    session.variables.clear()
+    for (const [ key, variable ] of scope) {
+      session.variables.set(key, variable)
+    }
+    session.returnValue = null
+    session.nestLevel++
+    const outputs = new Map<string, Value>()
+    let status: Value = null
+    try {
+      for (const inner of procedure.body) {
+        const signal = executeStatement(session, inner, items)
+        if (signal === 'return') {
+          break
+        }
+      }
+      status = session.returnValue
+      for (const key of outputTargets.keys()) {
+        outputs.set(key, session.variables.get(key)?.value ?? null)
+      }
+    } finally {
+      session.nestLevel--
+      session.returnValue = savedReturn
+      session.variables.clear()
+      for (const [ key, variable ] of saved) {
+        session.variables.set(key, variable)
+      }
+    }
+    // OUTPUT parameters copy back into the caller's variables.
+    for (const [ key, target ] of outputTargets) {
+      applyAssign(session, target, '=', outputs.get(key) ?? null)
+    }
+    const numericStatus = typeof status === 'number' || typeof status === 'bigint' ? Number(status) : 0
+    session.lastReturnStatus = numericStatus
+    if (statement.result !== undefined) {
+      applyAssign(session, statement.result, '=', numericStatus)
+    }
   }
 
 const executeProcedure =
@@ -494,6 +743,11 @@ const executeProcedure =
           }
         }
       })
+      return undefined
+    }
+    const procedure = session.server.procedures.get(procedureKey(statement.procedure))
+    if (procedure !== undefined) {
+      callUserProcedure(session, procedure, statement, items)
       return undefined
     }
     throw new MssqlError(`Could not find stored procedure '${name}'.`, 2812, 16)
