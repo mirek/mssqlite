@@ -78,11 +78,23 @@ The language pipeline lives in three packages:
   `deleted.x, inserted.x` pair collapses to one result key (duplicate
   column names — known engine-wide limitation, alias them), and
   `UPDATE … FROM` combined with `OUTPUT deleted.` is rejected.
+- MERGE parses in `parse/dml.ts`: USING accepts a table, `(SELECT …)` or
+  `(VALUES …)` — both need an alias, and a column list desugars into
+  select-item aliases at parse time (VALUES becomes a UNION ALL chain),
+  so downstream layers only ever see a derived table. `USING` had to
+  join the reserved-word set or it parses as the target's alias. The
+  engine decomposes MERGE via a snapshot temp table (see the
+  architecture skill). Divergences from SQL Server: the terminating
+  semicolon is not enforced; two WHEN MATCHED arms whose first has no
+  AND condition are accepted (the second is just dead); the same table
+  can be target and source (the snapshot makes it safe); arm-count and
+  duplicate-action violations raise 10714, multi-source matches for one
+  target row raise 8672; OUTPUT (`$action`) is not yet supported.
 
 ### Not yet implemented (raise clean errors)
 
-CREATE FUNCTION/TRIGGER, MERGE, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
-GOTO, table variables (DECLARE @t TABLE),
+CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
+GOTO, table variables (DECLARE @t TABLE), MERGE OUTPUT (`$action`),
 table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

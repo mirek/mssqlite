@@ -46,9 +46,15 @@ Real applications assume these everywhere; ORMs and migration tools
   UPDATE render as SQLite `RETURNING`, UPDATE reading DELETED values
   snapshots affected rows into a temp table and joins old/new images.
   Layers: tsql, transpile, engine.
-- ☐ **MERGE** — WHEN MATCHED / NOT MATCHED [BY SOURCE] arms; decompose
-  into UPDATE/INSERT/DELETE inside one implicit transaction, or SQLite
-  UPSERT for the common two-arm case. Layers: tsql, transpile, engine.
+- ☑ **MERGE** — WHEN MATCHED / NOT MATCHED [BY TARGET] / NOT MATCHED BY
+  SOURCE arms with AND conditions; USING table, derived SELECT or
+  `(VALUES …) AS s (cols)` sources; decomposed through a pre-merge
+  snapshot temp table into DELETE/UPDATE/INSERT inside one implicit
+  transaction; multi-match error 8672, `@@ROWCOUNT` totals all actions.
+  Layers: tsql, engine.
+- ☐ **MERGE OUTPUT** — `$action` pseudo-column and inserted/deleted
+  images assembled from the merge snapshot; OUTPUT on MERGE currently
+  raises a clean error. Layers: tsql (lex `$action`), engine.
 - ☐ **Table variables** — `DECLARE @t TABLE (…)` as session-scoped temp
   tables with generated names; INSERT/SELECT against them. Layers: tsql,
   transpile (name mapping), engine.

@@ -282,3 +282,21 @@ test('output clause over the wire', async () => {
   const deleted = await query('DELETE FROM oc OUTPUT deleted.id WHERE id = 2')
   expect(deleted.rows).toEqual([ { id: 2 } ])
 })
+
+test('merge over the wire reports the combined row count', async () => {
+  await query(`
+    CREATE TABLE stock (sku NVARCHAR(20) PRIMARY KEY, qty INT);
+    INSERT INTO stock VALUES (N'a', 1), (N'b', 2);
+  `)
+  const merged = await query(`
+    MERGE stock AS t
+    USING (VALUES (N'a', 10), (N'c', 30)) AS s (sku, qty)
+    ON t.sku = s.sku
+    WHEN MATCHED THEN UPDATE SET qty = s.qty
+    WHEN NOT MATCHED THEN INSERT (sku, qty) VALUES (s.sku, s.qty)
+    WHEN NOT MATCHED BY SOURCE THEN DELETE;
+  `)
+  expect(merged.rowCount).toBe(3)
+  const result = await query('SELECT sku, qty FROM stock ORDER BY sku')
+  expect(result.rows).toEqual([ { sku: 'a', qty: 10 }, { sku: 'c', qty: 30 } ])
+})

@@ -56,8 +56,17 @@ const items = executeBatch(s, `
   `deleted` (`inserted.*` / `deleted.*` expand to the target's columns).
   `OUTPUT … INTO` re-inserts the rows into the target table and emits
   only the affected-row count, as MSSQL does.
+- **MERGE** — decomposed, not rendered: a snapshot temp table computed
+  against the pre-merge state (source LEFT JOIN target, or FULL JOIN via
+  a never-null source marker when NOT MATCHED BY SOURCE arms exist)
+  stores each row's chosen arm and pre-evaluated SET / INSERT values;
+  per-arm DELETE → UPDATE → INSERT statements read only the snapshot,
+  inside an implicit transaction when none is open. A target row matched
+  by more than one source row raises 8672 before any mutation;
+  `@@ROWCOUNT` totals all actions. OUTPUT on MERGE is not yet supported.
 - **EXEC sp_executesql** — full support from T-SQL and (via `executeSql`)
-  from RPC. Other stored procedures report error 2812.
+  from RPC. User procedures registered by CREATE PROCEDURE execute
+  interpreted; unknown procedures report error 2812.
 
 ## Column metadata
 

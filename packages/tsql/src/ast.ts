@@ -213,6 +213,24 @@ export type Output = {
   }
 }
 
+/** Action of a MERGE WHEN clause. */
+export type MergeAction =
+  | { readonly kind: 'update', readonly set: readonly Assignment[] }
+  | { readonly kind: 'delete' }
+  | {
+      readonly kind: 'insert',
+      readonly columns?: readonly string[],
+      /** Single VALUES row; absent for INSERT DEFAULT VALUES. */
+      readonly values?: readonly Expression[]
+    }
+
+/** WHEN clause of MERGE. */
+export type MergeWhen = {
+  readonly match: 'matched' | 'notMatchedByTarget' | 'notMatchedBySource',
+  readonly condition?: Expression,
+  readonly action: MergeAction
+}
+
 /** SET assignment in UPDATE. */
 export type Assignment = {
   readonly target:
@@ -248,6 +266,15 @@ export type Statement =
       readonly output?: Output,
       readonly from?: TableSource,
       readonly where?: Expression
+    }
+  | {
+      readonly kind: 'merge',
+      readonly target: QualifiedName,
+      readonly alias?: string,
+      readonly source: TableSource,
+      readonly on: Expression,
+      readonly whens: readonly MergeWhen[],
+      readonly output?: Output
     }
   | {
       readonly kind: 'createTable',

@@ -86,6 +86,14 @@ the engine:
   RETURN status and `@@NESTLEVEL` (cap 32). The RPC fallback renders
   `EXEC name @p = @p OUTPUT` over `executeSql` so driver `callProcedure`
   round-trips OUTPUT values and return status.
+- **MERGE is decomposed, not rendered** (`engine/merge.ts`) — one
+  snapshot temp table computed against the pre-merge state joins source
+  to target (LEFT JOIN, or FULL JOIN through a never-null source marker
+  column when NOT MATCHED BY SOURCE arms exist) and stores each row's
+  chosen arm tag plus every pre-evaluated SET / INSERT value; per-arm
+  DELETE → UPDATE → INSERT statements then read only the snapshot, inside
+  an implicit transaction when none is open. A target row matched by more
+  than one source row raises 8672 before any mutation.
 - **Column metadata** — `StatementSync.columns()` origins resolve through
   the catalog for exact declared types; computed columns infer from value
   shape (int32/int64/float/nvarchar(max)/varbinary(max)).
@@ -129,8 +137,8 @@ toward full MSSQL support.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE FUNCTION/TRIGGER, MERGE, PIVOT, APPLY, cursors, OUTPUT
-  clause, table variables, sequences.
+- No CREATE FUNCTION/TRIGGER, PIVOT, APPLY, cursors, table variables,
+  sequences. MERGE lacks only its OUTPUT clause (`$action`).
 - Batch error semantics are all-or-nothing: any statement error aborts
   the rest of the batch (MSSQL continues past most statement-level
   errors); TRY/CATCH is the supported way to continue. Division by zero

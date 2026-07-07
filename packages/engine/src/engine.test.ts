@@ -527,3 +527,175 @@ test('output into routes rows into a table instead of the client', () => {
   executeBatch(s, 'UPDATE t SET name = N\'z\' OUTPUT deleted.id, deleted.name INTO audit WHERE id = 1')
   expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM audit')).rows).toEqual([ [ 3 ] ])
 })
+
+test('merge upserts from a table source', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE inventory (id INT PRIMARY KEY, qty INT, name NVARCHAR(50));
+    CREATE TABLE staging (id INT, qty INT, name NVARCHAR(50));
+    INSERT INTO inventory VALUES (1, 10, N'apple'), (2, 5, N'pear');
+    INSERT INTO staging VALUES (1, 42, N'apple'), (3, 7, N'plum');
+  `)
+  const items = executeBatch(s, `
+    MERGE inventory AS t
+    USING staging AS s
+    ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET t.qty = s.qty
+    WHEN NOT MATCHED BY TARGET THEN INSERT (id, qty, name) VALUES (s.id, s.qty, s.name);
+  `)
+  expect(items).toEqual([ { kind: 'count', rowCount: 2 } ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@ROWCOUNT AS rc')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT id, qty, name FROM inventory ORDER BY id')).rows).toEqual([
+    [ 1, 42, 'apple' ],
+    [ 2, 5, 'pear' ],
+    [ 3, 7, 'plum' ]
+  ])
+})
+
+test('merge with values source, arm conditions and by source delete', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE prices (sku NVARCHAR(20) PRIMARY KEY, price INT);
+    INSERT INTO prices VALUES (N'a', 100), (N'b', 200), (N'c', 300);
+  `)
+  const items = executeBatch(s, `
+    MERGE prices WITH (HOLDLOCK) AS t
+    USING (VALUES (N'a', 110), (N'b', 0), (N'd', 400)) AS s (sku, price)
+    ON t.sku = s.sku
+    WHEN MATCHED AND s.price = 0 THEN DELETE
+    WHEN MATCHED THEN UPDATE SET price = s.price
+    WHEN NOT MATCHED THEN INSERT (sku, price) VALUES (s.sku, s.price)
+    WHEN NOT MATCHED BY SOURCE THEN DELETE;
+  `)
+  // a updated, b deleted, d inserted, c deleted by source.
+  expect(items).toEqual([ { kind: 'count', rowCount: 4 } ])
+  expect(rowsOf(executeBatch(s, 'SELECT sku, price FROM prices ORDER BY sku')).rows).toEqual([
+    [ 'a', 110 ],
+    [ 'd', 400 ]
+  ])
+})
+
+test('merge by source update sees only unmatched target rows', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE flags (id INT PRIMARY KEY, active INT);
+    INSERT INTO flags VALUES (1, 1), (2, 1), (3, 0);
+  `)
+  executeBatch(s, `
+    MERGE flags AS t
+    USING (SELECT 1 AS id) AS s
+    ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET active = active + 10
+    WHEN NOT MATCHED BY SOURCE AND t.active = 1 THEN UPDATE SET t.active = 0;
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT id, active FROM flags ORDER BY id')).rows).toEqual([
+    [ 1, 11 ],
+    [ 2, 0 ],
+    [ 3, 0 ]
+  ])
+})
+
+test('merge evaluates against the pre-merge state', () => {
+  const s = open()
+  // The inserted row must not become visible to the UPDATE arm's snapshot.
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, v INT);
+    INSERT INTO t VALUES (1, 1);
+    MERGE t USING (SELECT 1 AS a UNION ALL SELECT 2) AS s
+    ON t.id = s.a
+    WHEN MATCHED THEN UPDATE SET v = (SELECT COUNT(*) FROM t)
+    WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.a, 99);
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT id, v FROM t ORDER BY id')).rows).toEqual([
+    [ 1, 1 ],
+    [ 2, 99 ]
+  ])
+})
+
+test('merge with variables, derived rename and identity', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE users (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50), age INT);
+    INSERT INTO users (name, age) VALUES (N'Alice', 30);
+  `)
+  executeBatch(s, `
+    DECLARE @bump INT = 5
+    MERGE users AS t
+    USING (SELECT N'Alice' AS x, 31 AS y UNION ALL SELECT N'Bob', 22) AS s (source_name, source_age)
+    ON t.name = s.source_name
+    WHEN MATCHED THEN UPDATE SET age = s.source_age + @bump
+    WHEN NOT MATCHED THEN INSERT (name, age) VALUES (s.source_name, s.source_age);
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT name, age FROM users ORDER BY id')).rows).toEqual([
+    [ 'Alice', 36 ],
+    [ 'Bob', 22 ]
+  ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@IDENTITY AS i')).rows).toEqual([ [ 2 ] ])
+})
+
+test('merge rejects multiple source matches for one target row', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, v INT);
+    CREATE TABLE s2 (id INT, v INT);
+    INSERT INTO t VALUES (1, 0);
+    INSERT INTO s2 VALUES (1, 10), (1, 20);
+  `)
+  expect(() => executeBatch(s, `
+    MERGE t USING s2 ON t.id = s2.id
+    WHEN MATCHED THEN UPDATE SET v = s2.v;
+  `)).toThrowError(expect.objectContaining({ number: 8672 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT v FROM t')).rows).toEqual([ [ 0 ] ])
+})
+
+test('merge is atomic when a later arm fails', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, v INT NOT NULL);
+    INSERT INTO t VALUES (1, 1);
+  `)
+  // The UPDATE arm applies before the INSERT arm fails on the NULL value —
+  // the whole MERGE must roll back.
+  expect(() => executeBatch(s, `
+    MERGE t USING (VALUES (1, 5), (2, NULL)) AS s (id, v)
+    ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = s.v
+    WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v);
+  `)).toThrowError(expect.objectContaining({ number: 515 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT id, v FROM t')).rows).toEqual([ [ 1, 1 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@TRANCOUNT AS tc')).rows).toEqual([ [ 0 ] ])
+})
+
+test('merge validates arms and rejects OUTPUT', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY); CREATE TABLE src (id INT)')
+  expect(() => executeBatch(s, `
+    MERGE t USING src ON t.id = src.id
+    WHEN MATCHED THEN DELETE
+    WHEN MATCHED AND t.id > 1 THEN DELETE;
+  `)).toThrowError(expect.objectContaining({ number: 10714 }) as Error)
+  expect(() => executeBatch(s, `
+    MERGE t USING src ON t.id = src.id
+    WHEN NOT MATCHED THEN INSERT (id) VALUES (src.id, 1);
+  `)).toThrowError(expect.objectContaining({ number: 110 }) as Error)
+  expect(() => executeBatch(s, `
+    MERGE t USING src ON t.id = src.id
+    WHEN MATCHED THEN DELETE
+    OUTPUT deleted.id;
+  `)).toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+})
+
+test('merge inside an explicit transaction respects rollback', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, v INT);
+    INSERT INTO t VALUES (1, 1);
+  `)
+  executeBatch(s, `
+    BEGIN TRAN
+    MERGE t USING (VALUES (1, 100)) AS s (id, v) ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = s.v;
+    ROLLBACK
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT v FROM t')).rows).toEqual([ [ 1 ] ])
+})
