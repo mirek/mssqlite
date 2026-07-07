@@ -67,11 +67,22 @@ The language pipeline lives in three packages:
   OUT/OUTPUT and READONLY.
 - TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
   accept `TOP (expr)` only, per MSSQL.
+- OUTPUT clause (`Ast.Output`) sits between the column list / SET list /
+  target and the source / FROM / WHERE. Items reuse the select-item shape
+  minus variable assignment; `OUTPUT` being a reserved word is what stops
+  the preceding expression (last SET value, INSERT column list) from
+  swallowing it. INSERT/DELETE (and inserted-only UPDATE) transpile to
+  SQLite `RETURNING` with the pseudo-table qualifier stripped; UPDATE
+  reading `deleted.` values is engine-interpreted via a temp-table
+  snapshot joined to the post-update rows. Divergences: an unaliased
+  `deleted.x, inserted.x` pair collapses to one result key (duplicate
+  column names — known engine-wide limitation, alias them), and
+  `UPDATE … FROM` combined with `OUTPUT deleted.` is rejected.
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, MERGE, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
-GOTO, OUTPUT clause, table variables (DECLARE @t TABLE),
+GOTO, table variables (DECLARE @t TABLE),
 table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

@@ -24,8 +24,7 @@ const { sql, variables } = statement(parseStatement(
 - `scalar(ast)` — renders a single expression (engine uses it for variable
   initializers, IF/WHILE conditions, PRINT).
 - `UnsupportedError` — thrown for constructs with no SQLite story
-  (TOP … PERCENT, UPDATE/DELETE TOP, MERGE, …); the engine maps it to an
-  MSSQL error response.
+  (MERGE, PIVOT, …); the engine maps it to an MSSQL error response.
 
 ## Mapping decisions
 
@@ -45,6 +44,11 @@ const { sql, variables } = statement(parseStatement(
 - **IDENTITY** — becomes `INTEGER PRIMARY KEY AUTOINCREMENT` (rowid alias;
   ids never reused, like MSSQL). Non-PK identity columns are rejected.
 - **TOP / OFFSET-FETCH** — become `LIMIT` / `LIMIT ... OFFSET`.
+- **OUTPUT** — becomes `RETURNING` with the `inserted.` / `deleted.`
+  qualifier stripped (INSERT and DELETE expose exactly those values;
+  UPDATE only `inserted.`). `Output.readsDeleted` tells the engine when
+  an UPDATE needs its pre-update snapshot path instead, and the wrong
+  pseudo-table (`deleted` in INSERT, `inserted` in DELETE) is rejected.
 - **Functions** — built-ins map to native SQLite (`isnull` → `ifnull`,
   `substring` → `substr`, `string_agg` → `group_concat`, `ceiling`, `power`,
   window functions, …), transpile-time rewrites (`YEAR(d)` →

@@ -201,6 +201,18 @@ export type ProcedureParameter = {
   readonly output: boolean
 }
 
+/**
+ * OUTPUT clause of INSERT / UPDATE / DELETE — select items over the
+ * `inserted` / `deleted` pseudo-tables, optionally routed INTO a table.
+ */
+export type Output = {
+  readonly items: readonly SelectItem[],
+  readonly into?: {
+    readonly table: QualifiedName,
+    readonly columns?: readonly string[]
+  }
+}
+
 /** SET assignment in UPDATE. */
 export type Assignment = {
   readonly target:
@@ -217,6 +229,7 @@ export type Statement =
       readonly kind: 'insert',
       readonly table: QualifiedName,
       readonly columns?: readonly string[],
+      readonly output?: Output,
       readonly source: InsertSource
     }
   | {
@@ -224,6 +237,7 @@ export type Statement =
       readonly target: QualifiedName,
       readonly top?: Expression,
       readonly set: readonly Assignment[],
+      readonly output?: Output,
       readonly from?: TableSource,
       readonly where?: Expression
     }
@@ -231,6 +245,7 @@ export type Statement =
       readonly kind: 'delete',
       readonly target: QualifiedName,
       readonly top?: Expression,
+      readonly output?: Output,
       readonly from?: TableSource,
       readonly where?: Expression
     }

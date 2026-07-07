@@ -48,6 +48,14 @@ const items = executeBatch(s, `
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
 - **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.
+- **OUTPUT** — INSERT/DELETE (and inserted-only UPDATE) run the
+  transpiled `RETURNING` and emit the rows as a result set. UPDATE
+  reading `deleted.` values snapshots the affected rows into a temp
+  table first, updates by rowid, then selects the OUTPUT items from the
+  post-update table aliased `inserted` joined to the snapshot aliased
+  `deleted` (`inserted.*` / `deleted.*` expand to the target's columns).
+  `OUTPUT … INTO` re-inserts the rows into the target table and emits
+  only the affected-row count, as MSSQL does.
 - **EXEC sp_executesql** — full support from T-SQL and (via `executeSql`)
   from RPC. Other stored procedures report error 2812.
 

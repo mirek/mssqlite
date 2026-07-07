@@ -40,9 +40,12 @@ Real applications assume these everywhere; ORMs and migration tools
   transpile rejects them today. Layers: tsql (WITH TIES), transpile.
 - ☑ **DELETE alias double-FROM** — `DELETE a FROM t AS a JOIN …`
   (UPDATE-with-FROM already works). Layers: transpile.
-- ☐ **OUTPUT clause** — `INSERT … OUTPUT inserted.*`,
-  `UPDATE/DELETE … OUTPUT deleted.*` (`RETURNING` exists in SQLite
-  ≥ 3.35, node ≥ 22 ships it). Layers: tsql, transpile, engine.
+- ☑ **OUTPUT clause** — `INSERT … OUTPUT inserted.*`,
+  `UPDATE/DELETE … OUTPUT deleted.*` with expressions, aliases and
+  `OUTPUT … INTO table (columns)`; INSERT/DELETE and inserted-only
+  UPDATE render as SQLite `RETURNING`, UPDATE reading DELETED values
+  snapshots affected rows into a temp table and joins old/new images.
+  Layers: tsql, transpile, engine.
 - ☐ **MERGE** — WHEN MATCHED / NOT MATCHED [BY SOURCE] arms; decompose
   into UPDATE/INSERT/DELETE inside one implicit transaction, or SQLite
   UPSERT for the common two-arm case. Layers: tsql, transpile, engine.

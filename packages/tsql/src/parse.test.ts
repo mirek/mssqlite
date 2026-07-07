@@ -57,6 +57,36 @@ test('top percent and with ties parse', () => {
   })
 })
 
+test('output clause parses on insert, update and delete', () => {
+  expect(parseStatement('INSERT INTO t (a) OUTPUT inserted.id, inserted.a AS added VALUES (1)')).toMatchObject({
+    kind: 'insert',
+    output: {
+      items: [
+        { kind: 'expression', expression: { kind: 'column', name: [ 'inserted', 'id' ] } },
+        { kind: 'expression', expression: { kind: 'column', name: [ 'inserted', 'a' ] }, alias: 'added' }
+      ]
+    },
+    source: { kind: 'values' }
+  })
+  expect(parseStatement('DELETE FROM t OUTPUT deleted.* WHERE id = 1')).toMatchObject({
+    kind: 'delete',
+    output: { items: [ { kind: 'star', qualifier: [ 'deleted' ] } ] },
+    where: { kind: 'binaryOp', operator: '=' }
+  })
+  expect(parseStatement(
+    'UPDATE t SET a = 1 OUTPUT deleted.a, inserted.a INTO log (old_a, new_a) WHERE id = 1'
+  )).toMatchObject({
+    kind: 'update',
+    output: {
+      items: [
+        { kind: 'expression', expression: { kind: 'column', name: [ 'deleted', 'a' ] } },
+        { kind: 'expression', expression: { kind: 'column', name: [ 'inserted', 'a' ] } }
+      ],
+      into: { table: [ 'log' ], columns: [ 'old_a', 'new_a' ] }
+    }
+  })
+})
+
 test('try/catch and raiserror parse', () => {
   expect(parseStatement(`
     BEGIN TRY
