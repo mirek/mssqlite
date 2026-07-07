@@ -10,7 +10,8 @@ const alias: Parser.t<string | undefined> =
     C.identifier
   ))
 
-const tableHints: Parser.t<string[] | undefined> =
+/** Optional WITH (hints) or bare legacy (NOLOCK) — parsed and ignored. */
+export const tableHints: Parser.t<string[] | undefined> =
   C.maybe(C.first(
     C.map(
       C.seq(C.keyword('with'), C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))),

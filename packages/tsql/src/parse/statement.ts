@@ -3,7 +3,7 @@ import * as Reader from './reader.ts'
 import * as Result from './result.ts'
 import typeName from './type-name.ts'
 import { alterTable, createIndex, createTable, createView, drop, dropIndex } from './ddl.ts'
-import { delete_, insert, truncate, update } from './dml.ts'
+import { delete_, insert, merge, truncate, update } from './dml.ts'
 import { expression } from './expression.ts'
 import { select } from './select.ts'
 import type * as Ast from '../ast.ts'
@@ -397,6 +397,7 @@ export const statement: Parser.t<Ast.Statement> =
     insert,
     update,
     delete_,
+    merge,
     createTable,
     createIndex,
     createView,

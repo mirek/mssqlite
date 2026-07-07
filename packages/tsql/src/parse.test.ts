@@ -496,3 +496,101 @@ test('parse errors carry offsets', () => {
   expect(() => parse('CREATE TABLE t (')).toThrow(ParseError)
   expect(() => parse('%%%')).toThrow()
 })
+
+test('merge with matched and not matched arms', () => {
+  expect(parseStatement(`
+    MERGE INTO dbo.target AS t
+    USING dbo.source AS s
+    ON t.id = s.id
+    WHEN MATCHED AND s.qty = 0 THEN DELETE
+    WHEN MATCHED THEN UPDATE SET t.qty = s.qty, name = s.name
+    WHEN NOT MATCHED BY TARGET THEN INSERT (id, qty) VALUES (s.id, s.qty)
+    WHEN NOT MATCHED BY SOURCE THEN DELETE
+  `)).toMatchObject({
+    kind: 'merge',
+    target: [ 'dbo', 'target' ],
+    alias: 't',
+    source: { kind: 'table', name: [ 'dbo', 'source' ], alias: 's' },
+    on: { kind: 'binaryOp', operator: '=' },
+    whens: [
+      { match: 'matched', condition: { kind: 'binaryOp' }, action: { kind: 'delete' } },
+      { match: 'matched', action: { kind: 'update', set: [ {}, {} ] } },
+      { match: 'notMatchedByTarget', action: { kind: 'insert', columns: [ 'id', 'qty' ], values: [ {}, {} ] } },
+      { match: 'notMatchedBySource', action: { kind: 'delete' } }
+    ]
+  })
+})
+
+test('merge using values desugars to an aliased union chain', () => {
+  const statement = parseStatement(`
+    MERGE t WITH (HOLDLOCK)
+    USING (VALUES (1, N'a'), (2, N'b')) AS s (id, name)
+    ON t.id = s.id
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.name)
+  `)
+  expect(statement).toMatchObject({
+    kind: 'merge',
+    target: [ 't' ],
+    source: {
+      kind: 'derived',
+      alias: 's',
+      select: {
+        kind: 'select',
+        items: [
+          { kind: 'expression', expression: { kind: 'number', value: '1' }, alias: 'id' },
+          { kind: 'expression', expression: { kind: 'string', value: 'a' }, alias: 'name' }
+        ],
+        union: { kind: 'unionAll', select: { items: [ {}, {} ] } }
+      }
+    },
+    whens: [ { match: 'notMatchedByTarget', action: { kind: 'insert' } } ]
+  })
+  expect(statement).not.toHaveProperty('alias')
+})
+
+test('merge using derived select renames columns positionally', () => {
+  expect(parseStatement(`
+    MERGE target AS t
+    USING (SELECT id, total FROM staging) AS s (sid, amount)
+    ON t.id = s.sid
+    WHEN MATCHED THEN UPDATE SET amount = s.amount
+    WHEN NOT MATCHED THEN INSERT DEFAULT VALUES
+  `)).toMatchObject({
+    kind: 'merge',
+    source: {
+      kind: 'derived',
+      alias: 's',
+      select: {
+        items: [
+          { expression: { kind: 'column', name: [ 'id' ] }, alias: 'sid' },
+          { expression: { kind: 'column', name: [ 'total' ] }, alias: 'amount' }
+        ]
+      }
+    },
+    whens: [
+      { match: 'matched' },
+      { match: 'notMatchedByTarget', action: { kind: 'insert' } }
+    ]
+  })
+})
+
+test('merge with output clause parses', () => {
+  expect(parseStatement(`
+    MERGE t USING s ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = s.v
+    OUTPUT inserted.id
+  `)).toMatchObject({
+    kind: 'merge',
+    output: { items: [ { kind: 'expression' } ] }
+  })
+})
+
+test('merge rejects malformed arms', () => {
+  expect(() => parseStatement('MERGE t USING s ON t.id = s.id')).toThrow(ParseError)
+  expect(() => parseStatement(
+    'MERGE t USING (VALUES (1, 2)) AS s (a) ON t.a = s.a WHEN MATCHED THEN DELETE'
+  )).toThrow(ParseError)
+  expect(() => parseStatement(
+    'MERGE t USING s ON t.id = s.id WHEN NOT MATCHED THEN DELETE'
+  )).toThrow(ParseError)
+})

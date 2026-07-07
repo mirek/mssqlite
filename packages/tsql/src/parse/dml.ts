@@ -1,6 +1,7 @@
 import * as C from './combinators.ts'
+import * as Result from './result.ts'
 import { expression } from './expression.ts'
-import { select, tableSource } from './select.ts'
+import { select, tableHints, tableSource } from './select.ts'
 import type * as Ast from '../ast.ts'
 import type * as Parser from './parser.ts'
 
@@ -157,4 +158,191 @@ export const truncate: Parser.t<Ast.Statement> =
   C.map(
     C.seq(C.keyword('truncate'), C.keyword('table'), C.qualifiedName),
     ([ , , table ]) => ({ kind: 'truncate' as const, table })
+  )
+
+const aliasClause: Parser.t<string | undefined> =
+  C.maybe(C.first(
+    C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
+    C.identifier
+  ))
+
+const requiredAlias: Parser.t<string> =
+  C.first(
+    C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
+    C.identifier
+  )
+
+// A VALUES table constructor as a right-nested UNION ALL chain whose first
+// branch aliases every column — the only rendering SQLite offers for a
+// derived table with a column list.
+const valuesAsSelect =
+  (rows: readonly (readonly Ast.Expression[])[], columns: readonly string[]): Ast.Select => {
+    const selects = rows.map((row): Ast.Select => ({
+      kind: 'select',
+      distinct: false,
+      items: row.map((value, index) => ({
+        kind: 'expression',
+        expression: value,
+        alias: columns[index] ?? ''
+      }))
+    }))
+    let chained = selects[selects.length - 1] as Ast.Select
+    for (let index = selects.length - 2; index >= 0; index--) {
+      chained = { ...selects[index] as Ast.Select, union: { kind: 'unionAll', select: chained } }
+    }
+    return chained
+  }
+
+/**
+ * MERGE USING source — a table, a derived SELECT, or a VALUES table
+ * constructor. Column lists desugar into select-item aliases.
+ */
+const mergeSource: Parser.t<Ast.TableSource> =
+  reader => {
+    const values = C.seq(
+      C.parens(C.map(
+        C.seq(C.keyword('values'), C.sepBy1(valuesRow, C.punct(','))),
+        ([ , rows ]) => rows
+      )),
+      requiredAlias,
+      C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))
+    )(reader)
+    if (!Result.failed(values)) {
+      const [ rows, alias, columns ] = values.value
+      if (rows.some(row => row.length !== columns.length)) {
+        return Result.fail(reader, 'The VALUES row width must match the source column list.')
+      }
+      return Result.ok(values.reader, {
+        kind: 'derived' as const,
+        select: valuesAsSelect(rows, columns),
+        alias
+      })
+    }
+    const derived = C.seq(
+      C.parens(select),
+      requiredAlias,
+      C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(','))))
+    )(reader)
+    if (!Result.failed(derived)) {
+      const [ select_, alias, columns ] = derived.value
+      if (columns === undefined) {
+        return Result.ok(derived.reader, { kind: 'derived' as const, select: select_, alias })
+      }
+      if (select_.items.length !== columns.length ||
+        select_.items.some(item => item.kind !== 'expression')) {
+        return Result.fail(reader, 'The source column list must name every select item.')
+      }
+      const items = select_.items.map((item, index) =>
+        item.kind === 'expression' ? { ...item, alias: columns[index] ?? '' } : item)
+      return Result.ok(derived.reader, {
+        kind: 'derived' as const,
+        select: { ...select_, items },
+        alias
+      })
+    }
+    return C.map(
+      C.seq(C.qualifiedName, tableHints, aliasClause, tableHints),
+      ([ name, hintsBefore, alias, hintsAfter ]) => {
+        const hints = hintsBefore ?? hintsAfter
+        return {
+          kind: 'table' as const,
+          name,
+          ...alias === undefined ? {} : { alias },
+          ...hints === undefined ? {} : { hints }
+        }
+      }
+    )(reader)
+  }
+
+const mergeAndCondition: Parser.t<Ast.Expression | undefined> =
+  C.maybe(C.map(C.seq(C.keyword('and'), expression), ([ , value ]) => value))
+
+const mergeUpdateOrDelete: Parser.t<Ast.MergeAction> =
+  C.first<Parser.t<Ast.MergeAction>[]>(
+    C.map(
+      C.seq(C.keyword('update'), C.keyword('set'), C.sepBy1(assignment, C.punct(','))),
+      ([ , , set ]) => ({ kind: 'update' as const, set })
+    ),
+    C.map(C.keyword('delete'), () => ({ kind: 'delete' as const }))
+  )
+
+const mergeInsert: Parser.t<Ast.MergeAction> =
+  C.map(
+    C.seq(
+      C.keyword('insert'),
+      C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))),
+      C.first(
+        C.map(C.seq(C.keyword('values'), valuesRow), ([ , values ]) => values),
+        C.map(C.keywords('default', 'values'), () => undefined)
+      )
+    ),
+    ([ , columns, values ]) => ({
+      kind: 'insert' as const,
+      ...columns === undefined ? {} : { columns },
+      ...values === undefined ? {} : { values }
+    })
+  )
+
+const mergeWhen: Parser.t<Ast.MergeWhen> =
+  C.first<Parser.t<Ast.MergeWhen>[]>(
+    C.map(
+      C.seq(C.keyword('when'), C.keyword('matched'), mergeAndCondition, C.keyword('then'), mergeUpdateOrDelete),
+      ([ , , condition, , action ]) => ({
+        match: 'matched' as const,
+        ...condition === undefined ? {} : { condition },
+        action
+      })
+    ),
+    C.map(
+      C.seq(
+        C.keyword('when'), C.keyword('not'), C.keyword('matched'),
+        C.keyword('by'), C.keyword('source'),
+        mergeAndCondition, C.keyword('then'), mergeUpdateOrDelete
+      ),
+      ([ , , , , , condition, , action ]) => ({
+        match: 'notMatchedBySource' as const,
+        ...condition === undefined ? {} : { condition },
+        action
+      })
+    ),
+    C.map(
+      C.seq(
+        C.keyword('when'), C.keyword('not'), C.keyword('matched'),
+        C.maybe(C.seq(C.keyword('by'), C.keyword('target'))),
+        mergeAndCondition, C.keyword('then'), mergeInsert
+      ),
+      ([ , , , , condition, , action ]) => ({
+        match: 'notMatchedByTarget' as const,
+        ...condition === undefined ? {} : { condition },
+        action
+      })
+    )
+  )
+
+/** MERGE statement parser. */
+export const merge: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('merge'),
+      C.maybe(C.keyword('into')),
+      C.qualifiedName,
+      tableHints,
+      aliasClause,
+      tableHints,
+      C.keyword('using'),
+      mergeSource,
+      C.keyword('on'),
+      expression,
+      C.many1(mergeWhen),
+      outputClause
+    ),
+    ([ , , target, , alias, , , source, , on, whens, output ]) => ({
+      kind: 'merge' as const,
+      target,
+      ...alias === undefined ? {} : { alias },
+      source,
+      on,
+      whens,
+      ...output === undefined ? {} : { output }
+    })
   )
