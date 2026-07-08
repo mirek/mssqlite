@@ -193,8 +193,9 @@ export const lex =
         offset = at
         continue
       }
-      // Word — identifier or keyword.
-      if (wordStart.test(char)) {
+      // Word — identifier or keyword. A leading '$' admits MERGE OUTPUT's
+      // $action (and future $identity-style pseudo-columns) as plain words.
+      if (wordStart.test(char) || (char === '$' && wordPart.test(source[offset + 1] ?? ''))) {
         const start = offset
         let at = offset + 1
         while (at < source.length && wordPart.test(source[at] ?? '')) {

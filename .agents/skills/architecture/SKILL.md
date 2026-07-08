@@ -93,7 +93,11 @@ the engine:
   chosen arm tag plus every pre-evaluated SET / INSERT value; per-arm
   DELETE → UPDATE → INSERT statements then read only the snapshot, inside
   an implicit transaction when none is open. A target row matched by more
-  than one source row raises 8672 before any mutation.
+  than one source row raises 8672 before any mutation. OUTPUT reuses the
+  snapshot as the `deleted` image (the target's pre-merge columns are
+  captured alongside the arm values), records insert-arm rowids via
+  RETURNING into a second temp table for the `inserted` image, and emits
+  a UNION ALL of one SELECT per arm with `$action` folded to a literal.
 - **Column metadata** — `StatementSync.columns()` origins resolve through
   the catalog for exact declared types; computed columns infer from value
   shape (int32/int64/float/nvarchar(max)/varbinary(max)).
@@ -138,7 +142,7 @@ toward full MSSQL support.
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
 - No CREATE FUNCTION/TRIGGER, PIVOT, APPLY, cursors, table variables,
-  sequences. MERGE lacks only its OUTPUT clause (`$action`).
+  sequences. MERGE OUTPUT may not reference source columns.
 - Batch error semantics are all-or-nothing: any statement error aborts
   the rest of the batch (MSSQL continues past most statement-level
   errors); TRY/CATCH is the supported way to continue. Division by zero

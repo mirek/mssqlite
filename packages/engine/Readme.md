@@ -63,7 +63,12 @@ const items = executeBatch(s, `
   per-arm DELETE → UPDATE → INSERT statements read only the snapshot,
   inside an implicit transaction when none is open. A target row matched
   by more than one source row raises 8672 before any mutation;
-  `@@ROWCOUNT` totals all actions. OUTPUT on MERGE is not yet supported.
+  `@@ROWCOUNT` totals all actions. OUTPUT on MERGE assembles a UNION ALL
+  of one SELECT per arm: `deleted` reads the pre-merge image captured in
+  the snapshot, `inserted` reads the post-merge table rows (insert-arm
+  rowids are recorded via `RETURNING` into a second temp table), and
+  `$action` folds to each arm's literal action word. Items may reference
+  only the pseudo-tables and `$action` — source columns are rejected.
 - **EXEC sp_executesql** — full support from T-SQL and (via `executeSql`)
   from RPC. User procedures registered by CREATE PROCEDURE execute
   interpreted; unknown procedures report error 2812.

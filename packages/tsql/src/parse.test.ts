@@ -585,6 +585,24 @@ test('merge with output clause parses', () => {
   })
 })
 
+test('merge output with $action and INTO parses', () => {
+  expect(parseStatement(`
+    MERGE t USING s ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = s.v
+    OUTPUT $action, inserted.id, deleted.v AS old INTO log (act, id, old)
+  `)).toMatchObject({
+    kind: 'merge',
+    output: {
+      items: [
+        { kind: 'expression', expression: { kind: 'column', name: [ '$action' ] } },
+        { kind: 'expression', expression: { kind: 'column', name: [ 'inserted', 'id' ] } },
+        { kind: 'expression', expression: { kind: 'column', name: [ 'deleted', 'v' ] }, alias: 'old' }
+      ],
+      into: { table: [ 'log' ], columns: [ 'act', 'id', 'old' ] }
+    }
+  })
+})
+
 test('merge rejects malformed arms', () => {
   expect(() => parseStatement('MERGE t USING s ON t.id = s.id')).toThrow(ParseError)
   expect(() => parseStatement(

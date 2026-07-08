@@ -1,6 +1,7 @@
 import * as Catalog from '@mssqlite/catalog'
 import * as Transpile from '@mssqlite/transpile'
 import { bindings } from './bind.ts'
+import { emitOutput, expandOutputStars, query } from './output.ts'
 import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Item } from './execute.ts'
@@ -11,6 +12,9 @@ type Merge =
 
 /** Snapshot of match results and pre-evaluated arm values. */
 const SNAPSHOT = 'temp."__mssqlite_merge"'
+
+/** Rowids captured from OUTPUT-observed insert arms. */
+const INSERTED = 'temp."__mssqlite_merge_inserted"'
 
 const last =
   (name: Ast.QualifiedName): string =>
@@ -108,10 +112,12 @@ const hasIdentity =
 /**
  * Snapshot SELECT computing, per source/target row pair, the chosen arm tag
  * and every arm's SET / INSERT values — all against the pre-merge state, as
- * MERGE semantics require. Rows that match no arm carry a NULL action.
+ * MERGE semantics require. Rows that match no arm carry a NULL action. An
+ * OUTPUT clause additionally captures the pre-merge target image
+ * (`captureColumns`) as the DELETED pseudo-table's rows.
  */
 const snapshotSelect =
-  (statement: Merge, exposedTarget: string, hasBySource: boolean): Ast.Select => {
+  (statement: Merge, exposedTarget: string, hasBySource: boolean, captureColumns: readonly string[]): Ast.Select => {
     const exposedSource = statement.source.kind === 'table' ?
       statement.source.alias ?? last(statement.source.name) :
       statement.source.kind === 'derived' ? statement.source.alias : ''
@@ -172,6 +178,13 @@ const snapshotSelect =
         items.push({ kind: 'expression', expression: value, alias: `__mssqlite_v${index}_${position}` })
       })
     })
+    captureColumns.forEach((column, position) => {
+      items.push({
+        kind: 'expression',
+        expression: { kind: 'column', name: [ exposedTarget, column ] },
+        alias: `__mssqlite_d${position}`
+      })
+    })
     return {
       kind: 'select',
       distinct: false,
@@ -215,7 +228,7 @@ const checkCardinality =
 
 /** @returns rows affected by one arm, applied from the snapshot. */
 const applyArm =
-  (session: Session, statement: Merge, when: Ast.MergeWhen, index: number, exposedTarget: string): number => {
+  (session: Session, statement: Merge, when: Ast.MergeWhen, index: number, exposedTarget: string, capture: boolean): number => {
     const table = Transpile.Quote.objectName(statement.target)
     // Qualified references to the DML target use the bare table name — the
     // temp schema prefix is not part of the exposed name.
@@ -236,6 +249,7 @@ const applyArm =
         ).run().changes)
       }
       default: {
+        const record = capture ? session.db.prepare(`INSERT INTO ${INSERTED} VALUES (?)`) : undefined
         if (when.action.values === undefined) {
           // INSERT DEFAULT VALUES — one insert per unmatched source row.
           const counted = session.db.prepare(
@@ -243,7 +257,8 @@ const applyArm =
           ).get() as { n: number }
           const insert = session.db.prepare(`INSERT INTO ${table} DEFAULT VALUES`)
           for (let row = 0; row < counted.n; row++) {
-            insert.run()
+            const result = insert.run()
+            record?.run(result.lastInsertRowid)
           }
           return counted.n
         }
@@ -253,12 +268,217 @@ const applyArm =
         const values = when.action.values
           .map((_value, position) => `"__mssqlite_v${index}_${position}"`)
           .join(', ')
-        const result = session.db.prepare(
-          `INSERT INTO ${table}${columns} SELECT ${values} FROM ${SNAPSHOT} WHERE "__mssqlite_action" = ${tag}`
-        ).run()
-        return Number(result.changes)
+        const insert = `INSERT INTO ${table}${columns} SELECT ${values} FROM ${SNAPSHOT} WHERE "__mssqlite_action" = ${tag}`
+        if (record === undefined) {
+          return Number(session.db.prepare(insert).run().changes)
+        }
+        // RETURNING identifies the inserted rows for the OUTPUT images — a
+        // pre/post rowid watermark would misattribute reused rowids.
+        const rows = session.db.prepare(`${insert} RETURNING rowid AS r`).all() as { r: number | bigint }[]
+        for (const row of rows) {
+          record.run(row.r)
+        }
+        return rows.length
       }
     }
+  }
+
+const actionWord = {
+  update: 'UPDATE',
+  delete: 'DELETE',
+  insert: 'INSERT'
+} as const
+
+const isAction =
+  (expression: Ast.Expression): boolean =>
+    expression.kind === 'column' &&
+    expression.name.length === 1 &&
+    (expression.name[0] ?? '').toLowerCase() === '$action'
+
+/**
+ * @returns OUTPUT expression with `$action` replaced by the arm's action word
+ * — the per-arm SELECTs expose real `inserted` / `deleted` aliases, so column
+ * references pass through once validated.
+ */
+const armExpression =
+  (expression: Ast.Expression, word: string): Ast.Expression => {
+    const inner = (nested: Ast.Expression): Ast.Expression => armExpression(nested, word)
+    switch (expression.kind) {
+      case 'column': {
+        if (isAction(expression)) {
+          return { kind: 'string', value: word, national: true }
+        }
+        const qualifier = expression.name.length === 2 ? (expression.name[0] ?? '').toLowerCase() : ''
+        if (qualifier !== 'inserted' && qualifier !== 'deleted') {
+          throw new MssqlError(
+            `MERGE OUTPUT column ${expression.name.join('.')} must be qualified with the INSERTED or DELETED pseudo-table, or be $action.`,
+            40000, 16)
+        }
+        return expression
+      }
+      case 'unary':
+        return { ...expression, operand: inner(expression.operand) }
+      case 'binaryOp':
+        return { ...expression, left: inner(expression.left), right: inner(expression.right) }
+      case 'call':
+        return { ...expression, args: expression.args.map(inner) }
+      case 'cast':
+      case 'convert':
+        return { ...expression, expression: inner(expression.expression) }
+      case 'case':
+        return {
+          ...expression,
+          ...expression.operand === undefined ? {} : { operand: inner(expression.operand) },
+          whens: expression.whens.map(({ when, then }) => ({ when: inner(when), then: inner(then) })),
+          ...expression.else_ === undefined ? {} : { else_: inner(expression.else_) }
+        }
+      case 'in':
+        if (!Array.isArray(expression.values)) {
+          throw new MssqlError('Subqueries are not allowed in an OUTPUT clause.', 40000, 16)
+        }
+        return { ...expression, expression: inner(expression.expression), values: expression.values.map(inner) }
+      case 'like':
+        return {
+          ...expression,
+          expression: inner(expression.expression),
+          pattern: inner(expression.pattern),
+          ...expression.escape === undefined ? {} : { escape: inner(expression.escape) }
+        }
+      case 'between':
+        return {
+          ...expression,
+          expression: inner(expression.expression),
+          low: inner(expression.low),
+          high: inner(expression.high)
+        }
+      case 'isNull':
+        return { ...expression, expression: inner(expression.expression) }
+      case 'exists':
+      case 'subquery':
+        throw new MssqlError('Subqueries are not allowed in an OUTPUT clause.', 40000, 16)
+      default:
+        return expression
+    }
+  }
+
+/** Derived table exposing the snapshot's pre-merge target image for one arm. */
+const deletedSource =
+  (tag: string, columns: readonly string[]): Ast.TableSource => ({
+    kind: 'derived',
+    alias: 'deleted',
+    select: {
+      kind: 'select',
+      distinct: false,
+      items: [
+        { kind: 'expression', expression: { kind: 'column', name: [ '__mssqlite_tgt' ] } },
+        ...columns.map((column, position): Ast.SelectItem => ({
+          kind: 'expression',
+          expression: { kind: 'column', name: [ `__mssqlite_d${position}` ] },
+          alias: column
+        }))
+      ],
+      from: { kind: 'table', name: [ '__mssqlite_merge' ] },
+      where: {
+        kind: 'binaryOp',
+        operator: '=',
+        left: { kind: 'column', name: [ '__mssqlite_action' ] },
+        right: { kind: 'string', value: tag, national: false }
+      }
+    }
+  })
+
+/** One-row derived table of NULLs standing in for a pseudo-table with no image. */
+const nullSource =
+  (alias: string, columns: readonly string[]): Ast.TableSource => ({
+    kind: 'derived',
+    alias,
+    select: {
+      kind: 'select',
+      distinct: false,
+      items: columns.map((column): Ast.SelectItem => ({
+        kind: 'expression',
+        expression: { kind: 'null' },
+        alias: column
+      }))
+    }
+  })
+
+/** @returns FROM tree binding `inserted` / `deleted` to one arm's row images. */
+const armFrom =
+  (statement: Merge, when: Ast.MergeWhen, index: number, columns: readonly string[]): Ast.TableSource => {
+    const tag = `a${index}`
+    switch (when.action.kind) {
+      case 'update':
+        // Old image from the snapshot, new image from the updated table row.
+        return {
+          kind: 'join',
+          join: 'inner',
+          left: { kind: 'table', name: statement.target, alias: 'inserted' },
+          right: deletedSource(tag, columns),
+          on: {
+            kind: 'binaryOp',
+            operator: '=',
+            left: { kind: 'column', name: [ 'inserted', 'rowid' ] },
+            right: { kind: 'column', name: [ 'deleted', '__mssqlite_tgt' ] }
+          }
+        }
+      case 'delete':
+        return {
+          kind: 'join',
+          join: 'cross',
+          left: deletedSource(tag, columns),
+          right: nullSource('inserted', columns)
+        }
+      default:
+        return {
+          kind: 'join',
+          join: 'cross',
+          left: {
+            kind: 'join',
+            join: 'inner',
+            left: { kind: 'table', name: statement.target, alias: 'inserted' },
+            right: { kind: 'table', name: [ '__mssqlite_merge_inserted' ] },
+            on: {
+              kind: 'binaryOp',
+              operator: '=',
+              left: { kind: 'column', name: [ 'inserted', 'rowid' ] },
+              right: { kind: 'column', name: [ '__mssqlite_merge_inserted', 'r' ] }
+            }
+          },
+          right: nullSource('deleted', columns)
+        }
+    }
+  }
+
+/**
+ * @returns SELECT assembling the OUTPUT result — a UNION ALL of one SELECT per
+ * arm, each exposing the arm's `inserted` / `deleted` images under those
+ * aliases with `$action` folded to the arm's literal action word.
+ */
+const outputSelect =
+  (session: Session, statement: Merge, output: Ast.Output, columns: readonly string[]): Ast.Select => {
+    const expanded = expandOutputStars(session, statement.target, output.items)
+    const selects = statement.whens.map((when, index): Ast.Select => ({
+      kind: 'select',
+      distinct: false,
+      items: expanded.map((item): Ast.SelectItem => {
+        if (item.kind !== 'expression') {
+          throw new MssqlError('Variable assignment is not allowed in an OUTPUT clause.', 40000, 16)
+        }
+        const alias = item.alias ?? (isAction(item.expression) ? '$action' : undefined)
+        return {
+          kind: 'expression',
+          expression: armExpression(item.expression, actionWord[when.action.kind]),
+          ...alias === undefined ? {} : { alias }
+        }
+      }),
+      from: armFrom(statement, when, index, columns)
+    }))
+    let chained = selects[selects.length - 1] as Ast.Select
+    for (let index = selects.length - 2; index >= 0; index--) {
+      chained = { ...selects[index] as Ast.Select, union: { kind: 'unionAll', select: chained } }
+    }
+    return chained
   }
 
 /**
@@ -269,26 +489,39 @@ const applyArm =
  */
 export const executeMerge =
   (session: Session, statement: Merge, items: Item[]): void => {
-    if (statement.output !== undefined) {
-      throw new MssqlError('MERGE with an OUTPUT clause is not yet supported.', 40000, 16)
-    }
     validateArms(statement.whens)
     for (const when of statement.whens) {
       if (when.action.kind === 'insert') {
         insertColumnCount(session, statement, when.action)
       }
     }
+    const output = statement.output
     const exposedTarget = statement.alias ?? last(statement.target)
     const hasBySource = statement.whens.some(when => when.match === 'notMatchedBySource')
-    const snapshot = Transpile.statement(snapshotSelect(statement, exposedTarget, hasBySource))
+    const targetColumns = output === undefined ?
+      [] :
+      (session.db
+        .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(statement.target)})`)
+        .all() as { name: string }[])
+        .map(column => column.name)
+    const capture = output !== undefined && statement.whens.some(when => when.action.kind === 'insert')
+    // Rendered up front so invalid OUTPUT items fail before any arm applies.
+    const outputRendered = output === undefined ?
+      undefined :
+      Transpile.statement(outputSelect(session, statement, output, targetColumns))
+    const snapshot = Transpile.statement(snapshotSelect(statement, exposedTarget, hasBySource, targetColumns))
     const implicit = session.transactionCount === 0
     session.db.exec(`DROP TABLE IF EXISTS ${SNAPSHOT}`)
+    session.db.exec(`DROP TABLE IF EXISTS ${INSERTED}`)
     if (implicit) {
       session.db.exec('BEGIN')
     }
     try {
       session.db.prepare(`CREATE TEMP TABLE "__mssqlite_merge" AS ${snapshot.sql}`)
         .run(bindings(session, snapshot.variables))
+      if (capture) {
+        session.db.exec('CREATE TEMP TABLE "__mssqlite_merge_inserted" ("r" INTEGER)')
+      }
       checkCardinality(session, statement.whens)
       // Deletes free unique keys for inserts; arm row sets are disjoint, so
       // ordering between arms never changes which rows each one touches.
@@ -299,21 +532,32 @@ export const executeMerge =
       let total = 0
       let inserted = 0
       for (const { when, index } of arms) {
-        const changes = applyArm(session, statement, when, index, exposedTarget)
+        const changes = applyArm(session, statement, when, index, exposedTarget, capture)
         total += changes
         if (when.action.kind === 'insert') {
           inserted += changes
         }
       }
       if (inserted > 0 && hasIdentity(session, statement.target)) {
-        const lastRow = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
+        // Capture-table writes clobber last_insert_rowid — the last captured
+        // rowid is the same value.
+        const lastRow = capture ?
+          session.db.prepare(`SELECT "r" AS id FROM ${INSERTED} ORDER BY rowid DESC LIMIT 1`).get() as { id: number | bigint } :
+          session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
         session.lastIdentity = Number(lastRow.id)
+      }
+      if (output !== undefined && outputRendered !== undefined) {
+        // Assembled inside the transaction — OUTPUT INTO writes must roll
+        // back with the merge if they fail.
+        emitOutput(session, output, query(session, outputRendered.sql, outputRendered.variables), items)
       }
       if (implicit) {
         session.db.exec('COMMIT')
       }
       session.rowCount = total
-      items.push({ kind: 'count', rowCount: total })
+      if (output === undefined) {
+        items.push({ kind: 'count', rowCount: total })
+      }
     } catch (error) {
       if (implicit) {
         try {
@@ -325,5 +569,6 @@ export const executeMerge =
       throw error
     } finally {
       session.db.exec(`DROP TABLE IF EXISTS ${SNAPSHOT}`)
+      session.db.exec(`DROP TABLE IF EXISTS ${INSERTED}`)
     }
   }
