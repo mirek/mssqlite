@@ -266,13 +266,13 @@ test('catalog function rewrites', () => {
 })
 
 test('cast and convert', () => {
-  expect(scalarOf('CAST(x AS int)')).toBe('CAST("x" AS INTEGER)')
+  expect(scalarOf('CAST(x AS int)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
   expect(scalarOf('CAST(x AS nvarchar(50))')).toBe('CAST("x" AS TEXT)')
   expect(scalarOf('CAST(x AS date)')).toBe('date("x")')
   expect(scalarOf('CAST(x AS bit)')).toBe('(CAST("x" AS NUMERIC) <> 0)')
   expect(scalarOf('CONVERT(varchar(10), d, 120)'))
     .toBe('substr(strftime(\'%Y-%m-%d %H:%M:%S\', "d"), 1, 10)')
-  expect(scalarOf('CONVERT(int, x)')).toBe('CAST("x" AS INTEGER)')
+  expect(scalarOf('CONVERT(int, x)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
 })
 
 test('case, in, like, between, exists', () => {

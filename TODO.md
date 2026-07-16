@@ -9,7 +9,6 @@ work is complete.
 
 ## Semantics and type fidelity
 
-- [Statement-level error semantics](todo/statement-level-error-semantics.md) — Continue batches after eligible errors and return multiple errors correctly.
 - [Arithmetic errors](todo/arithmetic-errors.md) — Raise SQL Server-compatible divide-by-zero and overflow errors.
 - [Exact decimal arithmetic](todo/exact-decimal-arithmetic.md) — Preserve exact `DECIMAL` and `NUMERIC` values through execution and TDS.
 - [SET NOCOUNT](todo/set-nocount.md) — Suppress affected-row DONE counts when `NOCOUNT` is enabled.

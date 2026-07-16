@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { DataType } from '@mssqlite/tds'
-import { executeBatch, executeSql, MssqlError, server, session } from './index.ts'
+import { BatchError, executeBatch, executeSql, MssqlError, server, session } from './index.ts'
 import type { Item, Rows } from './execute.ts'
 
 const open =
@@ -398,6 +398,123 @@ test('sql errors map to mssql numbers', () => {
   // @@ERROR reports the previous statement's error before this one resets it.
   expect(rowsOf(executeBatch(s, 'SELECT @@ERROR AS e')).rows).toEqual([ [ 102 ] ])
   expect(rowsOf(executeBatch(s, 'SELECT @@ERROR AS e')).rows).toEqual([ [ 0 ] ])
+})
+
+test('statement-terminating errors continue the batch in result order', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE continuation (id INT PRIMARY KEY); INSERT INTO continuation VALUES (1)')
+  let failure: BatchError | undefined
+  try {
+    executeBatch(s, `
+      INSERT INTO continuation VALUES (1)
+      SELECT @@ERROR AS error_number, @@ROWCOUNT AS row_count
+      INSERT INTO continuation VALUES (1)
+      SELECT COUNT(*) AS total, @@ERROR AS error_number FROM continuation
+    `)
+  } catch (error) {
+    failure = error as BatchError
+  }
+  expect(failure).toBeInstanceOf(BatchError)
+  expect(failure?.items.map(item => item.kind)).toEqual([ 'error', 'rows', 'error', 'rows' ])
+  expect(failure?.items.filter(item => item.kind === 'error').map(item => item.error.number))
+    .toEqual([ 2627, 2627 ])
+  const rows = failure?.items.filter((item): item is Rows => item.kind === 'rows') ?? []
+  expect(rows.map(item => item.rows)).toEqual([ [ [ 2627, 0 ] ], [ [ 1, 2627 ] ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT @@ERROR AS e')).rows).toEqual([ [ 0 ] ])
+})
+
+test('conversion failures continue while TRY_CAST returns NULL', () => {
+  const s = open()
+  let failure: BatchError | undefined
+  try {
+    executeBatch(s, `
+      SELECT CAST('not an integer' AS INT) AS bad
+      SELECT 7 AS after_error
+      SELECT TRY_CAST('still bad' AS INT) AS attempted
+    `)
+  } catch (error) {
+    failure = error as BatchError
+  }
+  expect(failure?.items.map(item => item.kind)).toEqual([ 'error', 'rows', 'rows' ])
+  expect(failure?.items.find(item => item.kind === 'error')).toMatchObject({
+    error: { number: 245 }
+  })
+  const rows = failure?.items.filter((item): item is Rows => item.kind === 'rows') ?? []
+  expect(rows.map(item => item.rows)).toEqual([ [ [ 7 ] ], [ [ null ] ] ])
+})
+
+test('constraint errors leave XACT_ABORT OFF transactions committable', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE xact_continue (id INT PRIMARY KEY)')
+  let failure: BatchError | undefined
+  try {
+    executeBatch(s, `
+      BEGIN TRAN;
+      INSERT INTO xact_continue VALUES (1)
+      INSERT INTO xact_continue VALUES (1)
+      INSERT INTO xact_continue VALUES (2)
+      COMMIT
+      SELECT COUNT(*) AS n, @@TRANCOUNT AS tc FROM xact_continue
+    `)
+  } catch (error) {
+    failure = error as BatchError
+  }
+  expect(failure?.items.filter(item => item.kind === 'error')).toHaveLength(1)
+  const result = failure?.items.find((item): item is Rows => item.kind === 'rows')
+  expect(result?.rows).toEqual([ [ 2, 0 ] ])
+})
+
+test('XACT_ABORT ON rolls back and aborts after a qualifying runtime error', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE xact_abort_rows (id INT PRIMARY KEY); SET XACT_ABORT ON')
+  expect(() => executeBatch(s, `
+    BEGIN TRAN
+    INSERT INTO xact_abort_rows VALUES (1)
+    INSERT INTO xact_abort_rows VALUES (1)
+    INSERT INTO xact_abort_rows VALUES (2)
+  `)).toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT COUNT(*) AS n, @@TRANCOUNT AS tc, XACT_STATE() AS xs FROM xact_abort_rows
+  `)).rows).toEqual([ [ 0, 0, 0 ] ])
+})
+
+test('RAISERROR continues and ignores XACT_ABORT while THROW aborts', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE raised_rows (id INT); SET XACT_ABORT ON')
+  let raised: BatchError | undefined
+  try {
+    executeBatch(s, `
+      BEGIN TRAN
+      RAISERROR ('keep going', 16, 1)
+      INSERT INTO raised_rows VALUES (1)
+      COMMIT
+      SELECT COUNT(*) AS n FROM raised_rows
+    `)
+  } catch (error) {
+    raised = error as BatchError
+  }
+  expect(raised?.items.map(item => item.kind)).toEqual([ 'error', 'count', 'rows' ])
+  expect(raised?.items.find((item): item is Rows => item.kind === 'rows')?.rows).toEqual([ [ 1 ] ])
+
+  expect(() => executeBatch(s, `
+    THROW 51000, 'stop now', 1
+    INSERT INTO raised_rows VALUES (2)
+  `)).toThrowError(expect.objectContaining({ number: 51000 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM raised_rows')).rows).toEqual([ [ 1 ] ])
+
+  expect(() => executeBatch(s, `
+    RAISERROR ('fatal', 20, 1)
+    INSERT INTO raised_rows VALUES (3)
+  `)).toThrowError(expect.objectContaining({ severity: 20 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM raised_rows')).rows).toEqual([ [ 1 ] ])
+})
+
+test('syntax errors compile-abort before any statement executes', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE syntax_rows (id INT)')
+  expect(() => executeBatch(s, 'INSERT INTO syntax_rows VALUES (1); SELEC 1'))
+    .toThrowError(expect.objectContaining({ number: 102 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM syntax_rows')).rows).toEqual([ [ 0 ] ])
 })
 
 test('undeclared variable errors', () => {

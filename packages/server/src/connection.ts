@@ -2,7 +2,10 @@ import { Encode } from '@mssqlite/bytes'
 import {
   Collation, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
-import { errorOf, executeBatch, executeSql, session, type Server, type Session, type Value } from '@mssqlite/engine'
+import {
+  BatchError, errorOf, executeBatch, executeSql, session,
+  type Server, type Session, type Value
+} from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
 import type { Socket } from 'node:net'
 
@@ -93,7 +96,13 @@ const onSqlBatch =
       const items = executeBatch(session_, batch.sql)
       respond(connection, batchResponse(items, connection.engine.serverName))
     } catch (error) {
-      respond(connection, errorResponse(errorOf(error), connection.engine.serverName))
+      const mapped = errorOf(error)
+      respond(connection, error instanceof BatchError ?
+        batchResponse(error.items, connection.engine.serverName) :
+        errorResponse(mapped, connection.engine.serverName))
+      if (mapped.severity >= 20) {
+        connection.socket.end()
+      }
     }
   }
 
@@ -177,7 +186,13 @@ const onRpc =
         }
       }
     } catch (error) {
-      respond(connection, errorResponse(errorOf(error), connection.engine.serverName, true))
+      const mapped = errorOf(error)
+      respond(connection, error instanceof BatchError ?
+        rpcResponse(error.items, connection.engine.serverName) :
+        errorResponse(mapped, connection.engine.serverName, true))
+      if (mapped.severity >= 20) {
+        connection.socket.end()
+      }
     }
   }
 

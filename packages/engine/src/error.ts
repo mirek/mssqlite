@@ -1,14 +1,39 @@
+import type { Item } from './execute.ts'
+
 /** MSSQL-shaped error with number, state and severity class. */
 export class MssqlError extends Error {
   readonly number: number
   readonly state: number
   readonly severity: number
-  constructor(message: string, number = 50000, severity = 16, state = 1) {
+  readonly statementTerminating: boolean
+  readonly honorsXactAbort: boolean
+  constructor(
+    message: string,
+    number = 50000,
+    severity = 16,
+    state = 1,
+    options: { statementTerminating?: boolean, honorsXactAbort?: boolean } = {}
+  ) {
     super(message)
     this.name = 'MssqlError'
     this.number = number
     this.state = state
     this.severity = severity
+    this.statementTerminating = options.statementTerminating ?? false
+    this.honorsXactAbort = options.honorsXactAbort ?? true
+  }
+}
+
+/** Batch-aborting error retaining result/error items produced before it. */
+export class BatchError extends MssqlError {
+  readonly items: readonly Item[]
+  constructor(error: MssqlError, items: readonly Item[]) {
+    super(error.message, error.number, error.severity, error.state, {
+      statementTerminating: false,
+      honorsXactAbort: error.honorsXactAbort
+    })
+    this.name = 'BatchError'
+    this.items = items
   }
 }
 
@@ -35,16 +60,24 @@ export const of =
       return new MssqlError(`Invalid column name '${column}'.`, 207, 16)
     }
     if (message.includes('UNIQUE constraint failed')) {
-      return new MssqlError(`Violation of UNIQUE KEY constraint. ${message}`, 2627, 14)
+      return new MssqlError(`Violation of UNIQUE KEY constraint. ${message}`, 2627, 14, 1, {
+        statementTerminating: true
+      })
     }
     if (message.includes('FOREIGN KEY constraint failed')) {
-      return new MssqlError(`The statement conflicted with a FOREIGN KEY constraint. ${message}`, 547, 16)
+      return new MssqlError(`The statement conflicted with a FOREIGN KEY constraint. ${message}`, 547, 16, 1, {
+        statementTerminating: true
+      })
     }
     if (message.includes('CHECK constraint failed')) {
-      return new MssqlError(`The statement conflicted with a CHECK constraint. ${message}`, 547, 16)
+      return new MssqlError(`The statement conflicted with a CHECK constraint. ${message}`, 547, 16, 1, {
+        statementTerminating: true
+      })
     }
     if (message.includes('NOT NULL constraint failed')) {
-      return new MssqlError(`Cannot insert the value NULL. ${message}`, 515, 16)
+      return new MssqlError(`Cannot insert the value NULL. ${message}`, 515, 16, 1, {
+        statementTerminating: true
+      })
     }
     if (message.includes('already exists')) {
       return new MssqlError(`There is already an object with that name. ${message}`, 2714, 16)

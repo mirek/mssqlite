@@ -16,7 +16,7 @@ import {
   resolveTableVariables,
   withTableVariableScope
 } from './table-variable.ts'
-import { MssqlError, of as errorOf } from './error.ts'
+import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
@@ -54,11 +54,18 @@ export type Message = {
   readonly text: string
 }
 
+/** Recoverable statement error retained in batch result order. */
+export type ErrorItem = {
+  readonly kind: 'error',
+  readonly error: MssqlError
+}
+
 /** Batch execution item. */
 export type Item =
   | Rows
   | Count
   | Message
+  | ErrorItem
 
 /** Control-flow signal raised by BREAK / CONTINUE / RETURN. */
 type Signal =
@@ -1059,7 +1066,11 @@ const executeStatementInner =
           items.push({ kind: 'message', text })
           return undefined
         }
-        throw new MssqlError(text, number, severity, state)
+        throw new MssqlError(text, number, severity, state, {
+          statementTerminating: true,
+          // SQL Server RAISERROR does not honor SET XACT_ABORT.
+          honorsXactAbort: false
+        })
       }
       case 'tryCatch': {
         try {
@@ -1558,6 +1569,16 @@ export const executeSql =
  * Parses and executes a T-SQL batch, producing result items.
  * @throws MssqlError with MSSQL number/severity on any failure.
  */
+const statementTerminatingNumbers =
+  new Set([ 245, 515, 547, 2601, 2627, 2714, 3701, 8114, 8115, 8134 ])
+
+const canContinueBatch =
+  (error: MssqlError): boolean =>
+    error.severity < 20 &&
+    (error.statementTerminating || statementTerminatingNumbers.has(error.number) ||
+      (error.number >= 11700 && error.number < 11800) ||
+      (error.number >= 16900 && error.number < 17000))
+
 export const executeBatch =
   (session: Session, sql: string): Item[] => {
     session.server.current = session
@@ -1568,18 +1589,47 @@ export const executeBatch =
     try {
       return withCursorScope(session, () => withTableVariableScope(session, () => {
         const statements = parse(sql)
+        let firstError: MssqlError | undefined
         for (const statement of statements) {
-          const signal = executeStatement(session, statement, items)
-          if (signal === 'return') {
-            break
+          try {
+            const signal = executeStatement(session, statement, items)
+            session.lastError = 0
+            if (signal === 'return') {
+              break
+            }
+          } catch (error) {
+            const mapped = errorOf(error)
+            firstError ??= mapped
+            session.lastError = mapped.number
+            session.rowCount = 0
+            if (mapped instanceof BatchError) {
+              items.push(...mapped.items)
+            } else {
+              items.push({ kind: 'error', error: mapped })
+            }
+            const xactAbort = session.options.get('xact_abort') === 'on' &&
+              mapped.honorsXactAbort && session.transactionCount > 0
+            if (xactAbort) {
+              session.db.exec('ROLLBACK')
+              session.transactionCount = 0
+              session.transactionDoomed = false
+              flushSequences(session.server)
+            }
+            if (!canContinueBatch(mapped) || xactAbort) {
+              throw new BatchError(mapped, items)
+            }
           }
         }
-        session.lastError = 0
+        if (firstError !== undefined) {
+          throw new BatchError(firstError, items)
+        }
         return items
       }))
     } catch (error) {
       const mapped = errorOf(error)
-      session.lastError = mapped.number
+      if (!(mapped instanceof BatchError)) {
+        session.lastError = mapped.number
+      }
       throw mapped
     }
   }

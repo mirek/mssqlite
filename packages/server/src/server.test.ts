@@ -176,6 +176,43 @@ test('errors surface with mssql numbers', async () => {
   await expect(query('INSERT INTO users (name) VALUES (NULL)')).rejects.toMatchObject({ number: 515 })
 })
 
+test('statement errors and successful rows stay ordered over tedious', async () => {
+  await query('CREATE TABLE wire_error_order (id INT PRIMARY KEY); INSERT INTO wire_error_order VALUES (1)')
+  const events = await new Promise<string[]>((resolve, reject) => {
+    const seen: string[] = []
+    const onErrorMessage = (error: { number: number }): void => {
+      seen.push(`error:${error.number}`)
+    }
+    connection.on('errorMessage', onErrorMessage)
+    const request = new Request(`
+      INSERT INTO wire_error_order VALUES (1);
+      SELECT 1 AS marker;
+      INSERT INTO wire_error_order VALUES (1);
+      SELECT 2 AS marker;
+    `, error => {
+      connection.removeListener('errorMessage', onErrorMessage)
+      const reported = error as (Error & {
+        readonly number?: number,
+        readonly errors?: readonly { readonly number?: number }[]
+      }) | null
+      const numbers = Array.isArray(reported?.errors) ?
+        reported.errors.map(inner => inner.number) :
+        [ reported?.number ]
+      if (numbers.length !== 2 || numbers.some(number => number !== 2627)) {
+        reject(error ?? new Error('Expected a constraint error.'))
+      } else {
+        resolve(seen)
+      }
+    })
+    request.on('row', columns => {
+      const marker = (columns as Record<string, { value: unknown }>)['marker']?.value
+      seen.push(`row:${String(marker)}`)
+    })
+    connection.execSql(request)
+  })
+  expect(events).toEqual([ 'error:2627', 'row:1', 'error:2627', 'row:2' ])
+})
+
 test('transactions via tedious api', async () => {
   await new Promise<void>((resolve, reject) => {
     connection.beginTransaction(error => error ? reject(error) : resolve())
