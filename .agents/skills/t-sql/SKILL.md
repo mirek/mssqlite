@@ -132,10 +132,16 @@ The language pipeline lives in three packages:
   flags and duplicate options are rejected. PATH dotted aliases create
   nested properties. AUTO requires FROM; current execution supports one
   source or a root plus one joined child alias. FOR XML remains deferred.
+- CREATE/ALTER/CREATE OR ALTER FUNCTION parses typed/defaulted parameters and
+  either a scalar RETURNS type with BEGIN/END statements or an inline
+  `RETURNS TABLE AS RETURN (SELECT ...)` body. Scalar execution allows local
+  scalar variables, SET/assignment SELECT, control flow, RETURN, defaults and
+  recursion but rejects side-effecting statements with error 443. Inline TVF
+  arguments (including DEFAULT) substitute structurally into the stored query.
 
 ### Not yet implemented (raise clean errors)
 
-CREATE FUNCTION/TRIGGER, cursors, WAITFOR,
+CREATE TRIGGER, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
 FOR XML, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

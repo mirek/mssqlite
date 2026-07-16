@@ -374,6 +374,75 @@ const procedureParameter: Parser.t<Ast.ProcedureParameter> =
     })
   )
 
+const functionParameter: Parser.t<Ast.FunctionParameter> =
+  C.map(
+    C.seq(
+      C.variable,
+      C.maybe(C.keyword('as')),
+      typeName,
+      C.maybe(C.map(C.seq(C.punct('='), expression), ([ , value ]) => value))
+    ),
+    ([ name, , type, default_ ]) => ({
+      name,
+      type,
+      ...default_ === undefined ? {} : { default_ }
+    })
+  )
+
+const functionAction: Parser.t<'create' | 'alter' | 'createOrAlter'> =
+  C.first(
+    C.map(
+      C.seq(C.keyword('create'), C.keyword('or'), C.keyword('alter'), C.keyword('function')),
+      () => 'createOrAlter' as const
+    ),
+    C.map(C.seq(C.keyword('create'), C.keyword('function')), () => 'create' as const),
+    C.map(C.seq(C.keyword('alter'), C.keyword('function')), () => 'alter' as const)
+  )
+
+const functionParameters: Parser.t<Ast.FunctionParameter[]> =
+  C.parens(C.map(C.maybe(C.sepBy1(functionParameter, C.punct(','))), values => values ?? []))
+
+const createFunction: Parser.t<Ast.Statement> =
+  reader => {
+    const head = C.seq(functionAction, C.qualifiedName, functionParameters, C.keyword('returns'))(reader)
+    if (Result.failed(head)) {
+      return head
+    }
+    const [ action, name, parameters ] = head.value
+    const table = C.seq(
+      C.keyword('table'),
+      C.keyword('as'),
+      C.keyword('return'),
+      C.parens(select)
+    )(head.reader)
+    if (!Result.failed(table)) {
+      return Result.ok(table.reader, {
+        kind: 'createFunction',
+        name,
+        action,
+        parameters,
+        returns: { kind: 'table', select: table.value[3] },
+        definition: ''
+      })
+    }
+    const scalar = C.seq(typeName, C.keyword('as'), beginBlockOrTransaction)(head.reader)
+    if (Result.failed(scalar)) {
+      return scalar
+    }
+    const body = scalar.value[2]
+    if (body.kind !== 'block') {
+      return Result.fail(head.reader, 'Scalar function body must be BEGIN ... END.')
+    }
+    return Result.ok(scalar.reader, {
+      kind: 'createFunction',
+      name,
+      action,
+      parameters,
+      returns: { kind: 'scalar', type: scalar.value[0], body: body.statements },
+      definition: ''
+    })
+  }
+
 /** Statements to the end of the batch — a procedure body owns the rest. */
 const statementsUntilInputEnd: Parser.t<Ast.Statement[]> =
   reader => {
@@ -437,6 +506,7 @@ export const statement: Parser.t<Ast.Statement> =
     createIndex,
     createView,
     createProcedure,
+    createFunction,
     alterTable,
     dropIndex,
     drop,

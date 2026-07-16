@@ -101,6 +101,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   or nested FOR JSON fragments after subquery boundaries. Empty PATH/AUTO
   results coalesce to `[]`; WITHOUT_ARRAY_WRAPPER uses comma concatenation
   and, like SQL Server, is only valid JSON for a single row.
+- Persisted scalar user functions are not SQLite schema functions: the engine
+  registers varargs callbacks by final name and interprets the stored T-SQL
+  body in an isolated scope. Inline TVFs substitute argument expressions into
+  their stored SELECT AST and become derived sources; correlated simple forms
+  lower to ordinary equality joins because SQLite lacks general LATERAL.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

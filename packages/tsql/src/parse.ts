@@ -7,11 +7,11 @@ import type * as Ast from './ast.ts'
 
 export { ParseError } from './parse/parser.ts'
 
-// CREATE PROCEDURE must be alone in its batch (MSSQL rule), so the whole
-// batch source is the module definition stored in sys.sql_modules.
+// CREATE PROCEDURE/FUNCTION must be alone in its batch (MSSQL rule), so the
+// whole batch source is the module definition stored in sys.sql_modules.
 const withDefinition =
   (statement_: Ast.Statement, sql: string): Ast.Statement =>
-    statement_.kind === 'createProcedure' ?
+    statement_.kind === 'createProcedure' || statement_.kind === 'createFunction' ?
       { ...statement_, definition: sql.trim() } :
       statement_
 

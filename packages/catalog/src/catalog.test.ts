@@ -2,8 +2,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, test } from 'vitest'
 import { parseStatement } from '@mssqlite/tsql'
 import {
-  addColumns, bootstrap, createIndex, createTable, createView,
-  dropColumns, dropIndex, dropTable, objectIdOf, tableColumns
+  addColumns, bootstrap, createFunction, createIndex, createTable, createView,
+  dropColumns, dropFunction, dropIndex, dropTable, objectIdOf, tableColumns
 } from './index.ts'
 import type { Ast } from '@mssqlite/tsql'
 
@@ -145,4 +145,19 @@ test('typical sys catalog query joins', () => {
     { table_name: 'users', schema_name: 'dbo', column_name: 'id' },
     { table_name: 'users', schema_name: 'dbo', column_name: 'name' }
   ])
+})
+
+test('user function modules register object types and drop cleanly', () => {
+  const db = open()
+  const scalar = createFunction(db, [ 'dbo', 'scalar_fn' ], 'CREATE FUNCTION scalar_fn', false)
+  const inline = createFunction(db, [ 'dbo', 'inline_fn' ], 'CREATE FUNCTION inline_fn', true)
+  expect(db.prepare(
+    'SELECT name, type, type_desc FROM "sys.objects" WHERE object_id IN (?, ?) ORDER BY name'
+  ).all(scalar, inline)).toEqual([
+    { name: 'inline_fn', type: 'IF', type_desc: 'SQL_INLINE_TABLE_VALUED_FUNCTION' },
+    { name: 'scalar_fn', type: 'FN', type_desc: 'SQL_SCALAR_FUNCTION' }
+  ])
+  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 2 })
+  dropFunction(db, [ 'dbo', 'scalar_fn' ])
+  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 1 })
 })

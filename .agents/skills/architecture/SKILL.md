@@ -96,6 +96,13 @@ the engine:
   nested FOR JSON expressions are explicitly re-tagged as SQLite JSON after
   crossing the inner-query boundary. The output always has SQL Server's
   magic column name and nvarchar(max) hint.
+- **User functions share persisted module infrastructure** — sys.objects uses
+  `FN` for scalar and `IF` for inline TVFs; definitions live beside procedures
+  in sys.sql_modules and reparse at server startup. Scalar names dispatch to
+  varargs node:sqlite callbacks that enter an isolated engine variable scope;
+  inline TVFs instead substitute argument ASTs into the stored SELECT before
+  ordinary table-source resolution. Simple correlated inline sources reuse
+  APPLY's extracted equality-key join lowering.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -182,7 +189,7 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE FUNCTION/TRIGGER, cursors, or sequences. MERGE
+- No CREATE TRIGGER, cursors, or sequences. MERGE
   OUTPUT may not reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite
   transaction and therefore roll back with it.

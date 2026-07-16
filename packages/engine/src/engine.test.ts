@@ -714,6 +714,114 @@ test('procedures reload from sys.sql_modules on server restart', () => {
   }
 })
 
+test('scalar functions persist, alter, recurse and isolate local scope', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE FUNCTION dbo.factorial(@n INT, @scale INT = 1)
+    RETURNS INT AS
+    BEGIN
+      IF @n <= 1 RETURN @scale
+      RETURN @n * dbo.factorial(@n - 1, @scale)
+    END
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT dbo.factorial(5) AS value')).rows)
+    .toEqual([ [ 120 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT dbo.factorial(3, DEFAULT) AS value')).rows)
+    .toEqual([ [ 6 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT o.type, OBJECT_DEFINITION(o.object_id) AS definition
+    FROM sys.objects o WHERE o.name = 'factorial'
+  `)).rows).toEqual([ [ 'FN', expect.stringContaining('CREATE FUNCTION') ] ])
+
+  executeBatch(s, `
+    ALTER FUNCTION dbo.factorial(@n INT, @scale INT = 2)
+    RETURNS INT AS BEGIN RETURN @n * @scale END
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT dbo.factorial(4) AS value')).rows)
+    .toEqual([ [ 8 ] ])
+  executeBatch(s, 'DROP FUNCTION dbo.factorial')
+  expect(rowsOf(executeBatch(s, `
+    SELECT COUNT(*) AS n FROM sys.objects WHERE name = 'factorial'
+  `)).rows).toEqual([ [ 0 ] ])
+  expect(() => executeBatch(s, 'DROP FUNCTION dbo.factorial')).toThrowError(
+    expect.objectContaining({ number: 3701 }) as Error
+  )
+})
+
+test('inline table functions substitute parameters as derived sources', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE function_orders (id INT, customer_id INT, amount INT);
+    INSERT INTO function_orders VALUES (1, 1, 10), (2, 1, 20), (3, 2, 30);
+  `)
+  executeBatch(s, `
+    CREATE FUNCTION dbo.orders_for(@customer INT)
+    RETURNS TABLE AS RETURN (
+      SELECT id, amount FROM function_orders WHERE customer_id = @customer
+    )
+  `)
+  const result = rowsOf(executeBatch(s, `
+    SELECT f.order_id, f.total
+    FROM dbo.orders_for(1) AS f (order_id, total)
+    ORDER BY f.order_id
+  `))
+  expect(result.rows).toEqual([ [ 1, 10 ], [ 2, 20 ] ])
+  executeBatch(s, `
+    CREATE TABLE function_customers (id INT);
+    INSERT INTO function_customers VALUES (1), (2), (3);
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT c.id, f.id AS order_id, f.amount
+    FROM function_customers c OUTER APPLY dbo.orders_for(c.id) f
+    ORDER BY c.id, order_id
+  `)).rows).toEqual([
+    [ 1, 1, 10 ], [ 1, 2, 20 ], [ 2, 3, 30 ], [ 3, null, null ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT type FROM sys.objects WHERE name = 'orders_for'
+  `)).rows).toEqual([ [ 'IF' ] ])
+})
+
+test('user functions reload from sys.sql_modules on server restart', () => {
+  const path = join(tmpdir(), `mssqlite-functions-${process.pid}-${Math.floor(Math.random() * 1e9)}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, `
+      CREATE TABLE persisted_values (id INT, value INT);
+      INSERT INTO persisted_values VALUES (1, 10), (2, 20);
+    `)
+    executeBatch(first, `
+      CREATE FUNCTION dbo.persisted_double(@value INT)
+      RETURNS INT AS BEGIN RETURN @value * 2 END
+    `)
+    executeBatch(first, `
+      CREATE FUNCTION dbo.persisted_rows(@minimum INT)
+      RETURNS TABLE AS RETURN (
+        SELECT id, value FROM persisted_values WHERE value >= @minimum
+      )
+    `)
+    const second = session(server({ path }))
+    expect(rowsOf(executeBatch(second, 'SELECT dbo.persisted_double(4) AS value')).rows)
+      .toEqual([ [ 8 ] ])
+    expect(rowsOf(executeBatch(second, `
+      SELECT id FROM dbo.persisted_rows(15) AS rows ORDER BY id
+    `)).rows).toEqual([ [ 2 ] ])
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
+test('scalar functions reject side-effecting bodies', () => {
+  const s = open()
+  expect(() => executeBatch(s, `
+    CREATE FUNCTION dbo.bad_function(@value INT)
+    RETURNS INT AS BEGIN
+      INSERT INTO missing VALUES (@value)
+      RETURN @value
+    END
+  `)).toThrowError(expect.objectContaining({ number: 443 }) as Error)
+})
+
 test('insert output returns rows, advances identity and @@ROWCOUNT', () => {
   const s = open()
   executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50) NOT NULL)')

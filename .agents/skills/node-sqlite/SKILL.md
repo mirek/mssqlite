@@ -71,3 +71,8 @@ cannot recover a derived TVF column's declared type.
 Although SQLite has no LATERAL syntax, JSON1 virtual-table calls prepared by
 node:sqlite may reference columns from earlier FROM sources; this is the
 correlated STRING_SPLIT APPLY path.
+User scalar functions register as non-deterministic varargs `db.function()`
+callbacks keyed by their final SQL name. On the supported Node 22 runtime a
+callback can synchronously prepare/execute a nested statement on the same
+DatabaseSync connection; mssqlite relies on that reentrant behavior to run an
+isolated T-SQL function scope and supports recursive calls up to 32 levels.

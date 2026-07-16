@@ -1,6 +1,7 @@
 import * as Catalog from '@mssqlite/catalog'
 import * as Transpile from '@mssqlite/transpile'
 import { MssqlError } from './error.ts'
+import { functionKey } from './session.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Session, TableVariable } from './session.ts'
 
@@ -30,10 +31,22 @@ const resolveExpression =
           left: resolveExpression(session, value.left),
           right: resolveExpression(session, value.right)
         }
-      case 'call':
+      case 'call': {
+        const function_ = session.server.functions.get(functionKey(value.name))
+        const args = value.args.map((argument, index) => {
+          if (argument.kind !== 'default') {
+            return argument
+          }
+          const default_ = function_?.parameters[index]?.default_
+          if (default_ === undefined) {
+            throw new MssqlError(
+              `Function parameter ${index + 1} has no default value.`, 201, 16)
+          }
+          return default_
+        })
         return {
           ...value,
-          args: value.args.map(argument => resolveExpression(session, argument)),
+          args: args.map(argument => resolveExpression(session, argument)),
           ...value.over === undefined ? {} : {
             over: {
               partitionBy: value.over.partitionBy.map(argument => resolveExpression(session, argument)),
@@ -44,6 +57,7 @@ const resolveExpression =
             }
           }
         }
+      }
       case 'cast':
         return { ...value, expression: resolveExpression(session, value.expression) }
       case 'convert':
@@ -178,6 +192,222 @@ const sourceColumns =
     return columns.map(column => ({ name: column.name }))
   }
 
+type Substitutions =
+  ReadonlyMap<string, Ast.Expression>
+
+const substituteExpression =
+  (value: Ast.Expression, values: Substitutions): Ast.Expression => {
+    if (value.kind === 'variable') {
+      return values.get(value.name.toLowerCase()) ?? value
+    }
+    switch (value.kind) {
+      case 'unary':
+        return { ...value, operand: substituteExpression(value.operand, values) }
+      case 'binaryOp':
+        return {
+          ...value,
+          left: substituteExpression(value.left, values),
+          right: substituteExpression(value.right, values)
+        }
+      case 'call':
+        return {
+          ...value,
+          args: value.args.map(argument => substituteExpression(argument, values)),
+          ...value.over === undefined ? {} : {
+            over: {
+              partitionBy: value.over.partitionBy.map(argument => substituteExpression(argument, values)),
+              orderBy: value.over.orderBy.map(item => ({
+                ...item,
+                expression: substituteExpression(item.expression, values)
+              }))
+            }
+          }
+        }
+      case 'cast':
+        return { ...value, expression: substituteExpression(value.expression, values) }
+      case 'convert':
+        return {
+          ...value,
+          expression: substituteExpression(value.expression, values),
+          ...value.style === undefined ? {} : {
+            style: substituteExpression(value.style, values)
+          }
+        }
+      case 'case':
+        return {
+          ...value,
+          ...value.operand === undefined ? {} : {
+            operand: substituteExpression(value.operand, values)
+          },
+          whens: value.whens.map(when => ({
+            when: substituteExpression(when.when, values),
+            then: substituteExpression(when.then, values)
+          })),
+          ...value.else_ === undefined ? {} : {
+            else_: substituteExpression(value.else_, values)
+          }
+        }
+      case 'in':
+        return {
+          ...value,
+          expression: substituteExpression(value.expression, values),
+          values: Array.isArray(value.values) ?
+            value.values.map(item => substituteExpression(item, values)) :
+            substituteSelect(value.values as Ast.Select, values)
+        }
+      case 'like':
+        return {
+          ...value,
+          expression: substituteExpression(value.expression, values),
+          pattern: substituteExpression(value.pattern, values),
+          ...value.escape === undefined ? {} : {
+            escape: substituteExpression(value.escape, values)
+          }
+        }
+      case 'between':
+        return {
+          ...value,
+          expression: substituteExpression(value.expression, values),
+          low: substituteExpression(value.low, values),
+          high: substituteExpression(value.high, values)
+        }
+      case 'isNull':
+        return { ...value, expression: substituteExpression(value.expression, values) }
+      case 'exists':
+      case 'subquery':
+        return { ...value, select: substituteSelect(value.select, values) }
+      default:
+        return value
+    }
+  }
+
+const substituteSource =
+  (source: Ast.TableSource, values: Substitutions): Ast.TableSource => {
+    switch (source.kind) {
+      case 'function':
+        return {
+          ...source,
+          args: source.args.map(argument => substituteExpression(argument, values))
+        }
+      case 'derived':
+        return { ...source, select: substituteSelect(source.select, values) }
+      case 'pivot':
+        return {
+          ...source,
+          source: substituteSource(source.source, values),
+          aggregate: {
+            ...source.aggregate,
+            expression: substituteExpression(source.aggregate.expression, values)
+          }
+        }
+      case 'unpivot':
+        return { ...source, source: substituteSource(source.source, values) }
+      case 'join':
+        return {
+          ...source,
+          left: substituteSource(source.left, values),
+          right: substituteSource(source.right, values),
+          ...source.on === undefined ? {} : {
+            on: substituteExpression(source.on, values)
+          }
+        }
+      default:
+        return source
+    }
+  }
+
+const substituteGrouping =
+  (item: Ast.GroupByItem, values: Substitutions): Ast.GroupByItem => {
+    if (item.kind === 'sets') {
+      return { ...item, sets: item.sets.map(set => substituteGrouping(set, values) as Ast.GroupingSetItem) }
+    }
+    return item.kind === 'expressions' ?
+      { ...item, expressions: item.expressions.map(value => substituteExpression(value, values)) } :
+      {
+        ...item,
+        units: item.units.map(unit => unit.map(value => substituteExpression(value, values)))
+      }
+  }
+
+const substituteSelect =
+  (select: Ast.Select, values: Substitutions): Ast.Select => ({
+    ...select,
+    ...select.ctes === undefined ? {} : {
+      ctes: select.ctes.map(cte => ({ ...cte, select: substituteSelect(cte.select, values) }))
+    },
+    ...select.top === undefined ? {} : {
+      top: { ...select.top, count: substituteExpression(select.top.count, values) }
+    },
+    items: select.items.map(item => item.kind === 'star' ? item : {
+      ...item,
+      expression: substituteExpression(item.expression, values)
+    }),
+    ...select.from === undefined ? {} : { from: substituteSource(select.from, values) },
+    ...select.where === undefined ? {} : { where: substituteExpression(select.where, values) },
+    ...select.groupBy === undefined ? {} : {
+      groupBy: select.groupBy.map(item => substituteGrouping(item, values))
+    },
+    ...select.having === undefined ? {} : { having: substituteExpression(select.having, values) },
+    ...select.orderBy === undefined ? {} : {
+      orderBy: select.orderBy.map(item => ({
+        ...item,
+        expression: substituteExpression(item.expression, values)
+      }))
+    },
+    ...select.offset === undefined ? {} : { offset: substituteExpression(select.offset, values) },
+    ...select.fetch === undefined ? {} : { fetch: substituteExpression(select.fetch, values) },
+    ...select.union === undefined ? {} : {
+      union: { ...select.union, select: substituteSelect(select.union.select, values) }
+    }
+  })
+
+const inlineFunctionSource =
+  (
+    session: Session,
+    source: Ast.TableSource & { kind: 'function' }
+  ): Ast.TableSource | undefined => {
+    const function_ = session.server.functions.get(functionKey(source.name))
+    if (function_?.returns.kind !== 'table') {
+      return undefined
+    }
+    if (source.args.length > function_.parameters.length) {
+      throw new MssqlError(`Function ${source.name.join('.')} has too many arguments specified.`, 8144, 16)
+    }
+    const values = new Map<string, Ast.Expression>()
+    function_.parameters.forEach((parameter, index) => {
+      const supplied = source.args[index]
+      const value = supplied === undefined || supplied.kind === 'default' ? parameter.default_ : supplied
+      if (value === undefined) {
+        throw new MssqlError(
+          `Function '${source.name.join('.')}' expects parameter '${parameter.name}', which was not supplied.`,
+          201, 16)
+      }
+      values.set(parameter.name.toLowerCase(), value)
+    })
+    let select = substituteSelect(function_.returns.select, values)
+    if (source.columns !== undefined) {
+      if (source.columns.length !== select.items.length ||
+        select.items.some(item => item.kind !== 'expression')) {
+        throw new MssqlError('Inline function column alias list has the wrong shape.', 8158, 16)
+      }
+      select = {
+        ...select,
+        items: select.items.map((item, index) => {
+          if (item.kind !== 'expression') {
+            return item
+          }
+          const alias = source.columns?.[index] ?? item.alias
+          return { ...item, ...alias === undefined ? {} : { alias } }
+        })
+      }
+    }
+    return {
+      kind: 'derived',
+      select: resolveSelect(session, select),
+      alias: source.alias ?? (source.name[source.name.length - 1] ?? '')
+    }
+  }
+
 const resolveTableSource =
   (session: Session, source: Ast.TableSource): Ast.TableSource => {
     switch (source.kind) {
@@ -191,6 +421,12 @@ const resolveTableSource =
         return { ...source, name, columns: sourceColumns(session, name, pragma) }
       }
       case 'function':
+        {
+          const inline = inlineFunctionSource(session, source)
+          if (inline !== undefined) {
+            return inline
+          }
+        }
         return {
           ...source,
           args: source.args.map(argument => resolveExpression(session, argument))

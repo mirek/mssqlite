@@ -13,7 +13,16 @@ import {
 import { MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import type { Ast } from '@mssqlite/tsql'
-import { procedureKey, type Procedure, type Session, type Value, type Variable } from './session.ts'
+import {
+  functionKey,
+  procedureKey,
+  type Procedure,
+  type Server,
+  type Session,
+  type UserFunction,
+  type Value,
+  type Variable
+} from './session.ts'
 
 /** Result set of a SELECT. */
 export type Rows = {
@@ -353,6 +362,26 @@ const executeTransaction =
 const executeStatement =
   (session: Session, statement_: Ast.Statement, items: Item[]): Signal => {
     const statement = resolveTableVariables(session, statement_)
+    if (statement.kind === 'createFunction') {
+      defineFunction(session, statement)
+      return undefined
+    }
+    if (statement.kind === 'dropFunction') {
+      for (const name of statement.names) {
+        const key = functionKey(name)
+        if (!session.server.functions.has(key)) {
+          if (!statement.ifExists) {
+            throw new MssqlError(
+              `Cannot drop the function '${name.join('.')}', because it does not exist or you do not have permission.`,
+              3701, 16)
+          }
+          continue
+        }
+        Catalog.dropFunction(session.db, name)
+        session.server.functions.delete(key)
+      }
+      return undefined
+    }
     switch (statement.kind) {
       case 'select': {
         if (statement.into !== undefined) {
@@ -364,7 +393,8 @@ const executeStatement =
           return undefined
         }
         const rendered = Transpile.statement(statement)
-        items.push(query(session, rendered.sql, rendered.variables, rendered.columns ?? []))
+        const hints = rendered.columns ?? userFunctionHints(session, statement) ?? []
+        items.push(query(session, rendered.sql, rendered.variables, hints))
         return undefined
       }
       case 'insert': {
@@ -680,6 +710,172 @@ const defineProcedure =
     })
   }
 
+const userFunctionHints =
+  (session: Session, select: Ast.Select): readonly Transpile.ColumnHint[] | undefined => {
+    const hints: Transpile.ColumnHint[] = []
+    for (const item of select.items) {
+      if (item.kind !== 'expression' || item.expression.kind !== 'call') {
+        return undefined
+      }
+      const function_ = session.server.functions.get(functionKey(item.expression.name))
+      if (function_?.returns.kind !== 'scalar') {
+        return undefined
+      }
+      hints.push({
+        name: item.alias ?? (item.expression.name[item.expression.name.length - 1] ?? ''),
+        type: function_.returns.type,
+        nullable: true
+      })
+    }
+    return hints
+  }
+
+const validateFunctionStatement =
+  (statement: Ast.Statement): void => {
+    switch (statement.kind) {
+      case 'declare':
+        if (statement.declarations.some(declaration => declaration.kind === 'table')) {
+          throw new MssqlError('Invalid use of a side-effecting operator within a function.', 443, 16)
+        }
+        return
+      case 'setVariable':
+      case 'return':
+      case 'break':
+      case 'continue':
+        return
+      case 'select':
+        if (statement.items.every(item => item.kind === 'assign')) {
+          return
+        }
+        break
+      case 'if':
+        validateFunctionStatement(statement.then)
+        if (statement.else_ !== undefined) {
+          validateFunctionStatement(statement.else_)
+        }
+        return
+      case 'while':
+        validateFunctionStatement(statement.body)
+        return
+      case 'block':
+        statement.statements.forEach(validateFunctionStatement)
+        return
+      default:
+        break
+    }
+    throw new MssqlError('Invalid use of a side-effecting operator within a function.', 443, 16)
+  }
+
+const sqliteFunctionName =
+  (function_: UserFunction): string =>
+    (function_.name[function_.name.length - 1] ?? '').toLowerCase()
+
+const missingFunctionParameter =
+  (functionName: string, parameterName: string): never => {
+    throw new MssqlError(
+      `Function '${functionName}' expects parameter '${parameterName}', which was not supplied.`,
+      201, 16)
+  }
+
+const invokeScalarFunction =
+  (session: Session, key: string, args: readonly Value[]): Value => {
+    const function_ = session.server.functions.get(key)
+    if (function_ === undefined || function_.returns.kind !== 'scalar') {
+      throw new MssqlError(`Could not find scalar function '${key}'.`, 195, 15)
+    }
+    if (session.nestLevel >= 32) {
+      throw new MssqlError(
+        'Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32).', 217, 16)
+    }
+    if (args.length > function_.parameters.length) {
+      throw new MssqlError(`Function ${key} has too many arguments specified.`, 8144, 16)
+    }
+    const saved = new Map(session.variables)
+    const savedReturn = session.returnValue
+    session.variables.clear()
+    session.nestLevel++
+    try {
+      function_.parameters.forEach((parameter, index) => {
+        const value = index < args.length ?
+          args[index] ?? null :
+          parameter.default_ === undefined ?
+            missingFunctionParameter(key, parameter.name) :
+            evaluate(session, parameter.default_)
+        session.variables.set(parameter.name.toLowerCase(), { type: parameter.type, value })
+      })
+      session.returnValue = null
+      const items: Item[] = []
+      for (const inner of function_.returns.body) {
+        const signal = executeStatement(session, inner, items)
+        if (signal === 'return') {
+          break
+        }
+      }
+      if (items.length > 0) {
+        throw new MssqlError('Invalid use of a side-effecting operator within a function.', 443, 16)
+      }
+      return session.returnValue
+    } finally {
+      session.nestLevel--
+      session.returnValue = savedReturn
+      session.variables.clear()
+      for (const [ name, variable ] of saved) {
+        session.variables.set(name, variable)
+      }
+    }
+  }
+
+const installScalarFunction =
+  (server: Server, key: string, function_: UserFunction): void => {
+    if (function_.returns.kind !== 'scalar') {
+      return
+    }
+    const name = sqliteFunctionName(function_)
+    if (server.registeredFunctions.has(name)) {
+      return
+    }
+    server.db.function(name, { deterministic: false, varargs: true }, (...args) => {
+      const current = server.current
+      if (current === undefined) {
+        throw new Error(`No active session for function ${name}.`)
+      }
+      const value = invokeScalarFunction(current, key, args as Value[])
+      return typeof value === 'boolean' ? Number(value) : value
+    })
+    server.registeredFunctions.add(name)
+  }
+
+const defineFunction =
+  (session: Session, statement: Ast.Statement & { kind: 'createFunction' }): void => {
+    const key = functionKey(statement.name)
+    const name = statement.name[statement.name.length - 1] ?? ''
+    const exists = session.server.functions.has(key)
+    const objectExists = Catalog.objectIdOf(session.db, statement.name) !== undefined
+    if ((statement.action === 'create' || statement.action === 'createOrAlter') &&
+      objectExists && !exists) {
+      throw new MssqlError(`There is already an object named '${name}' in the database.`, 2714, 16)
+    }
+    if (statement.action === 'alter' && !exists) {
+      throw new MssqlError(`Invalid object name '${name}'.`, 208, 16)
+    }
+    if (exists) {
+      Catalog.dropFunction(session.db, statement.name)
+    }
+    if (statement.returns.kind === 'scalar') {
+      statement.returns.body.forEach(validateFunctionStatement)
+    }
+    Catalog.createFunction(
+      session.db, statement.name, statement.definition, statement.returns.kind === 'table')
+    const function_: UserFunction = {
+      name: statement.name,
+      parameters: statement.parameters,
+      returns: statement.returns,
+      definition: statement.definition
+    }
+    session.server.functions.set(key, function_)
+    installScalarFunction(session.server, key, function_)
+  }
+
 const callUserProcedure =
   (session: Session, procedure: Procedure, statement: Ast.Statement & { kind: 'execute' }, items: Item[]): void => {
     if (session.nestLevel >= 32) {
@@ -867,6 +1063,9 @@ export const executeSql =
 export const executeBatch =
   (session: Session, sql: string): Item[] => {
     session.server.current = session
+    for (const [ key, function_ ] of session.server.functions) {
+      installScalarFunction(session.server, key, function_)
+    }
     const items: Item[] = []
     try {
       return withTableVariableScope(session, () => {

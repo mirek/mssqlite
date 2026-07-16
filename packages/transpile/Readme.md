@@ -45,6 +45,10 @@ const { sql, variables } = statement(parseStatement(
   default or explicit schema, and `GENERATE_SERIES` uses a recursive CTE
   because Node's bundled SQLite omits the series extension. Rendered SELECTs
   carry declared column hints so empty results retain exact TDS metadata.
+- **User functions** — unknown scalar names pass through to engine-registered
+  SQLite callbacks. Before rendering, the engine expands persisted inline
+  TVF calls to parameter-substituted derived SELECTs; correlated simple
+  inline sources use the same equality-key APPLY lowering as derived tables.
 - **APPLY** — correlated two-argument STRING_SPLIT uses SQLite's implicit
   lateral virtual-table arguments; correlated simple `SELECT TOP (1)`
   derived sources become partitioned `ROW_NUMBER()` joins. CROSS uses INNER

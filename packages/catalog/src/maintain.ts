@@ -502,8 +502,7 @@ export const createProcedure =
     return objectId
   }
 
-/** Removes a dropped procedure and its module row. */
-export const dropProcedure =
+const dropModule =
   (db: DatabaseSync, name: Ast.QualifiedName): void => {
     const objectId = objectIdOf(db, name)
     if (objectId !== undefined) {
@@ -511,6 +510,36 @@ export const dropProcedure =
       db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(objectId)
     }
   }
+
+/** Removes a dropped procedure and its module row. */
+export const dropProcedure =
+  dropModule
+
+/** Registers a scalar or inline table-valued function definition. */
+export const createFunction =
+  (
+    db: DatabaseSync,
+    name: Ast.QualifiedName,
+    definition: string,
+    tableValued: boolean
+  ): number => {
+    const at = objectNameOf(name)
+    const objectId = allocateId(db)
+    insertObject(db, {
+      objectId,
+      name: at.name,
+      schemaId: schemaIdOf(db, at.schema),
+      type: tableValued ? 'IF' : 'FN',
+      typeDesc: tableValued ? 'SQL_INLINE_TABLE_VALUED_FUNCTION' : 'SQL_SCALAR_FUNCTION'
+    })
+    db.prepare('INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)')
+      .run(objectId, definition)
+    return objectId
+  }
+
+/** Removes a dropped function and its module row. */
+export const dropFunction =
+  dropModule
 
 /** Registers columns added by ALTER TABLE ADD. */
 export const addColumns =

@@ -69,7 +69,9 @@ const statements = parse(`
   ON DELETE/UPDATE actions, COLLATE, named constraints; table constraints:
   PRIMARY KEY, UNIQUE, FOREIGN KEY, CHECK), DROP TABLE/VIEW [IF EXISTS],
   CREATE [UNIQUE] INDEX with INCLUDE and filtered WHERE, DROP INDEX,
-  CREATE [OR ALTER] VIEW, ALTER TABLE ADD/DROP COLUMN/CONSTRAINT.
+  CREATE [OR ALTER] VIEW, ALTER TABLE ADD/DROP COLUMN/CONSTRAINT;
+  CREATE/ALTER/CREATE OR ALTER FUNCTION supports scalar BEGIN/END bodies and
+  inline `RETURNS TABLE AS RETURN (SELECT ...)`, plus DROP FUNCTION.
 - **Procedural** — scalar DECLARE with initializers and
   `DECLARE @t TABLE (...)` with column/table constraints, SET @x
   (compound operators),

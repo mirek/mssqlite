@@ -260,7 +260,7 @@ const handlers: Record<string, Handler> = {
 export const call =
   (expression: Call, render: Render): string => {
     const name = (expression.name[expression.name.length - 1] ?? '').toLowerCase()
-    const handler = handlers[name]
+    const handler = expression.name.length === 1 ? handlers[name] : undefined
     if (handler !== undefined) {
       return handler(expression, render)
     }

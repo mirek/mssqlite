@@ -65,7 +65,69 @@ const applyPair =
     if (b !== undefined && left.has(b) && a === right) {
       return { left: term.right, right: term.left }
     }
+    if (a === undefined && b !== undefined && left.has(b)) {
+      return { left: term.right, right: term.left }
+    }
+    if (b === undefined && a !== undefined && left.has(a)) {
+      return { left: term.left, right: term.right }
+    }
     return undefined
+  }
+
+const simpleDerivedApply =
+  (
+    ctx: Context.t,
+    leftSource: Ast.TableSource,
+    rightSource: Ast.TableSource & { kind: 'derived' },
+    outer: boolean
+  ): string => {
+    const select_ = rightSource.select
+    if (select_.top !== undefined || select_.from?.kind !== 'table' ||
+      select_.groupBy !== undefined || select_.having !== undefined || select_.union !== undefined ||
+      select_.offset !== undefined || select_.fetch !== undefined || select_.orderBy !== undefined) {
+      return unsupported('APPLY derived tables require a simple correlated SELECT or SELECT TOP (1).')
+    }
+    const rightQualifier = (select_.from.alias ??
+      select_.from.name[select_.from.name.length - 1] ?? '').toLowerCase()
+    const terms = select_.where === undefined ? [] : andTerms(select_.where)
+    const leftQualifiers = sourceQualifiers(leftSource)
+    const pairs: ApplyPair[] = []
+    const remaining: Ast.Expression[] = []
+    for (const term of terms) {
+      const pair = applyPair(term, leftQualifiers, rightQualifier)
+      if (pair === undefined) {
+        remaining.push(term)
+      } else {
+        pairs.push(pair)
+      }
+    }
+    const remainingWhere = andExpression(remaining)
+    const { where: _where, ...base } = select_
+    const projected: Ast.Select = {
+      ...base,
+      ...remainingWhere === undefined ? {} : { where: remainingWhere },
+      items: [
+        ...select_.items,
+        ...pairs.map((pair, index): Ast.SelectItem => ({
+          kind: 'expression',
+          expression: pair.right,
+          alias: `__mssqlite_apply_key_${index}`
+        }))
+      ]
+    }
+    const left = tableSource(ctx, leftSource)
+    const right = `(${select(ctx, projected)}) AS ${Quote.identifier(rightSource.alias)}`
+    if (pairs.length === 0) {
+      return outer ? `${left} LEFT JOIN ${right} ON TRUE` : `${left} CROSS JOIN ${right}`
+    }
+    const conditions = pairs.map((pair, index): Ast.Expression => ({
+      kind: 'binaryOp',
+      operator: '=',
+      left: pair.left,
+      right: { kind: 'column', name: [ rightSource.alias, `__mssqlite_apply_key_${index}` ] }
+    }))
+    return `${left} ${outer ? 'LEFT' : 'INNER'} JOIN ${right} ON ` +
+      expression(ctx, andExpression(conditions) ?? { kind: 'null' })
   }
 
 const topOneApply =
@@ -167,7 +229,9 @@ const tableSource =
         const left = tableSource(ctx, source.left)
         if (source.join === 'crossApply' || source.join === 'outerApply') {
           if (source.right.kind === 'derived') {
-            return topOneApply(ctx, source.left, source.right, source.join === 'outerApply')
+            return source.right.select.top === undefined ?
+              simpleDerivedApply(ctx, source.left, source.right, source.join === 'outerApply') :
+              topOneApply(ctx, source.left, source.right, source.join === 'outerApply')
           }
           if (source.right.kind !== 'function') {
             return unsupported('APPLY requires a supported TVF or correlated SELECT TOP (1).')

@@ -16,12 +16,14 @@ export {
 export { registerFunctions } from './udf.ts'
 export {
   procedureKey,
+  functionKey,
   server,
   session,
   type Procedure,
   type Server,
   type Session,
   type TableVariable,
+  type UserFunction,
   type Value,
   type Variable
 } from './session.ts'

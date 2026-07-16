@@ -23,6 +23,9 @@ no query interception.
     objects, heap rows.
   - `dropTable(db, name)` — removes the object and every dependent row.
   - `createIndex` / `dropIndex`, `createView` / `dropView`,
+    `createProcedure` / `dropProcedure`, and scalar/inline-TVF
+    `createFunction` / `dropFunction`; module definitions persist in
+    `sys.sql_modules` and functions use sys.objects type `FN` / `IF`;
     `addColumns` / `dropColumns`.
 - Lookups — `objectIdOf(db, name)` (schema-aware, case-insensitive),
   `tableColumns(db, objectId)` (the engine derives TDS column metadata from
