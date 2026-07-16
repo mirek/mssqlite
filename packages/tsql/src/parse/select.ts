@@ -107,6 +107,79 @@ const tablePrimary: Parser.t<Ast.TableSource> =
     )
   )
 
+const requiredAlias: Parser.t<string> =
+  C.first(
+    C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
+    C.anyIdentifier
+  )
+
+const pivot =
+  (source: Ast.TableSource): Parser.t<Ast.TableSource> =>
+    C.map(
+      C.seq(
+        C.keyword('pivot'),
+        C.parens(C.seq(
+          C.qualifiedName,
+          C.parens(expression),
+          C.keyword('for'),
+          C.qualifiedName,
+          C.keyword('in'),
+          C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))
+        )),
+        requiredAlias
+      ),
+      ([ , [ name, expression_, , pivotColumn, , values ], alias_ ]) => ({
+        kind: 'pivot' as const,
+        source,
+        aggregate: { name, expression: expression_ },
+        pivotColumn,
+        values,
+        alias: alias_
+      })
+    )
+
+const unpivot =
+  (source: Ast.TableSource): Parser.t<Ast.TableSource> =>
+    C.map(
+      C.seq(
+        C.keyword('unpivot'),
+        C.parens(C.seq(
+          C.anyIdentifier,
+          C.keyword('for'),
+          C.anyIdentifier,
+          C.keyword('in'),
+          C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))
+        )),
+        requiredAlias
+      ),
+      ([ , [ valueColumn, , pivotColumn, , columns ], alias_ ]) => ({
+        kind: 'unpivot' as const,
+        source,
+        valueColumn,
+        pivotColumn,
+        columns,
+        alias: alias_
+      })
+    )
+
+const tableFactor: Parser.t<Ast.TableSource> =
+  reader => {
+    const primary = tablePrimary(reader)
+    if (Result.failed(primary)) {
+      return primary
+    }
+    let source = primary.value
+    let current = primary.reader
+    for (;;) {
+      const transformed = C.first(pivot(source), unpivot(source))(current)
+      if (Result.failed(transformed)) {
+        return Result.ok(current, source)
+      }
+      source = transformed.value
+      current = transformed.reader
+    }
+  }
+
 const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply'> =
   C.first(
     C.map(C.seq(C.keyword('cross'), C.keyword('apply')), () => 'crossApply' as const),
@@ -122,7 +195,7 @@ const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossA
 /** Table source with joins, left-associative. */
 export const tableSource: Parser.t<Ast.TableSource> =
   reader => {
-    const head = tablePrimary(reader)
+    const head = tableFactor(reader)
     if (Result.failed(head)) {
       return head
     }
@@ -133,7 +206,7 @@ export const tableSource: Parser.t<Ast.TableSource> =
       if (Result.failed(kind)) {
         break
       }
-      const right = tablePrimary(kind.reader)
+      const right = tableFactor(kind.reader)
       if (Result.failed(right)) {
         return right
       }

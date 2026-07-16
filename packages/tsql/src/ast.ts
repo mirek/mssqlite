@@ -3,6 +3,13 @@ import type * as TypeName from './type-name.ts'
 /** Multi-part object name, e.g. `db.schema.table` → `[ 'db', 'schema', 'table' ]`. */
 export type QualifiedName = readonly string[]
 
+/** Declared source column metadata populated by the execution engine. */
+export type SourceColumn = {
+  readonly name: string,
+  readonly type?: TypeName.t,
+  readonly nullable?: boolean
+}
+
 /** ORDER BY item. */
 export type OrderBy = {
   readonly expression: Expression,
@@ -111,7 +118,9 @@ export type TableSource =
       readonly kind: 'table',
       readonly name: QualifiedName,
       readonly alias?: string,
-      readonly hints?: readonly string[]
+      readonly hints?: readonly string[],
+      /** Execution-time source metadata, populated by the engine when needed. */
+      readonly columns?: readonly SourceColumn[]
     }
   | {
       readonly kind: 'function',
@@ -122,6 +131,22 @@ export type TableSource =
       readonly columns?: readonly string[]
     }
   | { readonly kind: 'derived', readonly select: Select, readonly alias: string }
+  | {
+      readonly kind: 'pivot',
+      readonly source: TableSource,
+      readonly aggregate: { readonly name: QualifiedName, readonly expression: Expression },
+      readonly pivotColumn: QualifiedName,
+      readonly values: readonly string[],
+      readonly alias: string
+    }
+  | {
+      readonly kind: 'unpivot',
+      readonly source: TableSource,
+      readonly valueColumn: string,
+      readonly pivotColumn: string,
+      readonly columns: readonly string[],
+      readonly alias: string
+    }
   | {
       readonly kind: 'join',
       readonly join: 'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply',

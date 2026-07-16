@@ -47,7 +47,8 @@ const connection = new Connection({
   remain scoped to the batch or stored procedure that declares them;
   `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` stream ordinary result
   rows with predeclared metadata; common correlated APPLY shapes are
-  translated before execution.
+  translated before execution. PIVOT and UNPIVOT rewrites preserve generated
+  result names and types on the wire, including all-NULL columns.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, OUTPUT parameters via RETURNVALUE,

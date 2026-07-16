@@ -76,6 +76,12 @@ the engine:
   ORDER BY ...)`. CROSS APPLY uses INNER JOIN, OUTER APPLY uses LEFT JOIN.
   Complex correlation and star projection over ranked helper columns are
   rejected explicitly.
+- **PIVOT/UNPIVOT use source-schema-aware lowering** — the engine annotates
+  table leaves with catalog or table-variable column metadata. PIVOT emits
+  one conditional aggregate per listed value and groups all remaining input
+  columns. UNPIVOT materializes the source once, expands it with `UNION ALL`,
+  and filters NULL values. The metadata annotations also provide stable TDS
+  types for generated columns; incompatible known UNPIVOT types are rejected.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -162,7 +168,7 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE FUNCTION/TRIGGER, PIVOT, APPLY, cursors, or sequences. MERGE
+- No CREATE FUNCTION/TRIGGER, cursors, or sequences. MERGE
   OUTPUT may not reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite
   transaction and therefore roll back with it.

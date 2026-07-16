@@ -102,6 +102,32 @@ test('apply maps supported correlated string split sources to lateral virtual ta
   expect(topOne).toContain('"latest"."__mssqlite_apply_rank" = 1')
 })
 
+test('pivot and unpivot render one source evaluation and reject ambiguous output', () => {
+  const pivot = sqlOf(`
+    SELECT * FROM (SELECT region, quarter, amount FROM sales) source
+    PIVOT (SUM(amount) FOR quarter IN ([Q1], [Q2])) result
+  `)
+  expect(pivot).toContain('sum(CASE WHEN "quarter" = \'Q1\' THEN "amount" END) AS "Q1"')
+  expect(pivot.match(/FROM "sales"/g)).toHaveLength(1)
+
+  const unpivot = sqlOf(`
+    SELECT * FROM (SELECT id, [Q1], [Q2] FROM quarterly) source
+    UNPIVOT (amount FOR quarter IN ([Q1], [Q2])) result
+  `)
+  expect(unpivot).toContain('AS MATERIALIZED')
+  expect(unpivot.match(/FROM "quarterly"/g)).toHaveLength(1)
+  expect(unpivot).toContain('WHERE "Q1" IS NOT NULL UNION ALL')
+
+  expect(() => sqlOf(`
+    SELECT * FROM (SELECT region, quarter, amount FROM sales) source
+    PIVOT (SUM(amount) FOR quarter IN ([region])) result
+  `)).toThrow(UnsupportedError)
+  expect(() => sqlOf(`
+    SELECT * FROM (SELECT id, [Q1], [Q2] FROM quarterly) source
+    UNPIVOT (id FOR quarter IN ([Q1], [Q2])) result
+  `)).toThrow(UnsupportedError)
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')

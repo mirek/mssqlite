@@ -24,7 +24,8 @@ const { sql, variables } = statement(parseStatement(
 - `scalar(ast)` — renders a single expression (engine uses it for variable
   initializers, IF/WHILE conditions, PRINT).
 - `UnsupportedError` — thrown for constructs with no SQLite story
-  (MERGE, PIVOT, …); the engine maps it to an MSSQL error response.
+  (procedural statements, MERGE, …); the engine maps it to an MSSQL error
+  response or interprets the construct itself.
 
 ## Mapping decisions
 
@@ -50,6 +51,12 @@ const { sql, variables } = statement(parseStatement(
   semantics, OUTER uses LEFT/NULL-extension semantics. Other TVFs, complex
   derived queries, and star projection over rewritten top-one sources fail
   cleanly rather than exposing helper columns or changing cardinality.
+- **PIVOT / UNPIVOT** — PIVOT lowers to conditional aggregates grouped by
+  every non-value/non-pivot input column. UNPIVOT materializes its source
+  once and expands listed columns with `UNION ALL`, dropping NULL values.
+  Duplicate output names and incompatible declared UNPIVOT types fail
+  cleanly; generated SELECT metadata preserves aggregate/value types even
+  for empty or all-NULL outputs.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

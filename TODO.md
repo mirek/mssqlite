@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [PIVOT and UNPIVOT](todo/pivot-unpivot.md) — Rewrite pivot operations to conditional aggregation and `UNION ALL`.
 - [Grouping sets](todo/grouping-sets.md) — Expand `ROLLUP`, `CUBE`, and `GROUPING SETS` with `GROUPING()` support.
 - [FOR JSON](todo/for-json.md) — Render `FOR JSON PATH` and `AUTO` with SQLite JSON functions.
 - [Scalar user functions](todo/scalar-user-functions.md) — Persist and execute scalar and inline table-valued functions.

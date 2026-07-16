@@ -525,6 +525,42 @@ test('cross and outer apply preserve lateral join order', () => {
   expect(() => parseStatement('SELECT * FROM t OUTER APPLY f(1) ON 1 = 1')).toThrow()
 })
 
+test('pivot and unpivot parse as postfix table transforms', () => {
+  expect(parseStatement(`
+    SELECT region, [Q1], [Q2]
+    FROM (SELECT region, quarter, amount FROM sales) src
+    PIVOT (SUM(amount) FOR quarter IN ([Q1], [Q2])) [p]
+  `)).toMatchObject({
+    from: {
+      kind: 'pivot',
+      alias: 'p',
+      source: { kind: 'derived', alias: 'src' },
+      aggregate: {
+        name: [ 'SUM' ],
+        expression: { kind: 'column', name: [ 'amount' ] }
+      },
+      pivotColumn: [ 'quarter' ],
+      values: [ 'Q1', 'Q2' ]
+    }
+  })
+  expect(parseStatement(`
+    SELECT id, quarter, amount
+    FROM quarterly
+    UNPIVOT (amount FOR quarter IN ([Q1], [Q2], [Q3])) u
+  `)).toMatchObject({
+    from: {
+      kind: 'unpivot',
+      alias: 'u',
+      source: { kind: 'table', name: [ 'quarterly' ] },
+      valueColumn: 'amount',
+      pivotColumn: 'quarter',
+      columns: [ 'Q1', 'Q2', 'Q3' ]
+    }
+  })
+  expect(() => parseStatement('SELECT * FROM t PIVOT (SUM(v) FOR k IN ()) p')).toThrow()
+  expect(() => parseStatement('SELECT * FROM t UNPIVOT (v FOR k IN (a))')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',
