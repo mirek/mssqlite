@@ -265,6 +265,13 @@ export type ProcedureParameter = {
   readonly output: boolean
 }
 
+/** Parameter declaration of CREATE FUNCTION. */
+export type FunctionParameter = {
+  readonly name: string,
+  readonly type: TypeName.t,
+  readonly default_?: Expression
+}
+
 /** Scalar or table-shaped local variable declaration. */
 export type Declaration =
   | {
@@ -443,6 +450,22 @@ export type Statement =
     }
   | {
       readonly kind: 'dropProcedure',
+      readonly names: readonly QualifiedName[],
+      readonly ifExists: boolean
+    }
+  | {
+      readonly kind: 'createFunction',
+      readonly name: QualifiedName,
+      readonly action: 'create' | 'alter' | 'createOrAlter',
+      readonly parameters: readonly FunctionParameter[],
+      readonly returns:
+        | { readonly kind: 'scalar', readonly type: TypeName.t, readonly body: readonly Statement[] }
+        | { readonly kind: 'table', readonly select: Select },
+      /** Source text of the whole batch, stored in sys.sql_modules. */
+      readonly definition: string
+    }
+  | {
+      readonly kind: 'dropFunction',
       readonly names: readonly QualifiedName[],
       readonly ifExists: boolean
     }

@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [Scalar user functions](todo/scalar-user-functions.md) — Persist and execute scalar and inline table-valued functions.
 - [Triggers](todo/triggers.md) — Support `AFTER` and `INSTEAD OF` trigger definitions and execution.
 - [Cursors](todo/cursors.md) — Interpret the cursor lifecycle and maintain `@@FETCH_STATUS`.
 - [Sequences](todo/sequences.md) — Back `CREATE SEQUENCE` and `NEXT VALUE FOR` with cataloged counters.

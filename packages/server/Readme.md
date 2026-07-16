@@ -52,6 +52,8 @@ const connection = new Connection({
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with
   stable metadata. FOR JSON PATH/AUTO returns the SQL Server magic-named
   `nvarchar(max)` JSON column and streams large values with PLP framing.
+  Persisted scalar and inline table-valued user functions execute through the
+  same engine and expose their declared return/source metadata.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, OUTPUT parameters via RETURNVALUE,

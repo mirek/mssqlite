@@ -451,6 +451,31 @@ test('stored procedures execute over the wire via RPC callProcedure', async () =
   expect(outcome.outputs['sum']).toBe(42)
 })
 
+test('scalar and inline table functions execute over the wire', async () => {
+  await query(`
+    CREATE FUNCTION dbo.wire_double(@value INT)
+    RETURNS BIGINT AS BEGIN RETURN @value * 2 END
+  `)
+  const scalar = await query('SELECT dbo.wire_double(21) AS value')
+  expect(scalar.rows).toEqual([ { value: '42' } ])
+  expect(scalar.columns).toEqual([ { name: 'value', type: 'IntN', length: 8 } ])
+
+  await query(`
+    CREATE TABLE wire_function_values (id INT, category INT, value INT);
+    INSERT INTO wire_function_values VALUES (1, 1, 10), (2, 1, 20), (3, 2, 30);
+  `)
+  await query(`
+    CREATE FUNCTION dbo.wire_values(@category INT)
+    RETURNS TABLE AS RETURN (
+      SELECT id, value FROM wire_function_values WHERE category = @category
+    )
+  `)
+  const table = await query(`
+    SELECT id, value FROM dbo.wire_values(1) AS values_ ORDER BY id
+  `)
+  expect(table.rows).toEqual([ { id: 1, value: 10 }, { id: 2, value: 20 } ])
+})
+
 test('exec with return status over a batch', async () => {
   await query('CREATE PROCEDURE dbo.status_only AS RETURN 5')
   const result = await query('DECLARE @rc INT EXEC @rc = status_only SELECT @rc AS rc')

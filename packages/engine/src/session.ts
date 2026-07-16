@@ -39,6 +39,14 @@ export type Procedure = {
   readonly definition: string
 }
 
+/** Registered scalar or inline table-valued user function. */
+export type UserFunction = {
+  readonly name: Ast.QualifiedName,
+  readonly parameters: readonly Ast.FunctionParameter[],
+  readonly returns: Extract<Ast.Statement, { kind: 'createFunction' }>['returns'],
+  readonly definition: string
+}
+
 /** Server-wide state shared by sessions. */
 export type Server = {
   readonly db: DatabaseSync,
@@ -47,6 +55,10 @@ export type Server = {
   readonly version: string,
   /** Stored procedures keyed by lowercased `schema.name`. */
   readonly procedures: Map<string, Procedure>,
+  /** User functions keyed by lowercased `schema.name`. */
+  readonly functions: Map<string, UserFunction>,
+  /** SQLite function names whose dispatch callback has been installed. */
+  readonly registeredFunctions: Set<string>,
   /** Session whose batch is executing — read by session-scoped UDFs. */
   current: Session | undefined
 }
@@ -97,6 +109,9 @@ export const procedureKey =
     return (parts.length === 2 ? `${parts[0]}.${parts[1]}` : `dbo.${parts[0]}`).toLowerCase()
   }
 
+export const functionKey =
+  procedureKey
+
 // Re-registers procedures persisted in sys.sql_modules (file-backed
 // databases survive restarts) by re-parsing their stored definitions.
 const loadProcedures =
@@ -124,6 +139,31 @@ const loadProcedures =
     }
   }
 
+const loadUserFunctions =
+  (server_: Server): void => {
+    const rows = server_.db.prepare(
+      `SELECT m.definition FROM "sys.sql_modules" m
+        JOIN "sys.objects" o ON o.object_id = m.object_id
+        WHERE o.type IN ('FN', 'IF') AND m.definition IS NOT NULL`
+    ).all() as { definition: string }[]
+    for (const row of rows) {
+      try {
+        for (const statement of parse(row.definition)) {
+          if (statement.kind === 'createFunction') {
+            server_.functions.set(functionKey(statement.name), {
+              name: statement.name,
+              parameters: statement.parameters,
+              returns: statement.returns,
+              definition: row.definition
+            })
+          }
+        }
+      } catch {
+        // A definition this build can no longer parse stays catalog-only.
+      }
+    }
+  }
+
 /** @returns server over a SQLite database path (`:memory:` by default). */
 export const server =
   (options: { path?: string, databaseName?: string, serverName?: string } = {}): Server => {
@@ -137,10 +177,13 @@ export const server =
       serverName: options.serverName ?? 'mssqlite',
       version: 'Microsoft SQL Server 2019 (mssqlite) - 15.0.2000.5 (X64)',
       procedures: new Map(),
+      functions: new Map(),
+      registeredFunctions: new Set(),
       current: undefined
     }
     registerFunctions(server_)
     loadProcedures(server_)
+    loadUserFunctions(server_)
     return server_
   }
 

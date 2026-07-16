@@ -145,6 +145,48 @@ test('create, alter and drop procedure parse', () => {
   })
 })
 
+test('scalar and inline table functions parse', () => {
+  expect(parseStatement(`
+    CREATE FUNCTION dbo.add_tax(@amount DECIMAL(10,2), @rate INT = 20)
+    RETURNS DECIMAL(10,2) AS
+    BEGIN
+      DECLARE @result DECIMAL(10,2) = @amount + @amount * @rate / 100
+      RETURN @result
+    END
+  `)).toMatchObject({
+    kind: 'createFunction',
+    action: 'create',
+    name: [ 'dbo', 'add_tax' ],
+    parameters: [
+      { name: '@amount', type: { name: 'decimal', args: [ 10, 2 ] } },
+      { name: '@rate', default_: { kind: 'number', value: '20' } }
+    ],
+    returns: {
+      kind: 'scalar',
+      type: { name: 'decimal', args: [ 10, 2 ] },
+      body: [ { kind: 'declare' }, { kind: 'return' } ]
+    }
+  })
+  expect(parseStatement(`
+    CREATE OR ALTER FUNCTION dbo.orders_for(@customer INT)
+    RETURNS TABLE AS RETURN (
+      SELECT id, amount FROM orders WHERE customer_id = @customer
+    )
+  `)).toMatchObject({
+    kind: 'createFunction',
+    action: 'createOrAlter',
+    parameters: [ { name: '@customer', type: { name: 'int' } } ],
+    returns: { kind: 'table', select: { kind: 'select' } }
+  })
+  expect(parseStatement('DROP FUNCTION IF EXISTS dbo.add_tax')).toMatchObject({
+    kind: 'dropFunction',
+    ifExists: true,
+    names: [ [ 'dbo', 'add_tax' ] ]
+  })
+  expect(() => parseStatement(
+    'CREATE FUNCTION f() RETURNS INT AS RETURN 1')).toThrow()
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'

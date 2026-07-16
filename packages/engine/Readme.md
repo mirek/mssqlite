@@ -95,6 +95,13 @@ const items = executeBatch(s, `
 - **EXEC sp_executesql** — full support from T-SQL and (via `executeSql`)
   from RPC. User procedures registered by CREATE PROCEDURE execute
   interpreted; unknown procedures report error 2812.
+- **User functions** — CREATE/ALTER/DROP persists scalar (`FN`) and inline
+  table-valued (`IF`) definitions in `sys.objects`/`sys.sql_modules` and
+  reloads them on server startup. Scalar callbacks enter isolated parameter
+  and local-variable scopes with defaults, recursive calls, a 32-level limit,
+  declared return metadata, and side-effect validation. Inline TVFs substitute
+  call arguments into their SELECT AST and render as derived sources; simple
+  correlated APPLY calls lower to equality joins with CROSS/OUTER semantics.
 
 ## Column metadata
 
