@@ -75,7 +75,9 @@ const binaryOp =
     if (decimal && leftNumeric !== undefined && rightNumeric !== undefined) {
       if ([ '+', '-', '*', '/', '%' ].includes(expression_.operator)) {
         const result = Decimal.resultType(expression_.operator, leftNumeric, rightNumeric)
-        return `mssqlite_decimal_arithmetic('${expression_.operator}', ${left}, ${right}, ` +
+        const fn = ctx.generated ? 'mssqlite_decimal_generated_arithmetic' :
+          'mssqlite_decimal_arithmetic'
+        return `${fn}('${expression_.operator}', ${left}, ${right}, ` +
           `${leftNumeric.scale}, ${rightNumeric.scale}, ${result.precision}, ${result.scale})`
       }
       if ([ '=', '<>', '!=', '<', '<=', '>', '>=', '!>', '!<' ].includes(expression_.operator)) {
@@ -97,7 +99,8 @@ const binaryOp =
           return `(${left} || ${right})`
         }
         if (leftType === 'number' && rightType === 'number') {
-          return `mssqlite_arithmetic('+', ${left}, ${right}, ${width})`
+          const fn = ctx.generated ? 'mssqlite_generated_arithmetic' : 'mssqlite_arithmetic'
+          return `${fn}('+', ${left}, ${right}, ${width})`
         }
         return `mssqlite_add(${left}, ${right})`
       }
@@ -105,7 +108,8 @@ const binaryOp =
       case '*':
       case '/':
       case '%':
-        return `mssqlite_arithmetic('${expression_.operator}', ${left}, ${right}, ${width})`
+        return `${ctx.generated ? 'mssqlite_generated_arithmetic' : 'mssqlite_arithmetic'}(` +
+          `'${expression_.operator}', ${left}, ${right}, ${width})`
       case 'and':
         return `(${left} AND ${right})`
       case 'or':

@@ -648,8 +648,29 @@ const referencesClause =
   }
 
 const columnDefinition =
-  (ctx: Context.t, column: Ast.ColumnDefinition, primaryKeyColumns: readonly string[]): string => {
+  (
+    ctx: Context.t,
+    column: Ast.ColumnDefinition,
+    primaryKeyColumns: readonly string[],
+    sourceColumns: readonly Ast.SourceColumn[] = []
+  ): string => {
     const parts: string[] = [ Quote.identifier(column.name) ]
+    if (column.computed !== undefined) {
+      const type = Type.columnType(column.type)
+      if (type !== '') {
+        parts.push(type)
+      }
+      const source: Ast.TableSource = {
+        kind: 'table', name: [ '__computed_source' ], columns: sourceColumns
+      }
+      const generated = Context.withSourceTypes(ctx, source, () =>
+        Context.withGenerated(ctx, () => expression(ctx, column.computed?.expression ?? { kind: 'null' })))
+      parts.push(`GENERATED ALWAYS AS (${generated}) ${column.computed.persisted ? 'STORED' : 'VIRTUAL'}`)
+      if (column.nullable === false) {
+        parts.push('NOT NULL')
+      }
+      return parts.join(' ')
+    }
     const isPrimaryKey = column.primaryKey === true ||
       (primaryKeyColumns.length === 1 && primaryKeyColumns[0]?.toLowerCase() === column.name.toLowerCase())
     if (column.identity !== undefined) {
@@ -735,7 +756,16 @@ const createTable =
       .filter(column => column.identity !== undefined)
       .map(column => column.name)
     const members = [
-      ...statement_.columns.map(column => columnDefinition(ctx, column, primaryKeyColumns)),
+      ...statement_.columns.map(column => columnDefinition(
+        ctx,
+        column,
+        primaryKeyColumns,
+        statement_.columns.map(candidate => ({
+          name: candidate.name,
+          type: candidate.type,
+          nullable: candidate.nullable !== false
+        }))
+      )),
       ...statement_.constraints
         .map(constraint => tableConstraint(ctx, constraint, identityColumns))
         .filter((rendered): rendered is string => rendered !== undefined)

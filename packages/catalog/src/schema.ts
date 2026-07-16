@@ -201,6 +201,14 @@ export const tables: readonly string[] = [
     is_not_for_replication INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (object_id, column_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS "sys.computed_columns_extra" (
+    object_id INTEGER NOT NULL,
+    column_id INTEGER NOT NULL,
+    definition TEXT,
+    uses_database_collation INTEGER NOT NULL DEFAULT 0,
+    is_persisted INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (object_id, column_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS "sys.sql_modules" (
     object_id INTEGER PRIMARY KEY,
     definition TEXT,
@@ -263,6 +271,12 @@ export const views: readonly string[] = [
     JOIN "sys.identity_columns_extra" ic
       ON c.object_id = ic.object_id AND c.column_id = ic.column_id
     WHERE c.is_identity = 1`,
+  `CREATE VIEW IF NOT EXISTS "sys.computed_columns" AS
+    SELECT c.*, cc.definition, cc.uses_database_collation, cc.is_persisted
+    FROM "sys.columns" c
+    JOIN "sys.computed_columns_extra" cc
+      ON c.object_id = cc.object_id AND c.column_id = cc.column_id
+    WHERE c.is_computed = 1`,
   `CREATE VIEW IF NOT EXISTS "sys.sequences" AS
     SELECT o.*,
       q.system_type_id, q.user_type_id, q.precision, q.scale,

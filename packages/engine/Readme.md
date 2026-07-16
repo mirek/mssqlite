@@ -150,8 +150,11 @@ Result columns get TDS `TYPE_INFO` three ways: table-valued-function,
 PIVOT/UNPIVOT, advanced-grouping, and FOR JSON renderings provide declared hints before
 execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
-definitions (exact declared types, nullability); computed columns fall back to value-shape inference
-(int32/int64/float/nvarchar(max)/varbinary(max)/bit).
+definitions (exact declared types and nullability). Computed definitions have
+their type inferred before DDL and catalog
+registration, so VIRTUAL/STORED values retain declared metadata even for empty
+results and after restart. Direct writes and nondeterministic definitions map
+to SQL Server errors 271 and 4936.
 
 ## UDFs
 

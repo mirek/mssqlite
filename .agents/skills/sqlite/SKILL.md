@@ -94,6 +94,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   DECIMAL/NUMERIC: columns have TEXT affinity and contain canonical fixed-scale
   strings. Scalar and aggregate UDFs perform scaled-BigInt operations; a
   sortable decimal key UDF replaces lexical TEXT ordering.
+- T-SQL computed columns lower to `GENERATED ALWAYS AS`: VIRTUAL for ordinary
+  definitions and STORED for PERSISTED. CREATE supports both; SQLite permits
+  ALTER TABLE ADD only for VIRTUAL generated columns. Expressions may reference
+  columns in the same row and deterministic scalar functions, but not
+  subqueries, aggregates, window functions, or nondeterministic callbacks.
+  Exact decimal and checked integer generated expressions use separately
+  registered deterministic UDF names so SQLite accepts them in schema DDL.
 - SQLite has no ROLLUP, CUBE, GROUPING SETS, or GROUPING function. mssqlite
   expands them into one ordinary GROUP BY query per grouping set joined by
   UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch

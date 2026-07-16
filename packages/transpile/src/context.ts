@@ -8,6 +8,7 @@ export type Context = {
   /** Lowercased variable tokens in order of first use, e.g. `@x`, `@@rowcount`. */
   readonly variables: string[]
   readonly columnTypes: ReadonlyMap<string, TypeName.t>[]
+  generated: boolean
   nextSource: number
 }
 
@@ -17,7 +18,19 @@ export type t =
 /** @returns fresh render context. */
 export const of =
   (): Context =>
-    ({ variables: [], columnTypes: [], nextSource: 1 })
+    ({ variables: [], columnTypes: [], generated: false, nextSource: 1 })
+
+/** Runs expression rendering in SQLite generated-column mode. */
+export const withGenerated =
+  <T>(ctx: Context, run: () => T): T => {
+    const saved = ctx.generated
+    ctx.generated = true
+    try {
+      return run()
+    } finally {
+      ctx.generated = saved
+    }
+  }
 
 const sourceColumns =
   (source: Ast.TableSource): readonly { readonly key: string, readonly type: TypeName.t }[] => {

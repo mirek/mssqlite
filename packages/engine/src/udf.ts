@@ -238,6 +238,8 @@ export const registerFunctions =
     })
     define('mssqlite_arithmetic', (operator, left, right, width) =>
       checkedArithmetic(server, operator, left, right, width), { deterministic: false })
+    define('mssqlite_generated_arithmetic', (operator, left, right, width) =>
+      checkedArithmetic(server, operator, left, right, width))
     define('mssqlite_decimal_cast', (value, precision, scale, try_) =>
       DecimalExact.cast(decimalArgument(value), Number(precision), Number(scale), Number(try_) !== 0))
     define('mssqlite_decimal_arithmetic',
@@ -253,6 +255,11 @@ export const registerFunctions =
           throw error
         }
       }, { deterministic: false })
+    define('mssqlite_decimal_generated_arithmetic',
+      (operator, left, right, leftScale, rightScale, precision, scale) =>
+        DecimalExact.arithmetic(
+          text(operator), decimalArgument(left), decimalArgument(right),
+          Number(leftScale), Number(rightScale), Number(precision), Number(scale)))
     define('mssqlite_decimal_compare', (left, right, leftScale, rightScale) =>
       DecimalExact.compare(
         decimalArgument(left), decimalArgument(right), Number(leftScale), Number(rightScale)))

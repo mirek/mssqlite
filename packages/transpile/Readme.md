@@ -37,6 +37,9 @@ const { sql, variables } = statement(parseStatement(
   schema.
 - **Variables** — `@x` stays a native SQLite `@x` parameter (lowercased);
   globals map to engine-bound parameters (`@@ROWCOUNT` → `@__rowcount`).
+- **Computed columns** — result types are inferred from base/earlier columns,
+  then definitions render as SQLite VIRTUAL or PERSISTED/STORED generated
+  columns. Generated expression mode uses deterministic checked numeric UDFs.
 
 Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
 operands execute once and the engine can enforce divide-by-zero/overflow and

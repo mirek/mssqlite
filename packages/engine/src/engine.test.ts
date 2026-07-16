@@ -52,6 +52,91 @@ test('create, insert, select round trip with catalog metadata', () => {
   expect(result.rows).toEqual([ [ 1, 'Alice', 30 ], [ 2, 'Bob', null ] ])
 })
 
+test('computed columns infer types, recompute, index and expose catalog metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE computed_products (
+      name NVARCHAR(20),
+      quantity INT,
+      price DECIMAL(10,2),
+      total AS quantity * price PERSISTED,
+      normalized AS UPPER(name)
+    )
+    INSERT INTO computed_products (name, quantity, price)
+      VALUES (N'apple', 3, 1.25), (N'pear', 2, 2.50)
+    CREATE INDEX ix_computed_total ON computed_products (total)
+    UPDATE computed_products SET quantity = 4 WHERE name = N'apple'
+  `)
+  const result = rowsOf(executeBatch(s, `
+    SELECT name, total, normalized FROM computed_products ORDER BY total
+  `))
+  expect(result.rows).toEqual([
+    [ 'apple', '5.00', 'APPLE' ], [ 'pear', '5.00', 'PEAR' ]
+  ])
+  expect(result.columns[1]?.typeInfo).toMatchObject({ precision: 21, scale: 2 })
+  expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.nvarchar)
+  expect(rowsOf(executeBatch(s, `
+    SELECT name, is_computed, definition, is_persisted
+    FROM sys.computed_columns
+    WHERE object_id = OBJECT_ID(N'computed_products')
+    ORDER BY column_id
+  `)).rows).toEqual([
+    [ 'total', 1, 'quantity * price', 1 ],
+    [ 'normalized', 1, 'UPPER ( name )', 0 ]
+  ])
+  const hidden = s.db.prepare('PRAGMA table_xinfo("computed_products")').all() as
+    { name: string, hidden: number }[]
+  expect(hidden.filter(column => column.hidden !== 0).map(column => [ column.name, column.hidden ]))
+    .toEqual([ [ 'total', 3 ], [ 'normalized', 2 ] ])
+  expect(s.db.prepare(
+    'SELECT COUNT(*) AS n FROM "sys.index_columns" ic JOIN "sys.columns" c ' +
+    'ON c.object_id = ic.object_id AND c.column_id = ic.column_id WHERE c.name = \'total\''
+  ).get()).toEqual({ n: 1 })
+})
+
+test('computed columns reject direct writes and nondeterministic persistence', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE computed_guard (base INT, doubled AS base * 2)')
+  expect(() => executeBatch(s, 'INSERT INTO computed_guard (base, doubled) VALUES (1, 2)'))
+    .toThrowError(expect.objectContaining({ number: 271 }) as Error)
+  executeBatch(s, 'INSERT INTO computed_guard VALUES (2)')
+  expect(() => executeBatch(s, 'UPDATE computed_guard SET doubled = 8'))
+    .toThrowError(expect.objectContaining({ number: 271 }) as Error)
+  expect(() => executeBatch(s, 'CREATE TABLE bad_computed (base INT, value AS RAND() PERSISTED)'))
+    .toThrowError(expect.objectContaining({ number: 4936 }) as Error)
+  expect(() => executeBatch(s, `
+    CREATE TABLE bad_computed_query (base INT, value AS (SELECT MAX(base)))
+  `)).toThrowError(expect.objectContaining({ number: 1046 }) as Error)
+})
+
+test('computed columns support ALTER, table variables and database restart', () => {
+  const path = join(tmpdir(), `mssqlite-computed-${process.pid}-${Date.now()}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, `
+      CREATE TABLE computed_restart (base INT, stored AS base + 1 PERSISTED);
+      ALTER TABLE computed_restart ADD virtual AS base * 2;
+      INSERT INTO computed_restart VALUES (5)
+    `)
+    const tableVariable = rowsOf(executeBatch(first, `
+      DECLARE @values TABLE (base INT, calculated AS base + 10)
+      INSERT INTO @values VALUES (1), (2)
+      SELECT calculated FROM @values ORDER BY calculated
+    `))
+    expect(tableVariable.rows).toEqual([ [ 11 ], [ 12 ] ])
+    const second = session(server({ path }))
+    expect(rowsOf(executeBatch(second, `
+      SELECT base, stored, virtual FROM computed_restart
+    `)).rows).toEqual([ [ 5, 6, 10 ] ])
+    expect(rowsOf(executeBatch(second, `
+      SELECT name, is_persisted FROM sys.computed_columns
+      WHERE object_id = OBJECT_ID(N'computed_restart') ORDER BY column_id
+    `)).rows).toEqual([ [ 'stored', 1 ], [ 'virtual', 0 ] ])
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
 test('variables, set and select assignment', () => {
   const s = open()
   executeBatch(s, 'DECLARE @x INT = 1 SET @x = @x + 10')

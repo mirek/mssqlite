@@ -42,8 +42,11 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   start/increment/bounds, cycle/cache settings, current/exhausted state, and
   last-used value. Numeric state is stored losslessly as decimal text and cast
   by the view for ordinary catalog queries.
-- Not yet populated: `sys.computed_columns` (parser accepts computed
-  columns but transpile rejects them), extended properties.
+- `sys.computed_columns` joins computed `sys.columns` rows to
+  `sys.computed_columns_extra`, exposing normalized definition text,
+  `uses_database_collation`, and `is_persisted`. CREATE/ALTER/DROP maintain
+  both stores; the catalog's inferred type fields drive result metadata.
+- Not yet populated: extended properties.
 
 ---
 

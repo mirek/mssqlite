@@ -12,6 +12,7 @@ import {
 } from './sequence.ts'
 import {
   declareTableVariable,
+  columnsOfTable,
   resolveTableVariableExpression,
   resolveTableVariables,
   withTableVariableScope
@@ -155,12 +156,20 @@ const decimalArgument =
     value instanceof Uint8Array ? String(value) : typeof value === 'boolean' ? Number(value) : value
 
 const targetColumns =
-  (session: Session, name: Ast.QualifiedName): readonly { readonly name: string, readonly type?: Ast.ColumnDefinition['type'] }[] => {
+  (session: Session, name: Ast.QualifiedName): readonly {
+    readonly name: string,
+    readonly type?: Ast.ColumnDefinition['type'],
+    readonly computed?: boolean
+  }[] => {
     const backing = name[name.length - 1]?.toLowerCase()
     const variable = [ ...session.tableVariables.values() ].find(candidate =>
       candidate.table[candidate.table.length - 1]?.toLowerCase() === backing)
     if (variable !== undefined) {
-      return variable.columns
+      return variable.columns.map(column => ({
+        name: column.name,
+        type: column.type,
+        ...column.computed === undefined ? {} : { computed: true }
+      }))
     }
     const objectId = Catalog.objectIdOf(session.db, name)
     if (objectId === undefined) {
@@ -171,7 +180,11 @@ const targetColumns =
         column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
           column.system_type_id === 60 ? { name: 'money', args: [] } :
             column.system_type_id === 122 ? { name: 'smallmoney', args: [] } : undefined
-      return { name: column.name, ...type === undefined ? {} : { type } }
+      return {
+        name: column.name,
+        ...type === undefined ? {} : { type },
+        ...column.is_computed === 0 ? {} : { computed: true }
+      }
     })
   }
 
@@ -184,7 +197,8 @@ const resolveDecimalDml =
   (session: Session, statement: Ast.Statement): Ast.Statement => {
     if (statement.kind === 'insert') {
       const all = targetColumns(session, statement.table)
-      const names = statement.columns ?? all.map(column => column.name)
+      const names = statement.columns ?? all.filter(column => column.computed !== true)
+        .map(column => column.name)
       const types = names.map(name => decimalType(
         all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
         { name: '', args: [] }))
@@ -1038,9 +1052,10 @@ const executeStatementInner =
         return undefined
       }
       case 'createTable': {
-        const rendered = Transpile.statement(statement)
+        const resolved = { ...statement, columns: Transpile.Computed.columns(statement.columns) }
+        const rendered = Transpile.statement(resolved)
         session.db.exec(rendered.sql)
-        Catalog.createTable(session.db, statement)
+        Catalog.createTable(session.db, resolved)
         return undefined
       }
       case 'dropTable':
@@ -1073,19 +1088,28 @@ const executeStatementInner =
           Catalog.dropView(session.db, name)
         }
         return undefined
-      case 'alterTable':
-        session.db.exec(Transpile.statement(statement).sql)
-        switch (statement.action.kind) {
+      case 'alterTable': {
+        const resolved = statement.action.kind === 'addColumns' ? {
+          ...statement,
+          action: {
+            ...statement.action,
+            columns: Transpile.Computed.columns(
+              statement.action.columns, columnsOfTable(session, statement.name))
+          }
+        } : statement
+        session.db.exec(Transpile.statement(resolved).sql)
+        switch (resolved.action.kind) {
           case 'addColumns':
-            Catalog.addColumns(session.db, statement.name, statement.action.columns)
+            Catalog.addColumns(session.db, resolved.name, resolved.action.columns)
             break
           case 'dropColumns':
-            Catalog.dropColumns(session.db, statement.name, statement.action.columns)
+            Catalog.dropColumns(session.db, resolved.name, resolved.action.columns)
             break
           default:
             break
         }
         return undefined
+      }
       case 'declare':
         for (const declaration of statement.declarations) {
           if (declaration.kind === 'table') {

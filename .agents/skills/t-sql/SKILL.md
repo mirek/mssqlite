@@ -84,6 +84,12 @@ The language pipeline lives in three packages:
   `@@ROWCOUNT`. A nested procedure, trigger, or dynamic batch inherits the
   caller's setting and restores it on exit; changes within that scope govern
   each completion produced there.
+- Computed column grammar is `name AS expression [PERSISTED [NOT NULL]]` with
+  no declared type. mssqlite infers the result from referenced columns, casts,
+  numeric precision/scale, and supported scalar expressions; PERSISTED maps to
+  a STORED SQLite generated column and the default maps to VIRTUAL. Direct
+  INSERT/UPDATE raises 271 and nondeterministic generated definitions raise
+  4936. Generated columns may be indexed normally.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for
