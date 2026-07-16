@@ -94,11 +94,66 @@ const insertColumnCount =
       }
       return
     }
-    const columns = session.db
+    const objectId = Catalog.objectIdOf(session.db, statement.target)
+    const columns = objectId === undefined ? session.db
       .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(statement.target)})`)
-      .all() as { name: string }[]
+      .all() as { name: string }[] : Catalog.tableColumns(session.db, objectId)
+      .filter(column => column.is_identity === 0 && column.is_computed === 0 && column.system_type_id !== 189)
     if (columns.length > 0 && columns.length !== action.values.length) {
       throw new MssqlError('Column name or number of supplied values does not match table definition.', 213, 16)
+    }
+  }
+
+const resolveRowversion =
+  (session: Session, statement: Merge): Merge => {
+    const objectId = Catalog.objectIdOf(session.db, statement.target)
+    if (objectId === undefined) {
+      return statement
+    }
+    const columns = Catalog.tableColumns(session.db, objectId)
+    const rowversion = columns.find(column => column.system_type_id === 189)
+    if (rowversion === undefined) {
+      return statement
+    }
+    const insertable = columns.filter(column =>
+      column.is_identity === 0 && column.is_computed === 0 && column.system_type_id !== 189)
+    return {
+      ...statement,
+      whens: statement.whens.map(when => {
+        if (when.action.kind === 'update') {
+          if (when.action.set.some(assignment =>
+            assignment.target.kind === 'column' &&
+            last(assignment.target.name).toLowerCase() === rowversion.name.toLowerCase())) {
+            throw new MssqlError('Cannot update a timestamp column.', 272, 16)
+          }
+          return when
+        }
+        if (when.action.kind !== 'insert' || when.action.values === undefined) {
+          return when
+        }
+        if (when.action.columns === undefined) {
+          return {
+            ...when,
+            action: { ...when.action, columns: insertable.map(column => column.name) }
+          }
+        }
+        const at = when.action.columns.findIndex(column =>
+          column.toLowerCase() === rowversion.name.toLowerCase())
+        if (at < 0) {
+          return when
+        }
+        if (when.action.values[at]?.kind !== 'default') {
+          throw new MssqlError('Cannot insert an explicit value into a timestamp column.', 273, 16)
+        }
+        const actionColumns = when.action.columns.filter((_column, index) => index !== at)
+        const actionValues = when.action.values.filter((_value, index) => index !== at)
+        return {
+          ...when,
+          action: actionValues.length === 0 ?
+            { kind: 'insert' } :
+            { ...when.action, columns: actionColumns, values: actionValues }
+        }
+      })
     }
   }
 
@@ -489,7 +544,8 @@ const outputSelect =
  * transaction when none is open.
  */
 export const executeMerge =
-  (session: Session, statement: Merge, items: Item[]): void => {
+  (session: Session, statement_: Merge, items: Item[]): void => {
+    const statement = resolveRowversion(session, statement_)
     validateArms(statement.whens)
     for (const when of statement.whens) {
       if (when.action.kind === 'insert') {

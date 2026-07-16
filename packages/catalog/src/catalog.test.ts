@@ -4,7 +4,8 @@ import { parseStatement } from '@mssqlite/tsql'
 import {
   addColumns, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
   createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
-  dropSequence, objectIdOf, sequenceRows, tableColumns, updateSequenceValue
+  dropSequence, objectIdOf, rowversionValue, sequenceRows, tableColumns,
+  updateRowversionValue, updateSequenceValue
 } from './index.ts'
 import type { Ast } from '@mssqlite/tsql'
 
@@ -34,6 +35,9 @@ test('bootstrap seeds schemas, types, databases and principals', () => {
   expect(db.prepare('SELECT name FROM "sys.databases" WHERE database_id = 5').get())
     .toEqual({ name: 'test' })
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.server_principals"').get()).toEqual({ n: 10 })
+  expect(rowversionValue(db)).toBe('0')
+  updateRowversionValue(db, '42')
+  expect(rowversionValue(db)).toBe('42')
   // Idempotent.
   bootstrap(db, 'test')
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.schemas"').get()).toEqual({ n: 4 })

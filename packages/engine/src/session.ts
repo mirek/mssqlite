@@ -1,7 +1,8 @@
-import { bootstrap } from '@mssqlite/catalog'
+import { bootstrap, rowversionValue } from '@mssqlite/catalog'
 import { parse } from '@mssqlite/tsql'
 import { registerFunctions } from './udf.ts'
 import { loadSequences, type Sequence } from './sequence.ts'
+import type { RowversionState } from './rowversion.ts'
 import { DatabaseSync } from 'node:sqlite'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { Column } from './metadata.ts'
@@ -87,6 +88,8 @@ export type Server = {
   readonly triggers: Map<string, Trigger>,
   /** Persistent sequence generators keyed by lowercased `schema.name`. */
   readonly sequences: Map<string, Sequence>,
+  /** Database-wide timestamp counter shared by every session. */
+  readonly rowversion: RowversionState,
   /** SQLite function names whose dispatch callback has been installed. */
   readonly registeredFunctions: Set<string>,
   /** Session whose batch is executing — read by session-scoped UDFs. */
@@ -255,6 +258,10 @@ export const server =
       functions: new Map(),
       triggers: new Map(),
       sequences: loadSequences(db),
+      rowversion: {
+        current: BigInt(rowversionValue(db)),
+        dirty: false
+      },
       registeredFunctions: new Set(),
       current: undefined
     }

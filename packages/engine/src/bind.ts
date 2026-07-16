@@ -1,4 +1,5 @@
 import { MssqlError } from './error.ts'
+import { currentRowversion } from './rowversion.ts'
 import type { Session, Value } from './session.ts'
 
 /** @returns value coerced to what node:sqlite accepts as a bound parameter. */
@@ -38,6 +39,8 @@ export const globalOf =
         return session.fetchStatus
       case '@@datefirst':
         return 7
+      case '@@dbts':
+        return currentRowversion(session.server)
       default:
         throw new MssqlError(`Unrecognized global variable ${name}.`, 137, 15)
     }

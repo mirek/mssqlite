@@ -74,6 +74,14 @@ test('varbinary round trips', () => {
   expect(roundTrip(TypeInfo.varbinary(10), null)).toBeNull()
 })
 
+test('binary(8) rowversion uses BIGBINARY TYPE_INFO and exact bytes', () => {
+  const value = Hex.of('00 00 00 00 00 00 00 01')
+  expect(TypeInfo.encode(TypeInfo.binary(8))).toEqual(Hex.of('ad 08 00'))
+  expect(Value.encode(TypeInfo.binary(8), value))
+    .toEqual(Hex.of('08 00 00 00 00 00 00 00 00 01'))
+  expect(roundTrip(TypeInfo.binary(8), value)).toEqual(value)
+})
+
 test('guid round trips', () => {
   const guid = 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'
   expect(roundTrip(TypeInfo.guid(), guid)).toBe(guid)
@@ -114,6 +122,7 @@ test('type info encode/decode round trips', () => {
     TypeInfo.nvarchar('max'),
     TypeInfo.varchar(10),
     TypeInfo.varbinary('max'),
+    TypeInfo.binary(8),
     TypeInfo.decimalN(18, 4),
     TypeInfo.guid(),
     TypeInfo.dateN(),

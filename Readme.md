@@ -55,6 +55,8 @@ session cursors with LOCAL/GLOBAL lifetime, scroll fetches, INTO assignment,
 and `@@FETCH_STATUS`,
 cataloged sequences with atomic NEXT VALUE FOR allocation, bounds/cycling,
 restart persistence, and rollback-independent consumption,
+database-wide ROWVERSION/TIMESTAMP generation with `@@DBTS`, automatic
+insert/update stamping, rollback gaps, and binary(8) wire metadata,
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
 CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
 indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested

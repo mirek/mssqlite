@@ -109,8 +109,9 @@ the engine:
   runs inside a generated savepoint; `RETURNING` plus a pre-update snapshot
   produce complete multi-row images, which are copied to uniquely named temp
   tables and resolved as read-only `inserted` / `deleted` sources while the
-  ordinary AST interpreter runs the body. This deliberately does not use
-  SQLite's row-level trigger subsystem. INSTEAD OF triggers receive intended
+  ordinary AST interpreter runs the body. User-authored T-SQL triggers deliberately
+  do not use SQLite's row-level trigger subsystem (internal rowversion fallback
+  triggers are the exception). INSTEAD OF triggers receive intended
   images and replace the base operation; direct self-recursion is suppressed,
   other nested triggers share the 32-level module limit, and an unhandled
   trigger error rolls back an enclosing user transaction. Trigger-body count
@@ -131,6 +132,15 @@ the engine:
   flush after each completed autocommit statement; inside a user transaction
   they flush immediately after COMMIT or ROLLBACK, so rollback never reissues a
   consumed value. CREATE/ALTER/DROP remain ordinary transactional catalog DDL.
+- **Rowversion allocation is database-wide and rollback-independent** — one
+  unsigned 64-bit counter persists as decimal text in `sys.rowversion_state`
+  and hydrates into `server.rowversion` at startup. Ordinary INSERT/UPDATE ASTs
+  inject the nondeterministic allocation UDF so RETURNING/OUTPUT observes the
+  new big-endian binary(8) value; internal SQLite AFTER triggers cover MERGE,
+  cascades, and indirect writes. Dirty state flushes with sequence state only
+  outside user transactions, preserving rollback gaps. `timestamp` maps to the
+  same system type id 189, `@@DBTS` reads without allocating, and catalog
+  nullability chooses BIGBINARY(8) or BIGVARBINARY(8) TDS metadata.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -266,7 +276,7 @@ toward broader SQL Server compatibility.
   variable changes currently participate in the surrounding SQLite
   transaction and therefore roll back with it.
 - Error classification currently covers mapped constraints, known conversion/
-  arithmetic numbers, RAISERROR, cursor and sequence ranges; additional SQL
+  arithmetic numbers, RAISERROR, cursor, sequence, and rowversion ranges; additional SQL
   Server statement-vs-batch cases will be added as their operations land.
   Checked integer width inference for uncast columns currently follows SUM(int) and
   treats scalar columns of unknown declared width conservatively.

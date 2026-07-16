@@ -348,6 +348,153 @@ test('sequences allocate values and expose sys.sequences metadata', () => {
   `)).rows).toEqual([ [ 'SO', 'SEQUENCE_OBJECT', 10, 5, 10, 30, 15, 15, 0, 1, 4 ] ])
 })
 
+test('rowversion allocates database-wide binary values across tables and sessions', () => {
+  const server_ = server()
+  const first = session(server_)
+  const second = session(server_)
+  executeBatch(first, `
+    CREATE TABLE versioned_a (id INT, version ROWVERSION)
+    CREATE TABLE versioned_b (id INT, version TIMESTAMP NULL)
+    INSERT INTO versioned_a (id) VALUES (1), (2)
+  `)
+  executeBatch(second, 'INSERT INTO versioned_b (id) VALUES (3)')
+  const values = rowsOf(executeBatch(first, `
+    SELECT id, HEX(version) AS version FROM versioned_a
+    UNION ALL
+    SELECT id, HEX(version) FROM versioned_b
+    ORDER BY id
+  `))
+  expect(values.rows).toEqual([
+    [ 1, '0000000000000001' ],
+    [ 2, '0000000000000002' ],
+    [ 3, '0000000000000003' ]
+  ])
+  expect(rowsOf(executeBatch(first, 'SELECT HEX(@@DBTS) AS dbts')).rows)
+    .toEqual([ [ '0000000000000003' ] ])
+
+  const required = rowsOf(executeBatch(first, 'SELECT version FROM versioned_a'))
+  expect(required.columns[0]).toMatchObject({
+    typeInfo: { type: DataType.DataType.bigBinary, maxLength: 8 }, nullable: false
+  })
+  const nullable = rowsOf(executeBatch(first, 'SELECT version FROM versioned_b'))
+  expect(nullable.columns[0]).toMatchObject({
+    typeInfo: { type: DataType.DataType.bigVarbinary, maxLength: 8 }, nullable: true
+  })
+  expect(rowsOf(executeBatch(first, `
+    SELECT o.name AS object_name, c.is_nullable, c.is_identity, c.is_computed,
+      c.system_type_id, t.name AS type_name
+    FROM sys.columns c
+    JOIN sys.objects o ON o.object_id = c.object_id
+    JOIN sys.types t ON t.user_type_id = c.user_type_id
+    WHERE c.name = N'version'
+    ORDER BY o.name
+  `)).rows).toEqual([
+    [ 'versioned_a', 0, 0, 0, 189, 'timestamp' ],
+    [ 'versioned_b', 1, 0, 0, 189, 'timestamp' ]
+  ])
+})
+
+test('rowversion advances on every update and keeps rollback gaps across restarts', () => {
+  const path = join(tmpdir(), `mssqlite-rowversion-${process.pid}-${Date.now()}.db`)
+  try {
+    const firstServer = server({ path })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE TABLE persisted_versions (id INT, version ROWVERSION)
+      INSERT INTO persisted_versions (id) VALUES (1)
+      BEGIN TRANSACTION
+      UPDATE persisted_versions SET id = id
+      ROLLBACK TRANSACTION
+    `)
+    expect(rowsOf(executeBatch(first, `
+      SELECT id, HEX(version), HEX(@@DBTS) FROM persisted_versions
+    `)).rows).toEqual([ [ 1, '0000000000000001', '0000000000000002' ] ])
+    firstServer.db.close()
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    executeBatch(second, 'INSERT INTO persisted_versions (id) VALUES (2)')
+    expect(rowsOf(executeBatch(second, `
+      SELECT id, HEX(version) FROM persisted_versions ORDER BY id
+    `)).rows).toEqual([
+      [ 1, '0000000000000001' ], [ 2, '0000000000000003' ]
+    ])
+    secondServer.db.close()
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
+test('rowversion guards explicit writes and stamps ALTER, MERGE and table variables', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE altered_versions (id INT)
+    INSERT INTO altered_versions VALUES (1), (2)
+    ALTER TABLE altered_versions ADD version ROWVERSION
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT id, HEX(version) FROM altered_versions ORDER BY id
+  `)).rows).toEqual([
+    [ 1, '0000000000000001' ], [ 2, '0000000000000002' ]
+  ])
+  expect(() => executeBatch(s, 'ALTER TABLE altered_versions ADD another ROWVERSION'))
+    .toThrowError(expect.objectContaining({ number: 2738 }) as Error)
+  expect(() => executeBatch(s, 'CREATE TABLE two_versions (a ROWVERSION, b TIMESTAMP)'))
+    .toThrowError(expect.objectContaining({ number: 2738 }) as Error)
+  expect(() => executeBatch(s, 'CREATE TABLE default_version (v ROWVERSION DEFAULT 0x01)'))
+    .toThrowError(expect.objectContaining({ number: 1755 }) as Error)
+  expect(() => executeBatch(s, 'CREATE TABLE sized_version (v ROWVERSION(8))'))
+    .toThrowError(expect.objectContaining({ number: 2716 }) as Error)
+  expect(() => executeBatch(s, 'CREATE TABLE identity_version (v ROWVERSION IDENTITY)'))
+    .toThrowError(expect.objectContaining({ number: 2749 }) as Error)
+  executeBatch(s, `
+    CREATE TABLE constrained_version (
+      id INT,
+      version ROWVERSION UNIQUE CHECK (DATALENGTH(version) = 8)
+    )
+    INSERT INTO constrained_version (id) VALUES (1)
+  `)
+
+  expect(() => executeBatch(s, `
+    INSERT INTO altered_versions (id, version) VALUES (3, 0x0000000000000003)
+  `)).toThrowError(expect.objectContaining({ number: 273 }) as Error)
+  executeBatch(s, 'INSERT INTO altered_versions (id, version) VALUES (3, DEFAULT)')
+  expect(() => executeBatch(s, 'UPDATE altered_versions SET version = DEFAULT WHERE id = 1'))
+    .toThrowError(expect.objectContaining({ number: 272 }) as Error)
+
+  executeBatch(s, 'CREATE TABLE merge_versions (id INT PRIMARY KEY, value INT, version ROWVERSION)')
+  executeBatch(s, `
+    MERGE merge_versions AS target
+    USING (VALUES (1, 10)) AS source (id, value)
+    ON target.id = source.id
+    WHEN NOT MATCHED THEN INSERT (id, value) VALUES (source.id, source.value)
+  `)
+  const inserted = rowsOf(executeBatch(s, 'SELECT HEX(version) FROM merge_versions')).rows[0]?.[0]
+  executeBatch(s, `
+    MERGE merge_versions AS target
+    USING (VALUES (1, 20)) AS source (id, value)
+    ON target.id = source.id
+    WHEN MATCHED THEN UPDATE SET value = source.value
+  `)
+  const updated = rowsOf(executeBatch(s, 'SELECT value, HEX(version) FROM merge_versions'))
+  expect(updated.rows[0]?.[0]).toBe(20)
+  expect(updated.rows[0]?.[1]).not.toBe(inserted)
+  expect(() => executeBatch(s, `
+    MERGE merge_versions AS target
+    USING (VALUES (1, 30)) AS source (id, value)
+    ON target.id = source.id
+    WHEN MATCHED THEN UPDATE SET version = 0x01
+  `)).toThrowError(expect.objectContaining({ number: 272 }) as Error)
+
+  const tableVariable = rowsOf(executeBatch(s, `
+    DECLARE @versions TABLE (id INT, version ROWVERSION)
+    INSERT INTO @versions (id) VALUES (1)
+    UPDATE @versions SET id = id
+    SELECT id, DATALENGTH(version) FROM @versions
+  `))
+  expect(tableVariable.rows).toEqual([ [ 1, 8 ] ])
+})
+
 test('descending and cycling sequences wrap at the type bounds', () => {
   const s = open()
   executeBatch(s, `

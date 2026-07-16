@@ -238,6 +238,10 @@ export const tables: readonly string[] = [
     is_exhausted INTEGER NOT NULL DEFAULT 0,
     last_used_value TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS "sys.rowversion_state" (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    current_value TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS "sys._next_id" (
     next_id INTEGER NOT NULL
   )`

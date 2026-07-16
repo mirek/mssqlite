@@ -129,6 +129,15 @@ The language pipeline lives in three packages:
   supported. OVER ordering, SQL Server's context restrictions, duplicate
   same-sequence coalescing within one result row, and sp_sequence_get_range are
   deferred; CACHE is retained in metadata but every completed statement flushes.
+- ROWVERSION and its deprecated TIMESTAMP synonym declare the single automatic
+  version column allowed per table. It takes no length, DEFAULT, IDENTITY,
+  COLLATE, or ROWGUIDCOL clause. INSERT may omit it or name
+  it with DEFAULT; explicit values raise 273, and any UPDATE assignment raises
+  272. Every inserted or updated row receives a new database-wide big-endian
+  binary(8), including no-op updates; nullable declarations still auto-generate
+  values but expose varbinary(8) metadata. Values remain consumed after rollback,
+  survive restart, span tables/table variables/sessions, and `@@DBTS` returns
+  the latest allocated value without advancing it.
 - TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
   accept `TOP (expr)` only, per MSSQL.
 - OUTPUT clause (`Ast.Output`) sits between the column list / SET list /

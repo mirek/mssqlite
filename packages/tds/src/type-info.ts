@@ -73,6 +73,13 @@ export const varbinary =
     maxLength: maxLength === 'max' ? plpMarker : maxLength
   })
 
+/** @returns fixed-width binary(n). */
+export const binary =
+  (maxLength = 1): TypeInfo => ({
+    type: DataType.DataType.bigBinary,
+    maxLength
+  })
+
 /** @returns nullable decimal(p, s). */
 export const decimalN =
   (precision = 18, scale = 0): TypeInfo => ({

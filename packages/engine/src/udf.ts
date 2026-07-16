@@ -4,6 +4,7 @@ import { dateadd, datediff, datename, datepart, eomonth } from './date-functions
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
+import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
 import type { Server } from './session.ts'
 
@@ -269,6 +270,7 @@ export const registerFunctions =
       checkedArithmetic(server, operator, left, right, width), { deterministic: false })
     define('mssqlite_generated_arithmetic', (operator, left, right, width) =>
       checkedArithmetic(server, operator, left, right, width))
+    define('mssqlite_next_rowversion', () => nextRowversionValue(server), { deterministic: false })
     define('mssqlite_decimal_cast', (value, precision, scale, try_) =>
       DecimalExact.cast(decimalArgument(value), Number(precision), Number(scale), Number(try_) !== 0))
     define('mssqlite_decimal_arithmetic',
