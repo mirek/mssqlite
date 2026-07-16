@@ -25,6 +25,23 @@ export const allocateId =
     return row.next_id
   }
 
+/** @returns the last database-wide rowversion value allocated. */
+export const rowversionValue =
+  (db: DatabaseSync): string => {
+    const row = db.prepare(
+      'SELECT current_value FROM "sys.rowversion_state" WHERE singleton = 1'
+    ).get() as { current_value: string }
+    return row.current_value
+  }
+
+/** Persists the last database-wide rowversion value allocated. */
+export const updateRowversionValue =
+  (db: DatabaseSync, value: string): void => {
+    db.prepare(
+      'UPDATE "sys.rowversion_state" SET current_value = ? WHERE singleton = 1'
+    ).run(value)
+  }
+
 /** @returns schema id, creating the schema row on first use. */
 export const schemaIdOf =
   (db: DatabaseSync, schema: string): number => {
@@ -191,7 +208,8 @@ const insertColumn =
       objectId, column.name, columnId,
       type.systemTypeId, type.userTypeId, type.maxLength,
       type.precision, type.scale, column.collate ?? type.collationName,
-      column.nullable === false || column.primaryKey === true || column.identity !== undefined ? 0 : 1,
+      column.nullable === false || column.primaryKey === true || column.identity !== undefined ||
+        ([ 'rowversion', 'timestamp' ].includes(column.type.name) && column.nullable !== true) ? 0 : 1,
       column.rowguidcol === true ? 1 : 0,
       column.identity === undefined ? 0 : 1,
       column.computed === undefined ? 0 : 1

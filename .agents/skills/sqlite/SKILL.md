@@ -139,6 +139,14 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   with RETURNING plus an UPDATE pre-image snapshot, materializes temp
   `inserted`/`deleted` tables, and interprets the stored T-SQL body once.
   INSTEAD OF operations build intended images without mutating the base table.
+- Rowversion is the deliberate internal exception to that rule. Its physical
+  BLOB column remains nullable so an AFTER INSERT trigger can replace the
+  transient NULL; an AFTER UPDATE trigger detects unchanged OLD/NEW versions
+  for MERGE, cascades, and other indirect writes. Normal engine DML supplies
+  the value directly so SQLite RETURNING sees it. Both triggers call a
+  nondeterministic UDF backed by a synchronous server-wide unsigned counter;
+  persisted decimal-text state flushes only outside user transactions, so a
+  SQLite rollback does not reuse an allocated version.
 - SQLite has no schema sequence generator. mssqlite persists definitions and
   allocation state as catalog rows, advances a synchronous server-wide BigInt
   registry from a nondeterministic UDF, and flushes it only outside SQLite user

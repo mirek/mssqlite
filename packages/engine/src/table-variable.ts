@@ -1,6 +1,11 @@
 import * as Catalog from '@mssqlite/catalog'
 import * as Transpile from '@mssqlite/transpile'
 import { MssqlError } from './error.ts'
+import {
+  installRowversionTriggers,
+  isRowversionType,
+  validateRowversionColumns
+} from './rowversion.ts'
 import { functionKey } from './session.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Session, TableVariable } from './session.ts'
@@ -617,6 +622,7 @@ export const declareTableVariable =
         134, 15)
     }
     const columns = Transpile.Computed.columns(declaration.columns)
+    validateRowversionColumns(columns)
     const table: TableVariable = {
       table: [ `#__mssqlite_table_${session.spid}_${session.nextTableVariable}` ],
       columns,
@@ -630,6 +636,10 @@ export const declareTableVariable =
       columns: table.columns,
       constraints: table.constraints
     }).sql)
+    const rowversion = columns.find(column => isRowversionType(column.type))
+    if (rowversion !== undefined) {
+      installRowversionTriggers(session.db, table.table, rowversion.name)
+    }
   }
 
 /** Runs a batch or procedure with an isolated table-variable scope. */

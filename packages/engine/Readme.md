@@ -143,6 +143,12 @@ const items = executeBatch(s, `
   Signed increments, bounds, exhaustion, cycling, restart, cache metadata, and
   `sys.sequences` are supported. Dirty allocation state flushes after statements
   and after COMMIT/ROLLBACK, so consumed values survive rollback and restart.
+- **Rowversion** — ROWVERSION and TIMESTAMP columns share one persistent
+  unsigned counter per server database. INSERT and every affected UPDATE row
+  receive a new big-endian binary(8), including no-op updates and indirect
+  MERGE writes; explicit assignments are restricted to INSERT DEFAULT.
+  `@@DBTS` reads the last value, rollback leaves gaps, and state is shared by
+  tables, table variables, and sessions and survives restart.
 
 ## Column metadata
 

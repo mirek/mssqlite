@@ -227,6 +227,34 @@ test('datetimeoffset values and parameters round trip through tedious', async ()
   expect(values.rows[0]?.['equal_instants']).toBe(1)
 })
 
+test('rowversion values and metadata round trip through tedious', async () => {
+  await query(`
+    CREATE TABLE wire_versions (
+      id INT,
+      required_version ROWVERSION
+    )
+    CREATE TABLE wire_nullable_versions (nullable_version TIMESTAMP NULL)
+    INSERT INTO wire_versions (id) VALUES (1)
+    INSERT INTO wire_nullable_versions DEFAULT VALUES
+  `)
+  const required = await query('SELECT required_version FROM wire_versions')
+  expect(required.columns).toEqual([
+    { name: 'required_version', type: 'Binary', length: 8 }
+  ])
+  expect(Buffer.from(required.rows[0]?.['required_version'] as Uint8Array))
+    .toEqual(Buffer.from('0000000000000001', 'hex'))
+  const nullable = await query('SELECT nullable_version FROM wire_nullable_versions')
+  expect(nullable.columns).toEqual([
+    { name: 'nullable_version', type: 'VarBinary', length: 8 }
+  ])
+  expect(Buffer.from(nullable.rows[0]?.['nullable_version'] as Uint8Array))
+    .toEqual(Buffer.from('0000000000000002', 'hex'))
+
+  await query('UPDATE wire_versions SET id = id')
+  expect(Buffer.from((await query('SELECT required_version FROM wire_versions')).rows[0]?.['required_version'] as Uint8Array))
+    .toEqual(Buffer.from('0000000000000003', 'hex'))
+})
+
 test('variables and batches', async () => {
   const result = await query(`
     DECLARE @x INT = 40

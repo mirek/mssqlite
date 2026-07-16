@@ -42,6 +42,13 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   start/increment/bounds, cycle/cache settings, current/exhausted state, and
   last-used value. Numeric state is stored losslessly as decimal text and cast
   by the view for ordinary catalog queries.
+- Rowversion/TIMESTAMP columns use system/user type id 189, max_length 8,
+  identity/computed flags 0, and default to non-null catalog metadata unless
+  explicitly declared NULL. The database-wide last allocated value is stored
+  losslessly as decimal text in the singleton internal `sys.rowversion_state`
+  table; it is surfaced by `@@DBTS`, not as a public catalog view. Result
+  metadata maps non-null rows to BIGBINARY(8) and nullable rows to
+  BIGVARBINARY(8).
 - `sys.computed_columns` joins computed `sys.columns` rows to
   `sys.computed_columns_extra`, exposing normalized definition text,
   `uses_database_collation`, and `is_persisted`. CREATE/ALTER/DROP maintain

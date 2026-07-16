@@ -660,6 +660,7 @@ const columnDefinition =
     sourceColumns: readonly Ast.SourceColumn[] = []
   ): string => {
     const parts: string[] = [ Quote.identifier(column.name) ]
+    const rowversion = column.type.name === 'rowversion' || column.type.name === 'timestamp'
     if (column.computed !== undefined) {
       const type = Type.columnType(column.type, column.collate)
       if (type !== '') {
@@ -696,7 +697,9 @@ const columnDefinition =
         parts.push('PRIMARY KEY')
       }
     }
-    if (column.nullable === false && column.identity === undefined) {
+    // SQLite triggers populate rowversion after INSERT, so the physical BLOB
+    // must accept the transient NULL even when catalog metadata is NOT NULL.
+    if (column.nullable === false && column.identity === undefined && !rowversion) {
       parts.push('NOT NULL')
     }
     if (column.unique === true) {

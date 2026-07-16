@@ -21,6 +21,15 @@ import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
+import {
+  flushRowversion,
+  installRowversionTriggers,
+  isRowversionType,
+  nextRowversionExpression,
+  populateRowversion,
+  removeRowversionTriggers,
+  validateRowversionColumns
+} from './rowversion.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
   functionKey,
@@ -178,7 +187,9 @@ const targetColumns =
   (session: Session, name: Ast.QualifiedName): readonly {
     readonly name: string,
     readonly type?: Ast.ColumnDefinition['type'],
-    readonly computed?: boolean
+    readonly computed?: boolean,
+    readonly identity?: boolean,
+    readonly rowversion?: boolean
   }[] => {
     const backing = name[name.length - 1]?.toLowerCase()
     const variable = [ ...session.tableVariables.values() ].find(candidate =>
@@ -187,7 +198,9 @@ const targetColumns =
       return variable.columns.map(column => ({
         name: column.name,
         type: column.type,
-        ...column.computed === undefined ? {} : { computed: true }
+        ...column.computed === undefined ? {} : { computed: true },
+        ...column.identity === undefined ? {} : { identity: true },
+        ...isRowversionType(column.type) ? { rowversion: true } : {}
       }))
     }
     const objectId = Catalog.objectIdOf(session.db, name)
@@ -199,11 +212,14 @@ const targetColumns =
         column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
           column.system_type_id === 60 ? { name: 'money', args: [] } :
             column.system_type_id === 122 ? { name: 'smallmoney', args: [] } :
-              column.system_type_id === 43 ? { name: 'datetimeoffset', args: [ column.scale ] } : undefined
+              column.system_type_id === 43 ? { name: 'datetimeoffset', args: [ column.scale ] } :
+                column.system_type_id === 189 ? { name: 'timestamp', args: [] } : undefined
       return {
         name: column.name,
         ...type === undefined ? {} : { type },
-        ...column.is_computed === 0 ? {} : { computed: true }
+        ...column.is_computed === 0 ? {} : { computed: true },
+        ...column.is_identity === 0 ? {} : { identity: true },
+        ...column.system_type_id === 189 ? { rowversion: true } : {}
       }
     })
   }
@@ -212,74 +228,138 @@ const storedCast =
   (value: Ast.Expression, type: Ast.ColumnDefinition['type']): Ast.Expression =>
     value.kind === 'default' ? value : { kind: 'cast', expression: value, type, try_: false }
 
+const appendSelectItem =
+  (select: Ast.Select, item: Ast.SelectItem): Ast.Select => ({
+    ...select,
+    items: [ ...select.items, item ],
+    ...select.union === undefined ? {} : {
+      union: { ...select.union, select: appendSelectItem(select.union.select, item) }
+    }
+  })
+
+const explicitRowversionError =
+  (): MssqlError =>
+    new MssqlError('Cannot insert an explicit value into a timestamp column.', 273, 16)
+
 /** Applies target-column exact decimal/datetimeoffset conversion before SQLite sees DML values. */
 const resolveStoredDml =
   (session: Session, statement: Ast.Statement): Ast.Statement => {
     if (statement.kind === 'insert') {
       const all = targetColumns(session, statement.table)
-      const names = statement.columns ?? all.filter(column => column.computed !== true)
+      const rowversion = all.find(column => column.rowversion === true)
+      let names = statement.columns ?? all.filter(column =>
+        column.computed !== true && column.identity !== true && column.rowversion !== true)
         .map(column => column.name)
+      const rowversionAt = rowversion === undefined ? -1 : names.findIndex(name =>
+        name.toLowerCase() === rowversion.name.toLowerCase())
       const types = names.map(name => storedType(
         all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
         { name: '', args: [] }))
       if (statement.source.kind === 'values') {
+        const rows = statement.source.rows.map(row => row.map((value, index) => {
+          if (index === rowversionAt) {
+            if (value.kind !== 'default') {
+              throw explicitRowversionError()
+            }
+            return nextRowversionExpression()
+          }
+          const type = types[index]
+          return type === undefined ? value : storedCast(value, type)
+        }))
+        if (rowversion !== undefined && rowversionAt < 0) {
+          names = [ ...names, rowversion.name ]
+        }
         return {
           ...statement,
+          ...rowversion === undefined ? {} : { columns: names },
           source: {
             ...statement.source,
-            rows: statement.source.rows.map(row => row.map((value, index) => {
-              const type = types[index]
-              return type === undefined ? value : storedCast(value, type)
-            }))
+            rows: rowversion !== undefined && rowversionAt < 0 ?
+              rows.map(row => [ ...row, nextRowversionExpression() ]) : rows
           }
         }
       }
       if (statement.source.kind === 'select') {
+        if (rowversionAt >= 0) {
+          throw explicitRowversionError()
+        }
+        const converted = {
+          ...statement.source.select,
+          items: statement.source.select.items.map((item, index) => {
+            const type = types[index]
+            return item.kind !== 'expression' || type === undefined ? item :
+              { ...item, expression: storedCast(item.expression, type) }
+          })
+        }
+        if (rowversion !== undefined) {
+          names = [ ...names, rowversion.name ]
+        }
         return {
           ...statement,
+          ...rowversion === undefined ? {} : { columns: names },
           source: {
             ...statement.source,
-            select: {
-              ...statement.source.select,
-              items: statement.source.select.items.map((item, index) => {
-                const type = types[index]
-                return item.kind !== 'expression' || type === undefined ? item :
-                  { ...item, expression: storedCast(item.expression, type) }
-              })
-            }
+            select: rowversion === undefined ? converted : appendSelectItem(converted, {
+              kind: 'expression', expression: nextRowversionExpression()
+            })
           }
+        }
+      }
+      if (rowversion !== undefined) {
+        if (rowversionAt >= 0) {
+          throw explicitRowversionError()
+        }
+        return {
+          ...statement,
+          columns: [ rowversion.name ],
+          source: { kind: 'values', rows: [ [ nextRowversionExpression() ] ] }
         }
       }
       return statement
     }
     if (statement.kind === 'update') {
       const columns = targetColumns(session, statement.target)
+      const rowversion = columns.find(column => column.rowversion === true)
+      if (rowversion !== undefined && statement.set.some(assignment =>
+        assignment.target.kind === 'column' &&
+        (assignment.target.name[assignment.target.name.length - 1] ?? '').toLowerCase() ===
+          rowversion.name.toLowerCase())) {
+        throw new MssqlError('Cannot update a timestamp column.', 272, 16)
+      }
+      const set = statement.set.map(assignment => {
+        if (assignment.target.kind !== 'column') {
+          return assignment
+        }
+        const name = assignment.target.name[assignment.target.name.length - 1] ?? ''
+        const type = storedType(columns.find(column =>
+          column.name.toLowerCase() === name.toLowerCase())?.type ?? { name: '', args: [] })
+        if (type === undefined) {
+          return assignment
+        }
+        if (assignment.operator === '=') {
+          return { ...assignment, value: storedCast(assignment.value, type) }
+        }
+        return {
+          ...assignment,
+          operator: '=',
+          value: storedCast({
+            kind: 'binaryOp',
+            operator: assignment.operator.slice(0, -1),
+            left: storedCast(assignment.target, type),
+            right: storedCast(assignment.value, type)
+          }, type)
+        }
+      })
       return {
         ...statement,
-        set: statement.set.map(assignment => {
-          if (assignment.target.kind !== 'column') {
-            return assignment
-          }
-          const name = assignment.target.name[assignment.target.name.length - 1] ?? ''
-          const type = storedType(columns.find(column =>
-            column.name.toLowerCase() === name.toLowerCase())?.type ?? { name: '', args: [] })
-          if (type === undefined) {
-            return assignment
-          }
-          if (assignment.operator === '=') {
-            return { ...assignment, value: storedCast(assignment.value, type) }
-          }
-          return {
-            ...assignment,
+        set: rowversion === undefined ? set : [
+          ...set,
+          {
+            target: { kind: 'column', name: [ rowversion.name ] },
             operator: '=',
-            value: storedCast({
-              kind: 'binaryOp',
-              operator: assignment.operator.slice(0, -1),
-              left: storedCast(assignment.target, type),
-              right: storedCast(assignment.value, type)
-            }, type)
+            value: nextRowversionExpression()
           }
-        })
+        ]
       }
     }
     return statement
@@ -1073,9 +1153,14 @@ const executeStatementInner =
       }
       case 'createTable': {
         const resolved = { ...statement, columns: Transpile.Computed.columns(statement.columns) }
+        validateRowversionColumns(resolved.columns)
         const rendered = Transpile.statement(resolved)
         session.db.exec(rendered.sql)
         Catalog.createTable(session.db, resolved)
+        const rowversion = resolved.columns.find(column => isRowversionType(column.type))
+        if (rowversion !== undefined) {
+          installRowversionTriggers(session.db, resolved.name, rowversion.name)
+        }
         return undefined
       }
       case 'dropTable':
@@ -1136,11 +1221,32 @@ const executeStatementInner =
               statement.action.columns, columnsOfTable(session, statement.name))
           }
         } : statement
+        const objectId = Catalog.objectIdOf(session.db, resolved.name)
+        const existing = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
+        if (resolved.action.kind === 'addColumns') {
+          validateRowversionColumns(
+            resolved.action.columns,
+            existing.some(column => column.system_type_id === 189) ? 1 : 0)
+        }
+        if (resolved.action.kind === 'dropColumns') {
+          const dropped = resolved.action.columns
+          for (const column of existing.filter(candidate =>
+            candidate.system_type_id === 189 && dropped.some(name =>
+              name.toLowerCase() === candidate.name.toLowerCase()))) {
+            removeRowversionTriggers(session.db, resolved.name, column.name)
+          }
+        }
         session.db.exec(Transpile.statement(resolved).sql)
         switch (resolved.action.kind) {
-          case 'addColumns':
+          case 'addColumns': {
             Catalog.addColumns(session.db, resolved.name, resolved.action.columns)
+            const rowversion = resolved.action.columns.find(column => isRowversionType(column.type))
+            if (rowversion !== undefined) {
+              populateRowversion(session.db, resolved.name, rowversion.name)
+              installRowversionTriggers(session.db, resolved.name, rowversion.name)
+            }
             break
+          }
           case 'dropColumns':
             Catalog.dropColumns(session.db, resolved.name, resolved.action.columns)
             break
@@ -1339,6 +1445,7 @@ const executeStatement =
       return executeStatementInner(session, statement, items)
     } finally {
       flushSequences(session.server)
+      flushRowversion(session.server)
     }
   }
 
@@ -1843,6 +1950,7 @@ export const executeBatch =
               session.transactionCount = 0
               session.transactionDoomed = false
               flushSequences(session.server)
+              flushRowversion(session.server)
             }
             if (!canContinueBatch(mapped) || xactAbort) {
               throw new BatchError(mapped, items)

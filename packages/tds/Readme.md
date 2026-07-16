@@ -49,7 +49,7 @@ packet size, collation, begin/commit/rollback transaction).
   `ushortLen`, `longLen`, `plp`, `date`, `scaled`, `decimal`).
 - `TypeInfo` — TYPE_INFO codec plus constructors: `intN`, `bitN`, `floatN`,
   `moneyN`, `datetimeN`, `nvarchar(n | 'max')`, `varchar`, `varbinary`,
-  `decimalN(p, s)`, `guid`, `dateN`, `timeN(s)`, `datetime2N(s)`,
+  fixed-width `binary`, `decimalN(p, s)`, `guid`, `dateN`, `timeN(s)`, `datetime2N(s)`,
   `datetimeOffsetN(s)`.
 - `Value` — TYPE_VARBYTE encode/decode between wire bytes and JS values
   (`null`, `boolean`, `number`, `bigint`, `string`, `Uint8Array`, `Date`),

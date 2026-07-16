@@ -92,6 +92,9 @@ export const bootstrap =
     for (const row of serverPrincipals) {
       insertServerPrincipal.run(...row)
     }
+    db.prepare(
+      'INSERT OR IGNORE INTO "sys.rowversion_state" (singleton, current_value) VALUES (1, ?)'
+    ).run('0')
     const nextId = db.prepare('SELECT next_id FROM "sys._next_id"').get()
     if (nextId === undefined) {
       db.prepare('INSERT INTO "sys._next_id" (next_id) VALUES (?)').run(100000001)

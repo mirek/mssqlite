@@ -69,6 +69,8 @@ export const typeInfoOfCatalogRow =
       case 173:
       case 34:
         return TypeInfo.varbinary(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
+      case 189:
+        return row.is_nullable === 0 ? TypeInfo.binary(8) : TypeInfo.varbinary(8)
       default:
         return TypeInfo.nvarchar('max')
     }
@@ -161,7 +163,8 @@ const tableVariableColumn =
         precision: type.precision,
         scale: type.scale,
         collation_name: definition.collate ?? type.collationName,
-        is_nullable: definition.nullable === false || definition.primaryKey === true || tablePrimaryKey ? 0 : 1,
+        is_nullable: definition.nullable === false || definition.primaryKey === true || tablePrimaryKey ||
+          ([ 'rowversion', 'timestamp' ].includes(definition.type.name) && definition.nullable !== true) ? 0 : 1,
         is_identity: definition.identity === undefined ? 0 : 1,
         is_computed: definition.computed === undefined ? 0 : 1
       }
