@@ -22,6 +22,21 @@ export const default_: Collation = {
   sortId: 52
 }
 
+/** @returns wire collation for the supported Latin1 sensitivity matrix. */
+export const ofName =
+  (name: string | null | undefined): Collation => {
+    const normalized = name?.toLowerCase() ?? 'sql_latin1_general_cp1_ci_as'
+    const binary2 = normalized.endsWith('_bin2')
+    const ignoreCase = normalized.includes('_ci_') || normalized.endsWith('_ci_as')
+    const ignoreAccent = normalized.endsWith('_ai')
+    return {
+      lcid: 0x0409,
+      flags: binary2 ? 0x20 : 0x0c | (ignoreCase ? 0x01 : 0) | (ignoreAccent ? 0x02 : 0),
+      version: normalized.startsWith('latin1_general_100_') ? 2 : 0,
+      sortId: binary2 ? 0 : 52
+    }
+  }
+
 /** @returns 5 collation bytes — 20-bit lcid, 8-bit flags, 4-bit version, sort id. */
 export const encode =
   (collation: Collation): Uint8Array => {

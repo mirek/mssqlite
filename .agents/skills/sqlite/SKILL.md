@@ -101,6 +101,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   subqueries, aggregates, window functions, or nondeterministic callbacks.
   Exact decimal and checked integer generated expressions use separately
   registered deterministic UDF names so SQLite accepts them in schema DDL.
+- Node's `node:sqlite` API cannot register custom SQLite collations. mssqlite
+  therefore declares BINARY/NOCASE as a baseline and renders supported SQL
+  Server collations through a deterministic normalization-key UDF. Predicates,
+  ORDER BY, expression indexes, and supplemental UNIQUE indexes all use the
+  identical key, preserving CI/CS, AI/AS and BIN2 behavior. Accent-insensitive
+  keys use Unicode NFD with combining marks removed; trailing spaces are
+  ignored as in SQL text comparison.
 - SQLite has no ROLLUP, CUBE, GROUPING SETS, or GROUPING function. mssqlite
   expands them into one ordinary GROUP BY query per grouping set joined by
   UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch

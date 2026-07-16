@@ -26,6 +26,7 @@ const readsDeletedExpression =
         return expression_.args.some(readsDeletedExpression)
       case 'cast':
       case 'convert':
+      case 'collate':
         return readsDeletedExpression(expression_.expression)
       case 'case':
         return (expression_.operand !== undefined && readsDeletedExpression(expression_.operand)) ||
@@ -101,6 +102,7 @@ const rewrite =
         return { ...expression_, args: expression_.args.map(inner) }
       case 'cast':
       case 'convert':
+      case 'collate':
         return { ...expression_, expression: inner(expression_.expression) }
       case 'case':
         return {

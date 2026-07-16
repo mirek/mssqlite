@@ -33,6 +33,8 @@ const expressionType =
         return value.type
       case 'unary':
         return expressionType(ctx, value.operand)
+      case 'collate':
+        return expressionType(ctx, value.expression)
       case 'binaryOp': {
         const left = expressionType(ctx, value.left)
         const right = expressionType(ctx, value.right)
@@ -84,7 +86,8 @@ export const columns =
           ...resolved.map(candidate => ({
             name: candidate.name,
             type: candidate.type,
-            nullable: candidate.nullable !== false
+            nullable: candidate.nullable !== false,
+            ...candidate.collate === undefined ? {} : { collation: candidate.collate }
           }))
         ]
       }

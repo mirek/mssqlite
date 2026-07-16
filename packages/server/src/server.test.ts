@@ -144,6 +144,26 @@ test('computed values and sys.computed_columns metadata cross tedious', async ()
   } ])
 })
 
+test('collation comparisons, uniqueness and catalog metadata cross tedious', async () => {
+  await query(`
+    CREATE TABLE wire_collation (
+      value NVARCHAR(30) COLLATE Latin1_General_100_CI_AI UNIQUE
+    )
+    INSERT INTO wire_collation VALUES (N'café')
+  `)
+  const equivalent = await query(`
+    SELECT value FROM wire_collation WHERE value = N'CAFE'
+  `)
+  expect(equivalent.rows).toEqual([ { value: 'café' } ])
+  await expect(query('INSERT INTO wire_collation VALUES (N\'cafe\')'))
+    .rejects.toMatchObject({ number: 2627 })
+  const catalog = await query(`
+    SELECT collation_name FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'wire_collation') AND name = N'value'
+  `)
+  expect(catalog.rows).toEqual([ { collation_name: 'Latin1_General_100_CI_AI' } ])
+})
+
 test('parameterized query via sp_executesql rpc', async () => {
   const result = await query('SELECT name FROM users WHERE age > @age', [
     { name: 'age', type: TYPES.Int, value: 18 }

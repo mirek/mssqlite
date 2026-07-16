@@ -17,6 +17,21 @@ const decimalArgument =
   (value: Argument): string | number | bigint | null =>
     value instanceof Uint8Array ? text(value) : value
 
+const collationKey =
+  (value: Argument, collation: Argument): Argument => {
+    if (value === null) {
+      return null
+    }
+    const name = text(collation).toLowerCase()
+    const accentSensitive = !name.endsWith('_ai')
+    const caseSensitive = name.includes('_cs_') || name.endsWith('_bin2')
+    let key = text(value).trimEnd()
+    if (!accentSensitive) {
+      key = key.normalize('NFD').replace(/\p{M}/gu, '')
+    }
+    return caseSensitive ? key : key.toLocaleLowerCase('en-US')
+  }
+
 /** @returns last part of a dotted, optionally bracketed object name. */
 const namePart =
   (value: string): string => {
@@ -235,6 +250,15 @@ export const registerFunctions =
         return BigInt(a as number | bigint) + BigInt(b as number | bigint)
       }
       return (a as number) + (b as number)
+    })
+    define('mssqlite_collation_key', collationKey)
+    define('mssqlite_collation_like', (value, pattern, collation) => {
+      if (value === null || pattern === null) {
+        return null
+      }
+      const source = text(collationKey(value, collation))
+      const pattern_ = text(collationKey(pattern, collation))
+      return new RegExp(`^${likePatternSource(pattern_)}$`, 'u').test(source) ? 1 : 0
     })
     define('mssqlite_arithmetic', (operator, left, right, width) =>
       checkedArithmetic(server, operator, left, right, width), { deterministic: false })

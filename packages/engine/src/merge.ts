@@ -324,6 +324,7 @@ const armExpression =
         return { ...expression, args: expression.args.map(inner) }
       case 'cast':
       case 'convert':
+      case 'collate':
         return { ...expression, expression: inner(expression.expression) }
       case 'case':
         return {

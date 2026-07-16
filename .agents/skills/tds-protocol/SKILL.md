@@ -60,3 +60,8 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   and the field is zero. The token itself, MORE/FINAL and ERROR state, and final
   DONEPROC remain present. Visibility is captured per statement rather than
   inferred from the session after the batch finishes.
+- Character TYPE_INFO collation bytes are derived from catalog names through
+  `Collation.ofName`: LCID 0x0409, sensitivity flags for ignore-case/accent,
+  version 2 for Latin1_General_100, sort id 52 for linguistic collations, and
+  Binary2 flag/sort-id 0 for BIN2. The login ENVCHANGE remains the default
+  SQL_Latin1_General_CP1_CI_AS bytes.

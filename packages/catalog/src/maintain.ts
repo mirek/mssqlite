@@ -190,7 +190,7 @@ const insertColumn =
     ).run(
       objectId, column.name, columnId,
       type.systemTypeId, type.userTypeId, type.maxLength,
-      type.precision, type.scale, type.collationName,
+      type.precision, type.scale, column.collate ?? type.collationName,
       column.nullable === false || column.primaryKey === true || column.identity !== undefined ? 0 : 1,
       column.rowguidcol === true ? 1 : 0,
       column.identity === undefined ? 0 : 1,

@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Collation from './collation.ts'
 import * as Decimal from './decimal.ts'
 import * as ForJson from './for-json.ts'
 import * as Grouping from './grouping.ts'
@@ -288,8 +289,9 @@ const orderBy =
         const resolved = value?.kind === 'expression' ? value.expression : item.expression
         const type = Decimal.typeOf(ctx, resolved)
         const rendered = expression(ctx, item.expression)
-        const key = type === undefined ? rendered :
-          `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
+        const collation = Collation.ofExpression(ctx, resolved)
+        const key = collation !== undefined ? Collation.expressionKey(rendered, collation) :
+          type === undefined ? rendered : `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
         return `${key}${item.descending ? ' DESC' : ''}`
       })
       .join(', ')}`)
@@ -464,7 +466,7 @@ const groupingSelect =
     const sets = Grouping.expand(select_.groupBy ?? [])
     const branches = sets.map(set => selectCore(ctx, Grouping.branch(branchBase, set)))
     const with_ = definitions.length === 0 ? '' : `WITH ${definitions.join(', ')} `
-    const order = select_.orderBy === undefined ? '' : ` ${orderBy(ctx, select_.orderBy, select_)}`
+    const order = select_.orderBy === undefined ? '' : ` ${orderBy(ctx, select_.orderBy)}`
     return `${with_}${branches.join(' UNION ALL ')}${order}`
   }
 
@@ -493,7 +495,7 @@ export const select =
       parts.push(keyword, setTerm(ctx, union.select))
     }
     if (select_.orderBy !== undefined) {
-      parts.push(orderBy(ctx, select_.orderBy, select_))
+      parts.push(orderBy(ctx, select_.orderBy, inSet ? undefined : select_))
     }
     if (select_.offset !== undefined) {
       const fetch = select_.fetch === undefined ? '-1' : expression(ctx, select_.fetch)
@@ -656,7 +658,7 @@ const columnDefinition =
   ): string => {
     const parts: string[] = [ Quote.identifier(column.name) ]
     if (column.computed !== undefined) {
-      const type = Type.columnType(column.type)
+      const type = Type.columnType(column.type, column.collate)
       if (type !== '') {
         parts.push(type)
       }
@@ -683,7 +685,7 @@ const columnDefinition =
       // Rowid alias with AUTOINCREMENT gives MSSQL-like never-reused ids.
       parts.push('INTEGER PRIMARY KEY AUTOINCREMENT')
     } else {
-      const type = Type.columnType(column.type)
+      const type = Type.columnType(column.type, column.collate)
       if (type !== '') {
         parts.push(type)
       }
@@ -763,21 +765,51 @@ const createTable =
         statement_.columns.map(candidate => ({
           name: candidate.name,
           type: candidate.type,
-          nullable: candidate.nullable !== false
+          nullable: candidate.nullable !== false,
+          ...candidate.collate === undefined ? {} : { collation: candidate.collate }
         }))
       )),
       ...statement_.constraints
         .map(constraint => tableConstraint(ctx, constraint, identityColumns))
         .filter((rendered): rendered is string => rendered !== undefined)
     ]
-    return `CREATE TABLE ${Quote.objectName(statement_.name)} (${members.join(', ')})`
+    const table = Quote.objectName(statement_.name)
+    const byName = new Map(statement_.columns.map(column => [ column.name.toLowerCase(), column ]))
+    const uniqueColumns: readonly (readonly { readonly name: string }[])[] = [
+      ...statement_.columns.filter(column => column.unique === true).map(column => [ column ]),
+      ...statement_.constraints.filter(constraint =>
+        constraint.kind === 'primaryKey' || constraint.kind === 'unique')
+        .map(constraint => constraint.kind === 'primaryKey' || constraint.kind === 'unique' ?
+          constraint.columns : [])
+    ]
+    const indexes = uniqueColumns.flatMap((columns, index) => {
+      const collated = columns.map(column => byName.get(column.name.toLowerCase()))
+      if (!collated.some(column => column?.collate !== undefined)) {
+        return []
+      }
+      const keys = columns.map(column => {
+        const definition = byName.get(column.name.toLowerCase())
+        const rendered = Quote.identifier(column.name)
+        return definition?.collate === undefined ? rendered :
+          Collation.expressionKey(rendered, definition.collate)
+      })
+      const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
+      const indexName = Quote.identifier(`__mssqlite_${tableName}_collation_${index}`)
+      return [ `CREATE UNIQUE INDEX ${indexName} ON ${table} (${keys.join(', ')})` ]
+    })
+    return [ `CREATE TABLE ${table} (${members.join(', ')})`, ...indexes ].join('; ')
   }
 
 const createIndex =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createIndex' }): string => {
     const unique = statement_.unique ? 'UNIQUE ' : ''
     const columns = statement_.columns
-      .map(column => `${Quote.identifier(column.name)}${column.descending ? ' DESC' : ''}`)
+      .map(column => {
+        const value = Quote.identifier(column.name)
+        const key = column.collation === undefined ? value :
+          Collation.expressionKey(value, column.collation)
+        return `${key}${column.descending ? ' DESC' : ''}`
+      })
       .join(', ')
     const where = statement_.where === undefined ?
       '' :

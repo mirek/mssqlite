@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Collation from './collation.ts'
 import * as Decimal from './decimal.ts'
 import * as Quote from './quote.ts'
 import * as Type from './type.ts'
@@ -68,6 +69,23 @@ const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const left = expression(ctx, expression_.left)
     const right = expression(ctx, expression_.right)
+    const leftCollation = Collation.ofExpression(ctx, expression_.left)
+    const rightCollation = Collation.ofExpression(ctx, expression_.right)
+    if (leftCollation !== undefined && rightCollation !== undefined &&
+      leftCollation !== rightCollation &&
+      expression_.left.kind !== 'collate' && expression_.right.kind !== 'collate') {
+      return unsupported(
+        `Cannot resolve the collation conflict between '${leftCollation}' and '${rightCollation}'.`)
+    }
+    const collation = expression_.left.kind === 'collate' ? leftCollation :
+      expression_.right.kind === 'collate' ? rightCollation : leftCollation ?? rightCollation
+    if (collation !== undefined &&
+      [ '=', '<>', '!=', '<', '<=', '>', '>=', '!>', '!<' ].includes(expression_.operator)) {
+      const operator = expression_.operator === '!>' ? '<=' : expression_.operator === '!<' ? '>=' :
+        expression_.operator
+      return `(${Collation.expressionKey(left, collation)} ${operator} ` +
+        `${Collation.expressionKey(right, collation)})`
+    }
     const leftNumeric = Decimal.numericType(ctx, expression_.left)
     const rightNumeric = Decimal.numericType(ctx, expression_.right)
     const decimal = Decimal.typeOf(ctx, expression_.left) !== undefined ||
@@ -175,6 +193,8 @@ export const expression =
         return Quote.columnName(expression_.name)
       case 'nextValue':
         return `mssqlite_next_value_for(${Quote.string(expression_.sequence.join('.'))})`
+      case 'collate':
+        return `(${expression(ctx, expression_.expression)} COLLATE ${Collation.sqlite(expression_.collation)})`
       case 'unary':
         if (expression_.operator === '-' && Decimal.typeOf(ctx, expression_.operand) !== undefined) {
           const type = Decimal.typeOf(ctx, expression_.operand)
@@ -240,12 +260,26 @@ export const expression =
         return `(CASE${operand} ${whens}${else_} END)`
       }
       case 'in': {
+        const collation = Collation.ofExpression(ctx, expression_.expression)
+        if (collation !== undefined && Array.isArray(expression_.values)) {
+          const left = Collation.expressionKey(expression(ctx, expression_.expression), collation)
+          const values = expression_.values.map(value =>
+            Collation.expressionKey(expression(ctx, value), collation)).join(', ')
+          return `(${left} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
+        }
         const values = Array.isArray(expression_.values) ?
           expression_.values.map(value => expression(ctx, value)).join(', ') :
           subquery(ctx, expression_.values as Ast.Select)
         return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
       }
       case 'like': {
+        const collation = Collation.ofExpression(ctx, expression_.expression) ??
+          Collation.ofExpression(ctx, expression_.pattern)
+        if (collation !== undefined && expression_.escape === undefined) {
+          return `(${expression_.negated ? 'NOT ' : ''}mssqlite_collation_like(` +
+            `${expression(ctx, expression_.expression)}, ${expression(ctx, expression_.pattern)}, ` +
+            `'${collation}'))`
+        }
         const escape = expression_.escape === undefined ?
           '' :
           ` ESCAPE ${expression(ctx, expression_.escape)}`

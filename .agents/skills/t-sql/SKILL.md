@@ -90,6 +90,13 @@ The language pipeline lives in three packages:
   a STORED SQLite generated column and the default maps to VIRTUAL. Direct
   INSERT/UPDATE raises 271 and nondeterministic generated definitions raise
   4936. Generated columns may be indexed normally.
+- Supported COLLATE names are `SQL_Latin1_General_CP1_CI_AS` and the
+  `Latin1_General_100_{CI|CS}_{AS|AI}` plus `Latin1_General_100_BIN2` matrix.
+  Column declarations govern predicates, ORDER BY, unique constraints and
+  indexes; expression COLLATE has explicit precedence. CI folds Unicode case,
+  AI removes canonical combining marks, AS retains accents, and BIN2 uses the
+  unmodified text key. Unknown names raise 448 and conflicting implicit
+  collations raise 468.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

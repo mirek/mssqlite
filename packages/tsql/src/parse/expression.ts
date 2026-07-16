@@ -266,6 +266,18 @@ const unary: Parser.t<Ast.Expression> =
     return primary(reader)
   }
 
+const collated: Parser.t<Ast.Expression> =
+  reader => {
+    const value = unary(reader)
+    if (Result.failed(value)) {
+      return value
+    }
+    const clause = C.seq(C.keyword('collate'), C.anyIdentifier)(value.reader)
+    return Result.failed(clause) ? value : Result.ok(clause.reader, {
+      kind: 'collate', expression: value.value, collation: clause.value[1]
+    })
+  }
+
 const binaryLevel =
   (operators: readonly string[], next: Parser.t<Ast.Expression>): Parser.t<Ast.Expression> =>
     reader => {
@@ -291,7 +303,7 @@ const binaryLevel =
       return Result.ok(current, left)
     }
 
-const multiplicative = binaryLevel([ '*', '/', '%' ], unary)
+const multiplicative = binaryLevel([ '*', '/', '%' ], collated)
 // T-SQL puts + - & ^ | on one precedence level, left-to-right.
 const additive = binaryLevel([ '+', '-', '&', '^', '|' ], multiplicative)
 const bitwise = additive

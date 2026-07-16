@@ -107,6 +107,8 @@ export const numericType =
       }
       case 'unary':
         return numericType(ctx, value.operand)
+      case 'collate':
+        return numericType(ctx, value.expression)
       case 'binaryOp': {
         const left = numericType(ctx, value.left)
         const right = numericType(ctx, value.right)
@@ -147,6 +149,9 @@ export const typeOf =
     }
     if (value.kind === 'unary') {
       return typeOf(ctx, value.operand)
+    }
+    if (value.kind === 'collate') {
+      return typeOf(ctx, value.expression)
     }
     if (value.kind === 'binaryOp' || value.kind === 'call') {
       return numericType(ctx, value)

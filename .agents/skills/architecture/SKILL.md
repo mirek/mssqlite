@@ -48,9 +48,10 @@ the engine:
   are *real SQLite tables/views* created by the catalog — catalog queries
   need no interception; other schemas flatten (`"app.users"`); `#temp` →
   SQLite `temp` schema.
-- **Case-insensitivity** — char/text columns get `COLLATE NOCASE`,
-  approximating `SQL_Latin1_General_CP1_CI_AS`. LIKE is already
-  ASCII-case-insensitive in SQLite.
+- **Text sensitivity** — the default char/text baseline is `COLLATE NOCASE`;
+  explicit supported SQL collations choose BINARY/NOCASE plus deterministic
+  Unicode keys for case, accent and BIN2 behavior across predicates, ordering,
+  uniqueness and indexes.
 - **Variables are SQLite parameters** — `@x` passes through (SQLite
   supports `@`-parameters natively); each rendered statement carries its
   used-variable list so the engine binds exactly those. Globals map to
@@ -206,6 +207,13 @@ the engine:
   (`YYYY-MM-DD HH:MM:SS.fff…`); TDS codecs parse/format via proleptic
   civil-date math (no JS `Date` range limits); date UDFs implement MSSQL
   boundary-counting semantics.
+- **Collations use deterministic normalization keys** — parser ASTs retain
+  column and expression COLLATE names; source metadata carries declarations
+  into predicate and ORDER BY rendering. BINARY/NOCASE provide a baseline,
+  while `mssqlite_collation_key` applies the supported case/accent/BIN2 matrix
+  consistently to equality/range/IN/LIKE, ordering, uniqueness, and expression
+  indexes. Catalog rows retain the SQL name and TDS TYPE_INFO derives matching
+  LCID/flag/version/sort-id bytes. Conflicting implicit names raise 468.
 
 ## Extension points
 

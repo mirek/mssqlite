@@ -453,6 +453,19 @@ test('computed columns retain expression, persistence and nullability', () => {
   })
 })
 
+test('column and expression collations are retained', () => {
+  expect(parseStatement(`
+    CREATE TABLE names (value NVARCHAR(20) COLLATE Latin1_General_100_CS_AI)
+  `)).toMatchObject({
+    kind: 'createTable',
+    columns: [ { name: 'value', collate: 'Latin1_General_100_CS_AI' } ]
+  })
+  expect(parseExpression('value COLLATE Latin1_General_100_CI_AI = N\'cafe\'')).toMatchObject({
+    kind: 'binaryOp',
+    left: { kind: 'collate', collation: 'Latin1_General_100_CI_AI' }
+  })
+})
+
 test('composite primary key constraint', () => {
   expect(parseStatement('CREATE TABLE t (a INT, b INT, PRIMARY KEY (a, b DESC))')).toMatchObject({
     constraints: [ {

@@ -8,6 +8,7 @@ export type SourceColumn = {
   readonly name: string,
   readonly type?: TypeName.t,
   readonly nullable?: boolean
+  readonly collation?: string
 }
 
 /** ORDER BY item. */
@@ -89,6 +90,7 @@ export type Expression =
   | { readonly kind: 'exists', readonly select: Select }
   | { readonly kind: 'subquery', readonly select: Select }
   | { readonly kind: 'nextValue', readonly sequence: QualifiedName }
+  | { readonly kind: 'collate', readonly expression: Expression, readonly collation: string }
 
 /** One CREATE/ALTER SEQUENCE option, retained in source order for validation. */
 export type SequenceOption =
@@ -409,7 +411,11 @@ export type Statement =
       readonly clustered?: boolean,
       readonly name: string,
       readonly table: QualifiedName,
-      readonly columns: readonly { readonly name: string, readonly descending: boolean }[],
+      readonly columns: readonly {
+        readonly name: string,
+        readonly descending: boolean,
+        readonly collation?: string
+      }[],
       readonly include?: readonly string[],
       readonly where?: Expression
     }
