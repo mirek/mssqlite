@@ -494,6 +494,72 @@ const createProcedure: Parser.t<Ast.Statement> =
     })
   )
 
+const triggerAction: Parser.t<'create' | 'alter' | 'createOrAlter'> =
+  C.first(
+    C.map(
+      C.seq(C.keyword('create'), C.keyword('or'), C.keyword('alter'), C.keyword('trigger')),
+      () => 'createOrAlter' as const
+    ),
+    C.map(C.seq(C.keyword('create'), C.keyword('trigger')), () => 'create' as const),
+    C.map(C.seq(C.keyword('alter'), C.keyword('trigger')), () => 'alter' as const)
+  )
+
+const triggerTiming: Parser.t<'after' | 'insteadOf'> =
+  C.first(
+    C.map(C.first(C.keyword('after'), C.keyword('for')), () => 'after' as const),
+    C.map(C.seq(C.keyword('instead'), C.keyword('of')), () => 'insteadOf' as const)
+  )
+
+const triggerEvent: Parser.t<Ast.TriggerEvent> =
+  C.first(C.keyword('insert'), C.keyword('update'), C.keyword('delete')) as Parser.t<Ast.TriggerEvent>
+
+const triggerOption: Parser.t<string> =
+  C.first(
+    C.map(
+      C.seq(
+        C.keyword('execute'), C.keyword('as'), C.maybe(C.punct('=')),
+        C.first(C.keyword('caller'), C.keyword('self'), C.keyword('owner'), C.anyIdentifier)
+      ),
+      ([ , , , principal ]) => `execute as ${principal.toLowerCase()}`
+    ),
+    C.map(C.anyIdentifier, name => name.toLowerCase())
+  )
+
+const createTrigger: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      triggerAction,
+      C.qualifiedName,
+      C.keyword('on'),
+      C.qualifiedName,
+      C.maybe(C.map(
+        C.seq(C.keyword('with'), C.sepBy1(triggerOption, C.punct(','))),
+        ([ , options ]) => options
+      )),
+      triggerTiming,
+      C.sepBy1(triggerEvent, C.punct(',')),
+      C.maybe(C.seq(C.keyword('with'), C.keyword('append'))),
+      C.maybe(C.seq(C.keyword('not'), C.keyword('for'), C.keyword('replication'))),
+      C.keyword('as'),
+      statementsUntilInputEnd
+    ),
+    ([ action, name, , target, options, timing, events, append, replication, , body ]) => ({
+      kind: 'createTrigger' as const,
+      name,
+      action,
+      target,
+      timing,
+      events,
+      options: [
+        ...(options ?? []),
+        ...append === undefined ? [] : [ 'append' ],
+        ...replication === undefined ? [] : [ 'not for replication' ]
+      ],
+      body,
+      definition: ''
+    })
+  )
+
 /** Single statement parser. */
 export const statement: Parser.t<Ast.Statement> =
   C.first<Parser.t<Ast.Statement>[]>(
@@ -505,6 +571,7 @@ export const statement: Parser.t<Ast.Statement> =
     createTable,
     createIndex,
     createView,
+    createTrigger,
     createProcedure,
     createFunction,
     alterTable,

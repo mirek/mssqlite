@@ -7,6 +7,12 @@ import type { Session, TableVariable } from './session.ts'
 
 const resolveName =
   (session: Session, name: Ast.QualifiedName): Ast.QualifiedName => {
+    const transition = name.length === 1 ?
+      session.transitionTables.get(name[0]?.toLowerCase() ?? '') :
+      undefined
+    if (transition !== undefined) {
+      return transition.table
+    }
     const variable = name.length === 1 && name[0]?.startsWith('@') === true ?
       name[0] :
       undefined
@@ -168,9 +174,9 @@ const typeNameOf =
 const sourceColumns =
   (session: Session, name: Ast.QualifiedName, pragma: string): readonly Ast.SourceColumn[] => {
     const tableName = name[name.length - 1] ?? ''
-    const variable = [ ...session.tableVariables.values() ].find(candidate =>
+    const variable = [ ...session.tableVariables.values(), ...session.transitionTables.values() ].find(candidate =>
       candidate.table[candidate.table.length - 1]?.toLowerCase() === tableName.toLowerCase())
-    if (variable !== undefined) {
+    if (variable !== undefined && variable.columns.length > 0) {
       return variable.columns.map(column => ({
         name: column.name,
         type: column.type,
@@ -412,13 +418,23 @@ const resolveTableSource =
   (session: Session, source: Ast.TableSource): Ast.TableSource => {
     switch (source.kind) {
       case 'table': {
+        const transitionAlias = source.name.length === 1 &&
+          session.transitionTables.has(source.name[0]?.toLowerCase() ?? '') ?
+          source.name[0] : undefined
         const name = resolveName(session, source.name)
         const table = Transpile.Quote.objectName(name)
         const tableName = name[name.length - 1] ?? ''
         const pragma = tableName.startsWith('#') ?
           `PRAGMA temp.table_info(${Transpile.Quote.identifier(tableName)})` :
           `PRAGMA table_info(${table})`
-        return { ...source, name, columns: sourceColumns(session, name, pragma) }
+        return {
+          ...source,
+          name,
+          ...source.alias === undefined && transitionAlias !== undefined ?
+            { alias: transitionAlias } :
+            {},
+          columns: sourceColumns(session, name, pragma)
+        }
       }
       case 'function':
         {

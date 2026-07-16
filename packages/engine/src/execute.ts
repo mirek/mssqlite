@@ -1,7 +1,7 @@
 import * as Catalog from '@mssqlite/catalog'
 import * as Transpile from '@mssqlite/transpile'
 import { parse } from '@mssqlite/tsql'
-import { bindings } from './bind.ts'
+import { bindable, bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { executeMerge } from './merge.ts'
 import {
@@ -16,9 +16,11 @@ import type { Ast } from '@mssqlite/tsql'
 import {
   functionKey,
   procedureKey,
+  triggerKey,
   type Procedure,
   type Server,
   type Session,
+  type Trigger,
   type UserFunction,
   type Value,
   type Variable
@@ -114,6 +116,222 @@ const runRendered =
     const result = statement.run(bindings(session, rendered.variables))
     session.rowCount = Number(result.changes)
     items.push({ kind: 'count', rowCount: Number(result.changes) })
+  }
+
+type DmlStatement =
+  Ast.Statement & { kind: 'insert' | 'update' | 'delete' }
+
+type TransitionRows = {
+  readonly inserted: Record<string, Value>[],
+  readonly deleted: Record<string, Value>[]
+}
+
+const triggersFor =
+  (session: Session, statement: DmlStatement): readonly Trigger[] => {
+    const target = statement.kind === 'insert' ? statement.table : statement.target
+    const key = procedureKey(target)
+    return [ ...session.server.triggers.values() ].filter(trigger =>
+      procedureKey(trigger.target) === key && trigger.events.includes(statement.kind) &&
+      !session.activeTriggers.has(triggerKey(trigger.name)))
+  }
+
+const transitionTable =
+  (session: Session, target: Ast.QualifiedName, label: 'inserted' | 'deleted'): string => {
+    const name = `#__mssqlite_${label}_${session.spid}_${session.nextTransitionTable++}`
+    session.db.exec(
+      `CREATE TEMP TABLE ${Transpile.Quote.identifier(name)} AS ` +
+      `SELECT * FROM ${Transpile.Quote.objectName(target)} WHERE 0`)
+    return name
+  }
+
+const insertTransitionRows =
+  (session: Session, table: string, rows: readonly Record<string, Value>[]): void => {
+    const first = rows[0]
+    if (first === undefined) {
+      return
+    }
+    const columns = Object.keys(first)
+    const sql = `INSERT INTO ${Transpile.Quote.identifier(table)} (` +
+      `${columns.map(Transpile.Quote.identifier).join(', ')}) VALUES (` +
+      `${columns.map(() => '?').join(', ')})`
+    const insert = session.db.prepare(sql)
+    for (const row of rows) {
+      insert.run(...columns.map(column => bindable(row[column] ?? null)))
+    }
+  }
+
+const returningRows =
+  (session: Session, statement: DmlStatement): Record<string, Value>[] => {
+    const qualifier = statement.kind === 'delete' ? 'deleted' : 'inserted'
+    const captured: DmlStatement = {
+      ...statement,
+      output: { items: [ { kind: 'star', qualifier: [ qualifier ] } ] }
+    }
+    const rendered = Transpile.statement(captured)
+    return session.db.prepare(rendered.sql)
+      .all(bindings(session, rendered.variables)) as Record<string, Value>[]
+  }
+
+const affectedSelect =
+  (statement: Ast.Statement & { kind: 'update' | 'delete' }): Ast.Select => ({
+    kind: 'select',
+    distinct: false,
+    ...statement.top === undefined ? {} : { top: { count: statement.top, percent: false } },
+    items: [ { kind: 'star' } ],
+    from: statement.from ?? { kind: 'table', name: statement.target },
+    ...statement.where === undefined ? {} : { where: statement.where }
+  })
+
+const selectRecords =
+  (session: Session, select: Ast.Select): Record<string, Value>[] => {
+    const rendered = Transpile.statement(select)
+    return session.db.prepare(rendered.sql)
+      .all(bindings(session, rendered.variables)) as Record<string, Value>[]
+  }
+
+const insteadOfRows =
+  (session: Session, statement: DmlStatement, target: Ast.QualifiedName): TransitionRows => {
+    switch (statement.kind) {
+      case 'insert': {
+        const insertedTable = transitionTable(session, target, 'inserted')
+        const inserted = returningRows(session, { ...statement, table: [ insertedTable ] })
+        session.db.exec(`DROP TABLE ${Transpile.Quote.identifier(insertedTable)}`)
+        return { inserted, deleted: [] }
+      }
+      case 'delete':
+        return { inserted: [], deleted: selectRecords(session, affectedSelect(statement)) }
+      case 'update': {
+        if (statement.from !== undefined) {
+          throw new MssqlError('INSTEAD OF UPDATE with a FROM clause is not supported.', 40000, 16)
+        }
+        const deleted = selectRecords(session, affectedSelect(statement))
+        const insertedTable = transitionTable(session, target, 'inserted')
+        insertTransitionRows(session, insertedTable, deleted)
+        const inserted = returningRows(session, {
+          kind: 'update',
+          target: [ insertedTable ],
+          set: statement.set
+        })
+        session.db.exec(`DROP TABLE ${Transpile.Quote.identifier(insertedTable)}`)
+        return { inserted, deleted }
+      }
+      default:
+        throw new MssqlError('Statement is not a triggerable DML statement.', 40000, 16)
+    }
+  }
+
+const afterRows =
+  (session: Session, statement: DmlStatement): TransitionRows => {
+    if (statement.kind === 'update') {
+      if (statement.from !== undefined) {
+        throw new MssqlError('Triggered UPDATE with a FROM clause is not supported.', 40000, 16)
+      }
+      const deleted = selectRecords(session, affectedSelect(statement))
+      return { inserted: returningRows(session, statement), deleted }
+    }
+    const rows = returningRows(session, statement)
+    return statement.kind === 'insert' ?
+      { inserted: rows, deleted: [] } :
+      { inserted: [], deleted: rows }
+  }
+
+const runTrigger =
+  (
+    session: Session,
+    trigger: Trigger,
+    target: Ast.QualifiedName,
+    rows: TransitionRows,
+    items: Item[]
+  ): void => {
+    if (session.nestLevel >= 32) {
+      throw new MssqlError(
+        'Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32).', 217, 16)
+    }
+    const inserted = transitionTable(session, target, 'inserted')
+    const deleted = transitionTable(session, target, 'deleted')
+    insertTransitionRows(session, inserted, rows.inserted)
+    insertTransitionRows(session, deleted, rows.deleted)
+    const saved = new Map(session.transitionTables)
+    session.transitionTables.set('inserted', { table: [ inserted ], columns: [], constraints: [] })
+    session.transitionTables.set('deleted', { table: [ deleted ], columns: [], constraints: [] })
+    const key = triggerKey(trigger.name)
+    const savedVariables = new Map(session.variables)
+    session.variables.clear()
+    session.activeTriggers.add(key)
+    session.nestLevel++
+    try {
+      withTableVariableScope(session, () => {
+        const triggerItems: Item[] = []
+        for (const inner of trigger.body) {
+          const signal = executeStatement(session, inner, triggerItems)
+          if (signal === 'return') {
+            break
+          }
+        }
+        items.push(...triggerItems.filter(item => item.kind !== 'count'))
+      })
+    } finally {
+      session.nestLevel--
+      session.activeTriggers.delete(key)
+      session.transitionTables.clear()
+      for (const [ name, table ] of saved) {
+        session.transitionTables.set(name, table)
+      }
+      session.variables.clear()
+      for (const [ name, variable ] of savedVariables) {
+        session.variables.set(name, variable)
+      }
+      session.db.exec(`DROP TABLE IF EXISTS ${Transpile.Quote.identifier(inserted)}`)
+      session.db.exec(`DROP TABLE IF EXISTS ${Transpile.Quote.identifier(deleted)}`)
+    }
+  }
+
+/** Executes one DML statement and its statement-level triggers atomically. */
+const runTriggered =
+  (session: Session, statement: DmlStatement, triggers: readonly Trigger[], items: Item[]): void => {
+    if (statement.output !== undefined) {
+      throw new MssqlError('OUTPUT on a statement that fires a trigger is not supported.', 40000, 16)
+    }
+    const target = statement.kind === 'insert' ? statement.table : statement.target
+    const insteadOf = triggers.filter(trigger => trigger.timing === 'insteadOf')
+    const after = triggers.filter(trigger => trigger.timing === 'after')
+    const savepoint = `__mssqlite_trigger_${session.spid}_${session.nextTransitionTable++}`
+    const previousRowCount = session.rowCount
+    let failedInTrigger = false
+    session.db.exec(`SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
+    try {
+      const rows = insteadOf.length > 0 ?
+        insteadOfRows(session, statement, target) :
+        afterRows(session, statement)
+      const rowCount = statement.kind === 'delete' ? rows.deleted.length : rows.inserted.length
+      session.rowCount = rowCount
+      for (const trigger of insteadOf.length > 0 ? insteadOf : after) {
+        try {
+          runTrigger(session, trigger, target, rows, items)
+        } catch (error) {
+          failedInTrigger = true
+          throw error
+        }
+      }
+      session.db.exec(`RELEASE SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
+      session.rowCount = rowCount
+      if (statement.kind === 'insert' && rowCount > 0 && hasIdentity(session, target)) {
+        const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
+        session.lastIdentity = Number(last.id)
+      }
+      items.push({ kind: 'count', rowCount })
+    } catch (error) {
+      if (failedInTrigger && session.transactionCount > 0) {
+        session.db.exec('ROLLBACK')
+        session.transactionCount = 0
+        session.transactionDoomed = false
+      } else if (session.db.isTransaction) {
+        session.db.exec(`ROLLBACK TO SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
+        session.db.exec(`RELEASE SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
+      }
+      session.rowCount = previousRowCount
+      throw error
+    }
   }
 
 /** Runs a DML statement whose OUTPUT clause renders as SQLite RETURNING. */
@@ -361,6 +579,14 @@ const executeTransaction =
 
 const executeStatement =
   (session: Session, statement_: Ast.Statement, items: Item[]): Signal => {
+    const transitionTarget = statement_.kind === 'insert' ? statement_.table :
+      statement_.kind === 'update' || statement_.kind === 'delete' ? statement_.target :
+        undefined
+    if (transitionTarget?.length === 1 &&
+      session.transitionTables.has(transitionTarget[0]?.toLowerCase() ?? '')) {
+      throw new MssqlError(
+        `The logical table '${transitionTarget[0]}' cannot be updated.`, 286, 16)
+    }
     const statement = resolveTableVariables(session, statement_)
     if (statement.kind === 'createFunction') {
       defineFunction(session, statement)
@@ -382,6 +608,26 @@ const executeStatement =
       }
       return undefined
     }
+    if (statement.kind === 'createTrigger') {
+      defineTrigger(session, statement)
+      return undefined
+    }
+    if (statement.kind === 'dropTrigger') {
+      for (const name of statement.names) {
+        const key = triggerKey(name)
+        if (!session.server.triggers.has(key)) {
+          if (!statement.ifExists) {
+            throw new MssqlError(
+              `Cannot drop the trigger '${name.join('.')}', because it does not exist or you do not have permission.`,
+              3701, 16)
+          }
+          continue
+        }
+        Catalog.dropTrigger(session.db, name)
+        session.server.triggers.delete(key)
+      }
+      return undefined
+    }
     switch (statement.kind) {
       case 'select': {
         if (statement.into !== undefined) {
@@ -398,6 +644,11 @@ const executeStatement =
         return undefined
       }
       case 'insert': {
+        const triggers = triggersFor(session, statement)
+        if (triggers.length > 0) {
+          runTriggered(session, statement, triggers, items)
+          return undefined
+        }
         if (statement.output !== undefined) {
           runWithOutput(session, statement, statement.output, items)
           return undefined
@@ -420,7 +671,12 @@ const executeStatement =
         executeMerge(session, statement, items)
         return undefined
       case 'update':
-      case 'delete':
+      case 'delete': {
+        const triggers = triggersFor(session, statement)
+        if (triggers.length > 0) {
+          runTriggered(session, statement, triggers, items)
+          return undefined
+        }
         if (statement.output !== undefined) {
           if (statement.kind === 'update' && Transpile.Output.readsDeleted(statement.output)) {
             updateWithOutput(session, statement, statement.output, items)
@@ -431,6 +687,7 @@ const executeStatement =
         }
         runRendered(session, Transpile.statement(statement), items)
         return undefined
+      }
       case 'truncate': {
         runRendered(session, Transpile.statement(statement), items)
         const name = Catalog.objectNameOf(statement.table).name
@@ -450,6 +707,12 @@ const executeStatement =
       case 'dropTable':
         session.db.exec(Transpile.statement(statement).sql)
         for (const name of statement.names) {
+          const target = procedureKey(name)
+          for (const [ key, trigger ] of session.server.triggers) {
+            if (procedureKey(trigger.target) === target) {
+              session.server.triggers.delete(key)
+            }
+          }
           Catalog.dropTable(session.db, name)
         }
         return undefined
@@ -705,6 +968,49 @@ const defineProcedure =
     session.server.procedures.set(key, {
       name,
       parameters: statement.parameters,
+      body: statement.body,
+      definition: statement.definition
+    })
+  }
+
+const defineTrigger =
+  (session: Session, statement: Ast.Statement & { kind: 'createTrigger' }): void => {
+    const key = triggerKey(statement.name)
+    const name = statement.name[statement.name.length - 1] ?? ''
+    const exists = session.server.triggers.has(key)
+    const objectExists = Catalog.objectIdOf(session.db, statement.name) !== undefined
+    if ((statement.action === 'create' && objectExists) ||
+      (statement.action === 'createOrAlter' && objectExists && !exists)) {
+      throw new MssqlError(`There is already an object named '${name}' in the database.`, 2714, 16)
+    }
+    if (statement.action === 'alter' && !exists) {
+      throw new MssqlError(`Invalid object name '${name}'.`, 208, 16)
+    }
+    if (Catalog.objectIdOf(session.db, statement.target) === undefined) {
+      throw new MssqlError(`Invalid object name '${statement.target.join('.')}'.`, 208, 16)
+    }
+    if (statement.timing === 'insteadOf') {
+      const target = procedureKey(statement.target)
+      const collision = [ ...session.server.triggers.entries() ].some(([ otherKey, trigger ]) =>
+        otherKey !== key && trigger.timing === 'insteadOf' &&
+        procedureKey(trigger.target) === target &&
+        trigger.events.some(event => statement.events.includes(event)))
+      if (collision) {
+        throw new MssqlError(
+          'Only one INSTEAD OF trigger is allowed for each INSERT, UPDATE, or DELETE statement on a table.',
+          2111, 16)
+      }
+    }
+    if (exists) {
+      Catalog.dropTrigger(session.db, statement.name)
+    }
+    Catalog.createTrigger(session.db, statement.name, statement.target, statement.definition)
+    session.server.triggers.set(key, {
+      name: statement.name,
+      target: statement.target,
+      timing: statement.timing,
+      events: statement.events,
+      options: statement.options,
       body: statement.body,
       definition: statement.definition
     })

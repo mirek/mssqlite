@@ -1172,3 +1172,131 @@ test('merge inside an explicit transaction respects rollback', () => {
   `)
   expect(rowsOf(executeBatch(s, 'SELECT v FROM t')).rows).toEqual([ [ 1 ] ])
 })
+
+test('AFTER triggers expose statement-level inserted and deleted rowsets', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE orders (id INT PRIMARY KEY, amount INT);
+    CREATE TABLE audit (event NVARCHAR(10), id INT, old_amount INT, new_amount INT);
+  `)
+  executeBatch(s, `
+    CREATE TRIGGER dbo.orders_insert ON dbo.orders AFTER INSERT AS
+      INSERT INTO audit (event, id, new_amount)
+      SELECT N'insert', id, amount FROM inserted
+  `)
+  expect(executeBatch(s, 'INSERT INTO orders VALUES (1, 10), (2, 20)')).toEqual([
+    { kind: 'count', rowCount: 2 }
+  ])
+  executeBatch(s, `
+    CREATE TRIGGER dbo.orders_update ON dbo.orders AFTER UPDATE AS
+      INSERT INTO audit (event, id, old_amount, new_amount)
+      SELECT N'update', deleted.id, deleted.amount, inserted.amount
+      FROM deleted JOIN inserted ON deleted.id = inserted.id
+  `)
+  executeBatch(s, 'UPDATE orders SET amount = amount + 5')
+  executeBatch(s, `
+    CREATE TRIGGER dbo.orders_delete ON dbo.orders AFTER DELETE AS
+      INSERT INTO audit (event, id, old_amount)
+      SELECT N'delete', id, amount FROM deleted
+  `)
+  executeBatch(s, 'DELETE FROM orders WHERE id = 2')
+  expect(rowsOf(executeBatch(s, `
+    SELECT event, id, old_amount, new_amount FROM audit ORDER BY rowid
+  `)).rows).toEqual([
+    [ 'insert', 1, null, 10 ],
+    [ 'insert', 2, null, 20 ],
+    [ 'update', 1, 10, 15 ],
+    [ 'update', 2, 20, 25 ],
+    [ 'delete', 2, 25, null ]
+  ])
+})
+
+test('INSTEAD OF triggers replace DML', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE guarded (id INT PRIMARY KEY, value INT)')
+  executeBatch(s, `
+    CREATE TRIGGER dbo.guard_insert ON guarded INSTEAD OF INSERT AS
+      INSERT INTO guarded (id, value) SELECT id, value * 2 FROM inserted
+  `)
+  executeBatch(s, 'INSERT INTO guarded VALUES (1, 5), (2, 7)')
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM guarded ORDER BY id')).rows).toEqual([
+    [ 1, 10 ], [ 2, 14 ]
+  ])
+})
+
+test('trigger transition tables are read-only and a trigger fires for zero affected rows', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY); CREATE TABLE fired (n INT)')
+  executeBatch(s, `
+    CREATE TRIGGER dbo.zero_delete ON t AFTER DELETE AS
+      INSERT INTO fired SELECT COUNT(*) FROM deleted
+  `)
+  expect(executeBatch(s, 'DELETE FROM t WHERE id = 99')).toEqual([ { kind: 'count', rowCount: 0 } ])
+  expect(rowsOf(executeBatch(s, 'SELECT n FROM fired')).rows).toEqual([ [ 0 ] ])
+  executeBatch(s, `
+    CREATE TRIGGER dbo.readonly_inserted ON t AFTER INSERT AS
+      UPDATE inserted SET id = id + 1
+  `)
+  expect(() => executeBatch(s, 'INSERT INTO t VALUES (1)'))
+    .toThrowError(expect.objectContaining({ number: 286 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM t')).rows).toEqual([ [ 0 ] ])
+})
+
+test('trigger errors roll back the originating statement', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE protected (id INT PRIMARY KEY)')
+  executeBatch(s, `
+    CREATE TRIGGER dbo.reject_insert ON protected AFTER INSERT AS
+      RAISERROR (N'rejected', 16, 1)
+  `)
+  expect(() => executeBatch(s, 'INSERT INTO protected VALUES (1), (2)'))
+    .toThrowError(expect.objectContaining({ message: 'rejected' }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM protected')).rows).toEqual([ [ 0 ] ])
+})
+
+test('an unhandled trigger error rolls back the enclosing transaction', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE before_trigger (id INT); CREATE TABLE rejected (id INT)')
+  executeBatch(s, `
+    CREATE TRIGGER dbo.reject_transaction ON rejected AFTER INSERT AS
+      THROW 50001, N'trigger failed', 1
+  `)
+  executeBatch(s, 'BEGIN TRAN; INSERT INTO before_trigger VALUES (1)')
+  expect(() => executeBatch(s, 'INSERT INTO rejected VALUES (1)'))
+    .toThrowError(expect.objectContaining({ number: 50001 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT (SELECT COUNT(*) FROM before_trigger) AS n, @@TRANCOUNT AS tc
+  `)).rows).toEqual([ [ 0, 0 ] ])
+})
+
+test('triggers alter, drop, persist, and register SQL_TRIGGER metadata', () => {
+  const path = join(tmpdir(), `mssqlite-trigger-${process.pid}-${Date.now()}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, 'CREATE TABLE source (id INT); CREATE TABLE log (id INT)')
+    executeBatch(first, `
+      CREATE TRIGGER dbo.persisted_trigger ON source AFTER INSERT AS
+        INSERT INTO log SELECT id FROM inserted
+    `)
+    expect(rowsOf(executeBatch(first, `
+      SELECT type, type_desc, parent_object_id FROM sys.objects
+      WHERE name = N'persisted_trigger'
+    `)).rows[0]).toEqual([ 'TR', 'SQL_TRIGGER', expect.any(Number) ])
+
+    const second = session(server({ path }))
+    executeBatch(second, 'INSERT INTO source VALUES (1)')
+    expect(rowsOf(executeBatch(second, 'SELECT id FROM log')).rows).toEqual([ [ 1 ] ])
+    executeBatch(second, `
+      ALTER TRIGGER dbo.persisted_trigger ON source AFTER INSERT AS
+        INSERT INTO log SELECT id + 10 FROM inserted
+    `)
+    executeBatch(second, 'INSERT INTO source VALUES (2)')
+    executeBatch(second, 'DROP TRIGGER dbo.persisted_trigger')
+    executeBatch(second, 'INSERT INTO source VALUES (3)')
+    expect(rowsOf(executeBatch(second, 'SELECT id FROM log ORDER BY id')).rows).toEqual([
+      [ 1 ], [ 12 ]
+    ])
+  } finally {
+    rmSync(path, { force: true })
+  }
+})

@@ -494,6 +494,26 @@ test('output clause over the wire', async () => {
   expect(deleted.rows).toEqual([ { id: 2 } ])
 })
 
+test('statement-level triggers execute over tedious', async () => {
+  await query(`
+    CREATE TABLE wire_trigger_source (id INT PRIMARY KEY, value INT);
+    CREATE TABLE wire_trigger_audit (id INT, value INT);
+  `)
+  await query(`
+    CREATE TRIGGER dbo.wire_trigger ON wire_trigger_source AFTER INSERT, UPDATE AS
+      INSERT INTO wire_trigger_audit (id, value)
+      SELECT id, value FROM inserted
+  `)
+  const inserted = await query('INSERT INTO wire_trigger_source VALUES (1, 10), (2, 20)')
+  expect(inserted.rowCount).toBe(2)
+  await query('UPDATE wire_trigger_source SET value += 1')
+  const audit = await query('SELECT id, value FROM wire_trigger_audit ORDER BY rowid')
+  expect(audit.rows).toEqual([
+    { id: 1, value: 10 }, { id: 2, value: 20 },
+    { id: 1, value: 11 }, { id: 2, value: 21 }
+  ])
+})
+
 test('merge over the wire reports the combined row count', async () => {
   await query(`
     CREATE TABLE stock (sku NVARCHAR(20) PRIMARY KEY, qty INT);

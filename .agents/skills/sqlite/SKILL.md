@@ -106,6 +106,12 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   body in an isolated scope. Inline TVFs substitute argument expressions into
   their stored SELECT AST and become derived sources; correlated simple forms
   lower to ordinary equality joins because SQLite lacks general LATERAL.
+- SQL Server DML triggers are not mapped to SQLite `CREATE TRIGGER`: SQLite
+  fires once per row and exposes only scalar OLD/NEW values. The engine wraps
+  each triggering statement in a savepoint, captures full affected rowsets
+  with RETURNING plus an UPDATE pre-image snapshot, materializes temp
+  `inserted`/`deleted` tables, and interprets the stored T-SQL body once.
+  INSTEAD OF operations build intended images without mutating the base table.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

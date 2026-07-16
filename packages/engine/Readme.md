@@ -4,7 +4,8 @@ T-SQL execution engine over `node:sqlite`. Parses batches with
 [`@mssqlite/tsql`](../tsql), renders SQL with
 [`@mssqlite/transpile`](../transpile), maintains the
 [`@mssqlite/catalog`](../catalog), and interprets what SQLite can't run —
-variables, table variables, control flow, transactions, procedures.
+variables, table variables, control flow, transactions, procedures, and
+statement-level DML triggers.
 
 ## API
 
@@ -102,6 +103,14 @@ const items = executeBatch(s, `
   declared return metadata, and side-effect validation. Inline TVFs substitute
   call arguments into their SELECT AST and render as derived sources; simple
   correlated APPLY calls lower to equality joins with CROSS/OUTER semantics.
+- **DML triggers** — CREATE/ALTER/DROP persists `TR` definitions and reloads
+  them on startup. AFTER and INSTEAD OF INSERT/UPDATE/DELETE bodies run once
+  per statement through the interpreter with complete, read-only, multi-row
+  `inserted` and `deleted` temp rowsets. Generated savepoints make the base DML
+  and nested trigger effects atomic; unhandled trigger errors roll back an
+  enclosing transaction. Direct recursion is suppressed, nesting caps at 32,
+  and the original affected-row count wins over trigger-body counts. OUTPUT,
+  UPDATE FROM, and MERGE-trigger firing remain unsupported.
 
 ## Column metadata
 

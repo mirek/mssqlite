@@ -65,6 +65,12 @@ The language pipeline lives in three packages:
   statement's `definition` with the trimmed batch source for
   sys.sql_modules. Parameters accept optional parens, defaults,
   OUT/OUTPUT and READONLY.
+- CREATE/ALTER/CREATE OR ALTER TRIGGER also owns the rest of its batch.
+  The AST retains the table target, AFTER/FOR or INSTEAD OF timing, ordered
+  INSERT/UPDATE/DELETE event list, WITH options, NOT FOR REPLICATION, and body;
+  DROP TRIGGER supports IF EXISTS and multiple names. Runtime transition
+  tables are statement-level and read-only. Direct recursion is suppressed;
+  nested triggers otherwise share the 32-level procedure/function limit.
 - TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
   accept `TOP (expr)` only, per MSSQL.
 - OUTPUT clause (`Ast.Output`) sits between the column list / SET list /

@@ -103,6 +103,17 @@ the engine:
   inline TVFs instead substitute argument ASTs into the stored SELECT before
   ordinary table-source resolution. Simple correlated inline sources reuse
   APPLY's extracted equality-key join lowering.
+- **DML triggers are statement-level engine work** — persisted `TR` modules
+  reparse into `server.triggers` at startup. A triggerable INSERT/UPDATE/DELETE
+  runs inside a generated savepoint; `RETURNING` plus a pre-update snapshot
+  produce complete multi-row images, which are copied to uniquely named temp
+  tables and resolved as read-only `inserted` / `deleted` sources while the
+  ordinary AST interpreter runs the body. This deliberately does not use
+  SQLite's row-level trigger subsystem. INSTEAD OF triggers receive intended
+  images and replace the base operation; direct self-recursion is suppressed,
+  other nested triggers share the 32-level module limit, and an unhandled
+  trigger error rolls back an enclosing user transaction. Trigger-body count
+  items are suppressed and the originating statement restores `@@ROWCOUNT`.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -189,8 +200,9 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE TRIGGER, cursors, or sequences. MERGE
-  OUTPUT may not reference source columns. Unlike SQL Server, table
+- No cursors or sequences. Triggered DML does not yet support OUTPUT or
+  UPDATE FROM, and MERGE does not yet fire DML triggers. MERGE OUTPUT may not
+  reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite
   transaction and therefore roll back with it.
 - Batch error semantics are all-or-nothing: any statement error aborts
