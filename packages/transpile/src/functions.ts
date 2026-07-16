@@ -190,7 +190,18 @@ const handlers: Record<string, Handler> = {
   // JSON.
   isjson: fixed('json_valid'),
   json_value: fixed('json_extract'),
-  json_query: fixed('json_extract'),
+  json_query: (call, render) => {
+    if (call.args.length < 1 || call.args.length > 2) {
+      return unsupported('JSON_QUERY expects one or two arguments.')
+    }
+    const value = arg(call, render, 0)
+    if (call.args.length === 1) {
+      return `(CASE WHEN json_type(${value}) IN ('object', 'array') THEN json(${value}) END)`
+    }
+    const path = arg(call, render, 1)
+    return `(CASE WHEN json_type(${value}, ${path}) IN ('object', 'array') ` +
+      `THEN json_extract(${value}, ${path}) END)`
+  },
   // System.
   newid: fixed('mssqlite_newid'),
   scope_identity: fixed('mssqlite_scope_identity'),

@@ -345,6 +345,23 @@ test('grouping sets values and metadata over the wire', async () => {
   ])
 })
 
+test('for json streams large nvarchar max output over the wire', async () => {
+  const jsonColumn = 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B'
+  const result = await query(`
+    SELECT REPLICATE(N'x', 10000) AS payload, NULL AS omitted
+    FOR JSON PATH
+  `)
+  expect(result.rows).toHaveLength(1)
+  expect(JSON.parse(String(result.rows[0]?.[jsonColumn]))).toEqual([
+    { payload: 'x'.repeat(10000) }
+  ])
+  expect(result.columns).toEqual([ {
+    name: jsonColumn,
+    type: 'NVarChar',
+    length: 65535
+  } ])
+})
+
 test('update and delete counts', async () => {
   const update = await query('UPDATE users SET age = 31 WHERE name = N\'Alice\'')
   expect(update.rowCount).toBe(1)

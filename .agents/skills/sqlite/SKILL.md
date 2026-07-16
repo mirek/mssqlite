@@ -95,6 +95,12 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch
   constants. A MATERIALIZED CTE evaluates simple sources once; duplicate
   explicit sets remain separate branches as SQL Server requires.
+- FOR JSON uses SQLite JSON1 construction rather than string concatenation:
+  per-row `json_object`/`json_patch` preserves escaping and optional NULLs,
+  `json_group_array` produces the outer array, and `json()` marks JSON_QUERY
+  or nested FOR JSON fragments after subquery boundaries. Empty PATH/AUTO
+  results coalesce to `[]`; WITHOUT_ARRAY_WRAPPER uses comma concatenation
+  and, like SQL Server, is only valid JSON for a single row.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

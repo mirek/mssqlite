@@ -60,6 +60,9 @@ const items = executeBatch(s, `
   aggregate branches with GROUPING() replaced by branch-local tinyint bits.
   Source catalog annotations retain exact grouping/aggregate metadata through
   the compound result, including subtotal NULLs.
+- **FOR JSON PATH / AUTO** — rendered queries return one SQL Server-named
+  `nvarchar(max)` column. PATH supports dotted nesting and nested JSON
+  subqueries; AUTO supports a single source or one root/child join level.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
@@ -96,7 +99,7 @@ const items = executeBatch(s, `
 ## Column metadata
 
 Result columns get TDS `TYPE_INFO` three ways: table-valued-function,
-PIVOT/UNPIVOT, and advanced-grouping renderings provide declared hints before
+PIVOT/UNPIVOT, advanced-grouping, and FOR JSON renderings provide declared hints before
 execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
 definitions (exact declared types, nullability); computed columns fall back to value-shape inference

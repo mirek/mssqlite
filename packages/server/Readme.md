@@ -50,7 +50,8 @@ const connection = new Connection({
   translated before execution. PIVOT and UNPIVOT rewrites preserve generated
   result names and types on the wire, including all-NULL columns; ROLLUP,
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with
-  stable metadata.
+  stable metadata. FOR JSON PATH/AUTO returns the SQL Server magic-named
+  `nvarchar(max)` JSON column and streams large values with PLP framing.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, OUTPUT parameters via RETURNVALUE,

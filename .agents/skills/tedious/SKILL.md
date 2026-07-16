@@ -87,6 +87,10 @@ connection.execSql(request)
   visually identical subtotal NULL, distinguished by GROUPING(). The latter
   arrives as nullable-family `IntN(1)` metadata and a JavaScript number;
   grouped and aggregate columns retain their declared source-derived widths.
+- FOR JSON arrives as one column named
+  `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` with NVarChar(max) metadata.
+  Test a value larger than 8 KiB so the server's PLP path is exercised;
+  tedious still surfaces the completed value as one JavaScript string.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

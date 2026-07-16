@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as ForJson from './for-json.ts'
 import * as Grouping from './grouping.ts'
 import * as Output from './output.ts'
 import * as Quote from './quote.ts'
@@ -393,6 +394,9 @@ const groupingSelect =
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => {
+    if (select_.forJson !== undefined) {
+      return ForJson.select(ctx, select_, select)
+    }
     if (Grouping.requiresExpansion(select_)) {
       return groupingSelect(ctx, select_)
     }
@@ -736,7 +740,8 @@ export const statement =
       }
     })()
     const columns = statement_.kind === 'select' ?
-      TableFunction.selectHints(statement_) ?? TableTransform.selectHints(statement_) ??
+      ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
+        TableTransform.selectHints(statement_) ??
         Grouping.selectHints(statement_) :
       undefined
     return {
