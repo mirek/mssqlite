@@ -82,6 +82,8 @@ const statements = parse(`
   LEVEL, IDENTITY_INSERT), IF/ELSE, WHILE, BEGIN...END blocks, BREAK,
   CONTINUE, RETURN, THROW, PRINT, EXEC[UTE] with named/positional/OUTPUT
   arguments, USE, BEGIN/COMMIT/ROLLBACK/SAVE TRAN[SACTION].
+  Named cursors support DECLARE options, OPEN, all FETCH orientations with
+  optional INTO variables, CLOSE, and DEALLOCATE.
 
 Statements separate on semicolons or juxtaposition (as in real batches).
 

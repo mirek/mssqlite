@@ -111,6 +111,13 @@ const items = executeBatch(s, `
   enclosing transaction. Direct recursion is suppressed, nesting caps at 32,
   and the original affected-row count wins over trigger-body counts. OUTPUT,
   UPDATE FROM, and MERGE-trigger firing remain unsupported.
+- **Cursors** — named DECLARE/OPEN/FETCH/CLOSE/DEALLOCATE cursors materialize
+  SELECT rows and metadata at OPEN. NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE
+  fetches return one row or assign INTO variables and update connection-global
+  `@@FETCH_STATUS`. LOCAL cursors clean up with their batch/procedure/trigger;
+  GLOBAL cursors persist in the session. All accepted cursor types currently
+  use read-only static snapshots; cursor variables and positioned writes are
+  not implemented.
 
 ## Column metadata
 

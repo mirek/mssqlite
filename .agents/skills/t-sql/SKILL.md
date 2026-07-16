@@ -71,6 +71,17 @@ The language pipeline lives in three packages:
   DROP TRIGGER supports IF EXISTS and multiple names. Runtime transition
   tables are statement-level and read-only. Direct recursion is suppressed;
   nested triggers otherwise share the 32-level procedure/function limit.
+- Named DECLARE CURSOR accepts LOCAL/GLOBAL, FORWARD_ONLY/SCROLL,
+  STATIC/KEYSET/DYNAMIC/FAST_FORWARD, READ_ONLY/SCROLL_LOCKS/OPTIMISTIC,
+  TYPE_WARNING and INSENSITIVE options plus optional FOR UPDATE metadata.
+  OPEN materializes a read-only static snapshot for every declared type;
+  FETCH supports NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE, either returning one
+  row or assigning an equal-width INTO list, and updates session-global
+  `@@FETCH_STATUS` (0 or -1; -2 cannot occur for snapshots). Plain,
+  FORWARD_ONLY, and FAST_FORWARD cursors allow NEXT only; DYNAMIC rejects
+  ABSOLUTE. LOCAL cursors clean up at batch/procedure/trigger scope exit,
+  while GLOBAL (the default) persists until DEALLOCATE. Cursor variables,
+  positioned UPDATE/DELETE, and live KEYSET/DYNAMIC behavior remain deferred.
 - TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
   accept `TOP (expr)` only, per MSSQL.
 - OUTPUT clause (`Ast.Output`) sits between the column list / SET list /
@@ -147,7 +158,6 @@ The language pipeline lives in three packages:
 
 ### Not yet implemented (raise clean errors)
 
-CREATE TRIGGER, cursors, WAITFOR,
-GOTO, source columns in MERGE OUTPUT,
+WAITFOR, GOTO, source columns in MERGE OUTPUT,
 FOR XML, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.
