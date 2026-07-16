@@ -246,15 +246,15 @@ toward broader SQL Server compatibility.
 - Error classification currently covers mapped constraints, known conversion/
   arithmetic numbers, RAISERROR, cursor and sequence ranges; additional SQL
   Server statement-vs-batch cases will be added as their operations land.
-  Decimal precision/scale arithmetic remains tied to the exact-decimal TODO;
-  checked width inference for uncast columns currently follows SUM(int) and
+  Checked integer width inference for uncast columns currently follows SUM(int) and
   treats scalar columns of unknown declared width conservatively.
 - Duplicate column names in one result set collapse (rows read as
   objects; `returnArrays` lands in newer node:sqlite).
 - `USE db` switches the session label only — one database per server.
-- Decimal results ride SQLite NUMERIC (float) affinity — exact decimal
-  wire encoding exists in `tds/decimal.ts` but result-set decimals lose
-  exactness beyond doubles.
+- DECIMAL/NUMERIC values use canonical fixed-scale strings and SQLite TEXT
+  storage. The transpiler derives SQL Server precision/scale, routes casts,
+  arithmetic, comparison, ordering, and aggregates through scaled-BigInt UDFs,
+  and supplies decimal result hints; TDS encodes those strings directly.
 - `@@ROWCOUNT` after SELECT reflects rows returned; unsupported globals
   raise error 137. `ERROR_LINE()` is always 1 (no statement positions in
   the AST).

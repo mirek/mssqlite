@@ -40,6 +40,9 @@ export const parse =
 export const encode =
   (value: string | number | bigint, precision: number, scale: number): Uint8Array => {
     const { negative, magnitude } = parse(value, scale)
+    if (magnitude >= 10n ** BigInt(precision)) {
+      throw new RangeError(`Decimal value ${JSON.stringify(value)} exceeds precision ${precision}.`)
+    }
     const size = length(precision) - 1
     const bytes = new Uint8Array(1 + size)
     bytes[0] = negative ? 0 : 1
@@ -47,6 +50,9 @@ export const encode =
     for (let i = 0; i < size; i++) {
       bytes[1 + i] = Number(rest & 0xffn)
       rest >>= 8n
+    }
+    if (rest !== 0n) {
+      throw new RangeError(`Decimal value ${JSON.stringify(value)} exceeds wire length.`)
     }
     return Encode.concat(bytes)
   }

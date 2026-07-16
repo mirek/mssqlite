@@ -18,6 +18,7 @@ import {
 } from './table-variable.ts'
 import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
+import * as DecimalExact from './decimal.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
   functionKey,
@@ -123,6 +124,128 @@ const hasIdentity =
     const objectId = Catalog.objectIdOf(session.db, table)
     return objectId !== undefined &&
       Catalog.tableColumns(session.db, objectId).some(column => column.is_identity === 1)
+  }
+
+const decimalType =
+  (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
+    [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney' ].includes(type.name) ? type : undefined
+
+const decimalShape =
+  (type: Ast.ColumnDefinition['type']): readonly [ number, number ] | undefined => {
+    if (type.name === 'money') {
+      return [ 19, 4 ]
+    }
+    if (type.name === 'smallmoney') {
+      return [ 10, 4 ]
+    }
+    if (![ 'decimal', 'numeric', 'dec' ].includes(type.name)) {
+      return undefined
+    }
+    return [
+      typeof type.args[0] === 'number' ? type.args[0] : 18,
+      typeof type.args[1] === 'number' ? type.args[1] : 0
+    ]
+  }
+
+const decimalArgument =
+  (value: Exclude<Value, null>): string | number | bigint =>
+    value instanceof Uint8Array ? String(value) : typeof value === 'boolean' ? Number(value) : value
+
+const targetColumns =
+  (session: Session, name: Ast.QualifiedName): readonly { readonly name: string, readonly type?: Ast.ColumnDefinition['type'] }[] => {
+    const backing = name[name.length - 1]?.toLowerCase()
+    const variable = [ ...session.tableVariables.values() ].find(candidate =>
+      candidate.table[candidate.table.length - 1]?.toLowerCase() === backing)
+    if (variable !== undefined) {
+      return variable.columns
+    }
+    const objectId = Catalog.objectIdOf(session.db, name)
+    if (objectId === undefined) {
+      return []
+    }
+    return Catalog.tableColumns(session.db, objectId).map(column => {
+      const type = column.system_type_id === 106 ? { name: 'decimal', args: [ column.precision, column.scale ] } :
+        column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
+          column.system_type_id === 60 ? { name: 'money', args: [] } :
+            column.system_type_id === 122 ? { name: 'smallmoney', args: [] } : undefined
+      return { name: column.name, ...type === undefined ? {} : { type } }
+    })
+  }
+
+const decimalCast =
+  (value: Ast.Expression, type: Ast.ColumnDefinition['type']): Ast.Expression =>
+    value.kind === 'default' ? value : { kind: 'cast', expression: value, type, try_: false }
+
+/** Applies target-column decimal conversion before SQLite sees DML values. */
+const resolveDecimalDml =
+  (session: Session, statement: Ast.Statement): Ast.Statement => {
+    if (statement.kind === 'insert') {
+      const all = targetColumns(session, statement.table)
+      const names = statement.columns ?? all.map(column => column.name)
+      const types = names.map(name => decimalType(
+        all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
+        { name: '', args: [] }))
+      if (statement.source.kind === 'values') {
+        return {
+          ...statement,
+          source: {
+            ...statement.source,
+            rows: statement.source.rows.map(row => row.map((value, index) => {
+              const type = types[index]
+              return type === undefined ? value : decimalCast(value, type)
+            }))
+          }
+        }
+      }
+      if (statement.source.kind === 'select') {
+        return {
+          ...statement,
+          source: {
+            ...statement.source,
+            select: {
+              ...statement.source.select,
+              items: statement.source.select.items.map((item, index) => {
+                const type = types[index]
+                return item.kind !== 'expression' || type === undefined ? item :
+                  { ...item, expression: decimalCast(item.expression, type) }
+              })
+            }
+          }
+        }
+      }
+      return statement
+    }
+    if (statement.kind === 'update') {
+      const columns = targetColumns(session, statement.target)
+      return {
+        ...statement,
+        set: statement.set.map(assignment => {
+          if (assignment.target.kind !== 'column') {
+            return assignment
+          }
+          const name = assignment.target.name[assignment.target.name.length - 1] ?? ''
+          const type = decimalType(columns.find(column =>
+            column.name.toLowerCase() === name.toLowerCase())?.type ?? { name: '', args: [] })
+          if (type === undefined) {
+            return assignment
+          }
+          if (assignment.operator === '=') {
+            return { ...assignment, value: decimalCast(assignment.value, type) }
+          }
+          return {
+            ...assignment,
+            operator: '=',
+            value: decimalCast({
+              kind: 'binaryOp',
+              operator: assignment.operator.slice(0, -1),
+              left: decimalCast(assignment.target, type),
+              right: decimalCast(assignment.value, type)
+            }, type)
+          }
+        })
+      }
+    }
+    return statement
   }
 
 const runRendered =
@@ -442,12 +565,21 @@ const applyAssign =
     if (variable === undefined) {
       throw new MssqlError(`Must declare the scalar variable "${name}".`, 137, 15)
     }
+    const shape = decimalShape(variable.type)
+    const decimalValue = (input: Value): string | null => input === null ? null :
+      DecimalExact.cast(
+        decimalArgument(input), shape?.[0] ?? 18, shape?.[1] ?? 0, false)
     if (operator === '=') {
-      variable.value = value
+      variable.value = shape === undefined ? value : decimalValue(value)
     } else {
       const current = variable.value
       if (current === null || value === null) {
         variable.value = null
+      } else if (shape !== undefined) {
+        const right = decimalValue(value)
+        variable.value = DecimalExact.arithmetic(
+          operator.slice(0, -1), decimalValue(current), right,
+          shape[1], shape[1], shape[0], shape[1])
       } else if (operator === '+=' && (typeof current === 'string' || typeof value === 'string')) {
         variable.value = String(current) + String(value)
       } else {
@@ -742,7 +874,7 @@ const executeStatementInner =
       throw new MssqlError(
         `The logical table '${transitionTarget[0]}' cannot be updated.`, 286, 16)
     }
-    const statement = resolveTableVariables(session, statement_)
+    const statement = resolveDecimalDml(session, resolveTableVariables(session, statement_))
     if (statement.kind === 'createFunction') {
       defineFunction(session, statement)
       return undefined
@@ -953,7 +1085,12 @@ const executeStatementInner =
             evaluate(session, declaration.initial)
           session.variables.set(declaration.name.toLowerCase(), {
             type: declaration.type,
-            value
+            value: decimalShape(declaration.type) === undefined ? value :
+              value === null ? null : DecimalExact.cast(
+                decimalArgument(value),
+                decimalShape(declaration.type)?.[0] ?? 18,
+                decimalShape(declaration.type)?.[1] ?? 0,
+                false)
           } as Variable)
         }
         return undefined

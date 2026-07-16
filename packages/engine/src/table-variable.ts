@@ -29,6 +29,11 @@ const resolveName =
 const resolveExpression =
   (session: Session, value: Ast.Expression): Ast.Expression => {
     switch (value.kind) {
+      case 'variable': {
+        const type = session.variables.get(value.name.toLowerCase())?.type
+        return type !== undefined && [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney' ].includes(type.name) ?
+          { kind: 'cast', expression: value, type, try_: false } : value
+      }
       case 'unary':
         return { ...value, operand: resolveExpression(session, value.operand) }
       case 'binaryOp':

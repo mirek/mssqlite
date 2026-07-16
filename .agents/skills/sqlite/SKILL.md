@@ -90,6 +90,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   SQLite's dynamic affinity can carry mixed numeric values in direct
   rendering, but engine execution rejects differing known declared types to
   retain SQL Server's stable result metadata.
+- SQLite NUMERIC affinity and native numeric aggregates are not used for
+  DECIMAL/NUMERIC: columns have TEXT affinity and contain canonical fixed-scale
+  strings. Scalar and aggregate UDFs perform scaled-BigInt operations; a
+  sortable decimal key UDF replaces lexical TEXT ordering.
 - SQLite has no ROLLUP, CUBE, GROUPING SETS, or GROUPING function. mssqlite
   expands them into one ordinary GROUP BY query per grouping set joined by
   UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch

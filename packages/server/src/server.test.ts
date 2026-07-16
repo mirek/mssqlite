@@ -44,7 +44,12 @@ const connect =
     })
 
 const query =
-  (sql: string, parameters: { name: string, type: (typeof TYPES)[keyof typeof TYPES], value: unknown }[] = []): Promise<{ rows: Row[], rowCount: number, columns: WireColumn[] }> =>
+  (sql: string, parameters: {
+    name: string,
+    type: (typeof TYPES)[keyof typeof TYPES],
+    value: unknown,
+    options?: { precision?: number, scale?: number }
+  }[] = []): Promise<{ rows: Row[], rowCount: number, columns: WireColumn[] }> =>
     new Promise((resolve, reject) => {
       const rows: Row[] = []
       let columns: WireColumn[] = []
@@ -56,7 +61,7 @@ const query =
         }
       })
       for (const parameter of parameters) {
-        request.addParameter(parameter.name, parameter.type, parameter.value)
+        request.addParameter(parameter.name, parameter.type, parameter.value, parameter.options)
       }
       request.on('row', rowColumns => {
         const row: Row = {}
@@ -126,6 +131,18 @@ test('nvarchar and datetime parameters round trip', async () => {
     { name: 'n', type: TYPES.Int, value: 42 }
   ])
   expect(result.rows).toEqual([ { s: 'param ✓', n: 42 } ])
+})
+
+test('decimal parameters and exact expressions cross TDS with decimal metadata', async () => {
+  const result = await query(`
+    SELECT CAST(@amount AS DECIMAL(18,2)) + CAST(0.01 AS DECIMAL(18,2)) AS amount,
+      CAST(1.005 AS DECIMAL(5,2)) AS rounded
+  `, [ {
+    name: 'amount', type: TYPES.Decimal, value: 123.45,
+    options: { precision: 18, scale: 2 }
+  } ])
+  expect(result.rows).toEqual([ { amount: 123.46, rounded: 1.01 } ])
+  expect(result.columns.map(column => column.type)).toEqual([ 'DecimalN', 'DecimalN' ])
 })
 
 test('datetime column values come back as dates', async () => {

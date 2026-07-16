@@ -41,8 +41,9 @@ const { sql, variables } = statement(parseStatement(
 Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
 operands execute once and the engine can enforce divide-by-zero/overflow and
 session options. SUM renders a checked int aggregate, with an explicit BIGINT
-argument selecting its 64-bit variant; explicit DECIMAL/NUMERIC keeps SQLite's
-native SUM pending exact-decimal execution support.
+argument selecting its 64-bit variant. DECIMAL/NUMERIC literals, casts,
+arithmetic, comparisons, ordering, and aggregates render exact-decimal UDFs;
+operator results carry SQL Server-derived precision/scale hints to TDS.
   Every rendered statement reports the variables it binds.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.

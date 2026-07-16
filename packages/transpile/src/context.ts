@@ -1,3 +1,5 @@
+import type { Ast, TypeName } from '@mssqlite/tsql'
+
 /**
  * Mutable render context — accumulates the variables a statement references
  * so the engine can bind exactly those parameters.
@@ -5,6 +7,7 @@
 export type Context = {
   /** Lowercased variable tokens in order of first use, e.g. `@x`, `@@rowcount`. */
   readonly variables: string[]
+  readonly columnTypes: ReadonlyMap<string, TypeName.t>[]
   nextSource: number
 }
 
@@ -14,7 +17,52 @@ export type t =
 /** @returns fresh render context. */
 export const of =
   (): Context =>
-    ({ variables: [], nextSource: 1 })
+    ({ variables: [], columnTypes: [], nextSource: 1 })
+
+const sourceColumns =
+  (source: Ast.TableSource): readonly { readonly key: string, readonly type: TypeName.t }[] => {
+    if (source.kind === 'join') {
+      return [ ...sourceColumns(source.left), ...sourceColumns(source.right) ]
+    }
+    if (source.kind !== 'table' || source.columns === undefined) {
+      return []
+    }
+    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
+    return source.columns.flatMap(column => column.type === undefined ? [] : [
+      { key: column.name.toLowerCase(), type: column.type },
+      { key: `${qualifier}.${column.name.toLowerCase()}`, type: column.type }
+    ])
+  }
+
+/** Runs a SELECT renderer with its source-column types in lexical scope. */
+export const withSourceTypes =
+  <T>(ctx: Context, source: Ast.TableSource | undefined, run: () => T): T => {
+    const columns = source === undefined ? [] : sourceColumns(source)
+    const counts = new Map<string, number>()
+    columns.forEach(column => counts.set(column.key, (counts.get(column.key) ?? 0) + 1))
+    const types = new Map(columns
+      .filter(column => column.key.includes('.') || counts.get(column.key) === 1)
+      .map(column => [ column.key, column.type ]))
+    ctx.columnTypes.push(types)
+    try {
+      return run()
+    } finally {
+      ctx.columnTypes.pop()
+    }
+  }
+
+/** @returns declared type of a column in the innermost visible SELECT source. */
+export const columnType =
+  (ctx: Context, name: Ast.QualifiedName): TypeName.t | undefined => {
+    const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
+    for (let i = ctx.columnTypes.length - 1; i >= 0; i--) {
+      const found = ctx.columnTypes[i]?.get(key)
+      if (found !== undefined) {
+        return found
+      }
+    }
+    return undefined
+  }
 
 /**
  * @returns SQLite parameter name of a T-SQL variable — `@x` stays `@x`,

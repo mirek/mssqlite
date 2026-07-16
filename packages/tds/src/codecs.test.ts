@@ -4,6 +4,7 @@ import * as Collation from './collation.ts'
 import * as DateTime from './date-time.ts'
 import * as Decimal from './decimal.ts'
 import * as Guid from './guid.ts'
+import * as TypeInfo from './type-info.ts'
 
 test('default collation matches SQL_Latin1_General_CP1_CI_AS wire bytes', () => {
   expect(Collation.encode(Collation.default_)).toEqual(Hex.of('09 04 D0 00 34'))
@@ -40,6 +41,14 @@ test('decimal rounds to scale', () => {
   expect(Decimal.decode(Decimal.encode('1.005', 10, 2), 2)).toBe('1.01')
   expect(Decimal.decode(Decimal.encode(1.5, 10, 0), 0)).toBe('2')
   expect(Decimal.decode(Decimal.encode('2e3', 10, 1), 1)).toBe('2000.0')
+})
+
+test('decimal precision overflow is rejected before wire truncation', () => {
+  expect(() => Decimal.encode('1000', 3, 0)).toThrow(RangeError)
+  expect(Array.from(Decimal.encode('-123.45', 5, 2))).toEqual([ 0, 57, 48, 0, 0 ])
+  expect(TypeInfo.decimalN(9, 2).maxLength).toBe(5)
+  expect(TypeInfo.decimalN(18, 2).maxLength).toBe(9)
+  expect(TypeInfo.decimalN(38, 2).maxLength).toBe(17)
 })
 
 test('civil date math round trips', () => {

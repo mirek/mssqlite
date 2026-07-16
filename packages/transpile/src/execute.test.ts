@@ -16,6 +16,7 @@ const database =
       return operator === '+' ? a + b : operator === '-' ? a - b : operator === '*' ? a * b :
         operator === '/' ? a / b : a % b
     })
+    db.function('mssqlite_decimal_cast', (value, _precision, _scale, _try) => value)
     db.aggregate<number>('mssqlite_sum', {
       start: 0,
       step: (sum, value) => sum + Number(value ?? 0)
