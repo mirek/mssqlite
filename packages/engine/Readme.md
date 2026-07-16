@@ -124,8 +124,13 @@ const items = executeBatch(s, `
   `inserted` and `deleted` temp rowsets. Generated savepoints make the base DML
   and nested trigger effects atomic; unhandled trigger errors roll back an
   enclosing transaction. Direct recursion is suppressed, nesting caps at 32,
-  and the original affected-row count wins over trigger-body counts. OUTPUT,
+  and trigger-body affected counts precede the originating count unless the
+  trigger uses SET NOCOUNT ON. OUTPUT,
   UPDATE FROM, and MERGE-trigger firing remain unsupported.
+- **NOCOUNT** — every row/count item captures whether its statement completed
+  under SET NOCOUNT ON. Cardinality stays intact for `@@ROWCOUNT`; the TDS
+  layer uses the flag only to suppress the DONE-family count. Nested procedure,
+  trigger, and dynamic-SQL option changes are restored on scope exit.
 - **Cursors** — named DECLARE/OPEN/FETCH/CLOSE/DEALLOCATE cursors materialize
   SELECT rows and metadata at OPEN. NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE
   fetches return one row or assign INTO variables and update connection-global

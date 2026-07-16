@@ -113,7 +113,8 @@ the engine:
   images and replace the base operation; direct self-recursion is suppressed,
   other nested triggers share the 32-level module limit, and an unhandled
   trigger error rolls back an enclosing user transaction. Trigger-body count
-  items are suppressed and the originating statement restores `@@ROWCOUNT`.
+  items precede the originating statement count unless the trigger enables
+  NOCOUNT; the originating statement still restores `@@ROWCOUNT`.
 - **Cursors are session-owned materialized results** — DECLARE stores a SELECT
   AST and lifecycle state in `session.cursors`; OPEN resolves the active scope,
   executes the query once, and retains rows plus TDS column metadata. FETCH
@@ -258,3 +259,8 @@ toward broader SQL Server compatibility.
 - `@@ROWCOUNT` after SELECT reflects rows returned; unsupported globals
   raise error 137. `ERROR_LINE()` is always 1 (no statement positions in
   the AST).
+- SET NOCOUNT is captured when each statement completes. Engine row/count
+  items retain their cardinality for `@@ROWCOUNT`, while response rendering
+  clears DONE_COUNT and writes a zero count when hidden. Procedure, trigger,
+  and dynamic-SQL scopes restore the caller's setting; mid-batch toggles
+  therefore affect only subsequent completions.

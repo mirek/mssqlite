@@ -50,7 +50,9 @@ const connection = new Connection({
   translated before execution. PIVOT and UNPIVOT rewrites preserve generated
   result names and types on the wire, including all-NULL columns; ROLLUP,
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with
-  stable metadata. FOR JSON PATH/AUTO returns the SQL Server magic-named
+  stable metadata. Per-statement SET NOCOUNT state clears DONE_COUNT and its
+  uint64 row count without removing completion tokens or changing
+  `@@ROWCOUNT`. FOR JSON PATH/AUTO returns the SQL Server magic-named
   `nvarchar(max)` JSON column and streams large values with PLP framing.
   Persisted scalar and inline table-valued user functions execute through the
   same engine and expose their declared return/source metadata.

@@ -55,3 +55,8 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   fixed-scale strings. `decimal.ts` rounds to the TYPE_INFO scale, validates
   the declared precision before encoding, then emits the sign byte followed
   by little-endian unsigned magnitude; decode returns a string, never Number.
+- DONE_COUNT is status bit `0x0010`. With NOCOUNT OFF, DONE/DONEINPROC carry
+  that bit and the uint64 affected-row value; with NOCOUNT ON, the bit is clear
+  and the field is zero. The token itself, MORE/FINAL and ERROR state, and final
+  DONEPROC remain present. Visibility is captured per statement rather than
+  inferred from the session after the batch finishes.

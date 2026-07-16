@@ -136,6 +136,11 @@ export type Session = {
   readonly activeTriggers: Set<string>
 }
 
+/** DONE_COUNT visibility captured when a statement completes. */
+export const countVisibility =
+  (session: Session): { readonly countValid?: false } =>
+    session.options.get('nocount') === 'on' ? { countValid: false } : {}
+
 export type t =
   Session
 

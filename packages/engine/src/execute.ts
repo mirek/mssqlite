@@ -22,6 +22,7 @@ import * as DecimalExact from './decimal.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
   functionKey,
+  countVisibility,
   procedureKey,
   triggerKey,
   withCursorScope,
@@ -41,12 +42,14 @@ export type Rows = {
   readonly columns: readonly Column[],
   readonly rows: readonly (readonly Value[])[],
   readonly rowCount: number
+  readonly countValid?: false
 }
 
 /** Row count of a DML statement. */
 export type Count = {
   readonly kind: 'count',
   readonly rowCount: number
+  readonly countValid?: false
 }
 
 /** Informational message (PRINT). */
@@ -253,7 +256,7 @@ const runRendered =
     const statement = session.db.prepare(rendered.sql)
     const result = statement.run(bindings(session, rendered.variables))
     session.rowCount = Number(result.changes)
-    items.push({ kind: 'count', rowCount: Number(result.changes) })
+    items.push({ kind: 'count', rowCount: Number(result.changes), ...countVisibility(session) })
   }
 
 type DmlStatement =
@@ -394,6 +397,7 @@ const runTrigger =
     session.transitionTables.set('deleted', { table: [ deleted ], columns: [], constraints: [] })
     const key = triggerKey(trigger.name)
     const savedVariables = new Map(session.variables)
+    const savedNocount = session.options.get('nocount')
     session.variables.clear()
     session.activeTriggers.add(key)
     session.nestLevel++
@@ -406,9 +410,14 @@ const runTrigger =
             break
           }
         }
-        items.push(...triggerItems.filter(item => item.kind !== 'count'))
+        items.push(...triggerItems)
       }))
     } finally {
+      if (savedNocount === undefined) {
+        session.options.delete('nocount')
+      } else {
+        session.options.set('nocount', savedNocount)
+      }
       session.nestLevel--
       session.activeTriggers.delete(key)
       session.transitionTables.clear()
@@ -457,7 +466,7 @@ const runTriggered =
         const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
         session.lastIdentity = Number(last.id)
       }
-      items.push({ kind: 'count', rowCount })
+      items.push({ kind: 'count', rowCount, ...countVisibility(session) })
     } catch (error) {
       if (failedInTrigger && session.transactionCount > 0) {
         session.db.exec('ROLLBACK')
@@ -661,7 +670,7 @@ const selectInto =
     })
     const count = session.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
     session.rowCount = count.n
-    items.push({ kind: 'count', rowCount: count.n })
+    items.push({ kind: 'count', rowCount: count.n, ...countVisibility(session) })
   }
 
 const cursorOf =
@@ -779,14 +788,20 @@ const fetchCursor =
       session.fetchStatus = -1
       session.rowCount = 0
       if (statement.into.length === 0) {
-        items.push({ kind: 'rows', columns: cursor.columns, rows: [], rowCount: 0 })
+        items.push({
+          kind: 'rows', columns: cursor.columns, rows: [], rowCount: 0,
+          ...countVisibility(session)
+        })
       }
       return
     }
     session.fetchStatus = 0
     session.rowCount = 1
     if (statement.into.length === 0) {
-      items.push({ kind: 'rows', columns: cursor.columns, rows: [ row ], rowCount: 1 })
+      items.push({
+        kind: 'rows', columns: cursor.columns, rows: [ row ], rowCount: 1,
+        ...countVisibility(session)
+      })
       return
     }
     statement.into.forEach((name, index) => applyAssign(session, name, '=', row[index] ?? null))
@@ -986,7 +1001,9 @@ const executeStatementInner =
         if (result.changes > 0 && hasIdentity(session, statement.table)) {
           session.lastIdentity = Number(result.lastInsertRowid)
         }
-        items.push({ kind: 'count', rowCount: Number(result.changes) })
+        items.push({
+          kind: 'count', rowCount: Number(result.changes), ...countVisibility(session)
+        })
         return undefined
       }
       case 'merge':
@@ -1569,6 +1586,7 @@ const callUserProcedure =
     // rather than the reference, restoring the caller's scope afterwards.
     const saved = new Map(session.variables)
     const savedReturn = session.returnValue
+    const savedNocount = session.options.get('nocount')
     session.variables.clear()
     for (const [ key, variable ] of scope) {
       session.variables.set(key, variable)
@@ -1591,6 +1609,11 @@ const callUserProcedure =
         outputs.set(key, session.variables.get(key)?.value ?? null)
       }
     } finally {
+      if (savedNocount === undefined) {
+        session.options.delete('nocount')
+      } else {
+        session.options.set('nocount', savedNocount)
+      }
       session.nestLevel--
       session.returnValue = savedReturn
       session.variables.clear()
@@ -1674,6 +1697,7 @@ export type SqlResult = {
 export const executeSql =
   (session: Session, sql: string, parameters: readonly Parameter[] = []): SqlResult => {
     const saved = new Map<string, Variable | undefined>()
+    const savedNocount = session.options.get('nocount')
     for (const parameter of parameters) {
       const key = parameter.name.toLowerCase()
       saved.set(key, session.variables.get(key))
@@ -1692,6 +1716,11 @@ export const executeSql =
         }))
       return { items, outputs }
     } finally {
+      if (savedNocount === undefined) {
+        session.options.delete('nocount')
+      } else {
+        session.options.set('nocount', savedNocount)
+      }
       for (const [ key, variable ] of saved) {
         if (variable === undefined) {
           session.variables.delete(key)

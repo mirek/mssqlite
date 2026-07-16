@@ -923,6 +923,67 @@ test('use and session options', () => {
   expect(s.database).toBe('tempdb')
 })
 
+test('NOCOUNT captures count visibility per statement without changing @@ROWCOUNT', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE nocount_values (id INT)')
+  const items = executeBatch(s, `
+    INSERT INTO nocount_values VALUES (1)
+    SET NOCOUNT ON
+    INSERT INTO nocount_values VALUES (2), (3)
+    SELECT @@ROWCOUNT AS affected
+    SET NOCOUNT OFF
+    INSERT INTO nocount_values VALUES (4)
+  `)
+  expect(items.map(item => item.kind === 'rows' ? {
+    kind: item.kind, rows: item.rows, countValid: item.countValid
+  } : item)).toEqual([
+    { kind: 'count', rowCount: 1 },
+    { kind: 'count', rowCount: 2, countValid: false },
+    { kind: 'rows', rows: [ [ 2 ] ], countValid: false },
+    { kind: 'count', rowCount: 1 }
+  ])
+})
+
+test('NOCOUNT changes are scoped across procedures, dynamic SQL, and triggers', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE nocount_nested (id INT);
+    CREATE TABLE nocount_audit (id INT);
+  `)
+  executeBatch(s, `
+    CREATE PROCEDURE dbo.nocount_insert AS
+      SET NOCOUNT ON
+      INSERT INTO nocount_nested VALUES (1)
+  `)
+  const procedure = executeBatch(s, 'EXEC dbo.nocount_insert; INSERT INTO nocount_nested VALUES (2)')
+  expect(procedure).toEqual([
+    { kind: 'count', rowCount: 1, countValid: false },
+    { kind: 'count', rowCount: 1 }
+  ])
+  expect(s.options.get('nocount')).toBeUndefined()
+
+  const dynamic = executeBatch(s, `
+    EXEC sp_executesql N'SET NOCOUNT ON; INSERT INTO nocount_nested VALUES (3)'
+    INSERT INTO nocount_nested VALUES (4)
+  `)
+  expect(dynamic).toEqual([
+    { kind: 'count', rowCount: 1, countValid: false },
+    { kind: 'count', rowCount: 1 }
+  ])
+
+  executeBatch(s, `
+    CREATE TRIGGER dbo.nocount_trigger ON nocount_nested AFTER INSERT AS
+      SET NOCOUNT ON
+      INSERT INTO nocount_audit SELECT id FROM inserted
+  `)
+  const trigger = executeBatch(s, 'INSERT INTO nocount_nested VALUES (5), (6)')
+  expect(trigger).toEqual([
+    { kind: 'count', rowCount: 2, countValid: false },
+    { kind: 'count', rowCount: 2 }
+  ])
+  expect(s.options.get('nocount')).toBeUndefined()
+})
+
 test('throw raises mssql error', () => {
   const s = open()
   expect(() => executeBatch(s, 'THROW 51000, \'custom\', 2')).toThrowError(
@@ -1620,6 +1681,7 @@ test('AFTER triggers expose statement-level inserted and deleted rowsets', () =>
       SELECT N'insert', id, amount FROM inserted
   `)
   expect(executeBatch(s, 'INSERT INTO orders VALUES (1, 10), (2, 20)')).toEqual([
+    { kind: 'count', rowCount: 2 },
     { kind: 'count', rowCount: 2 }
   ])
   executeBatch(s, `
@@ -1666,7 +1728,10 @@ test('trigger transition tables are read-only and a trigger fires for zero affec
     CREATE TRIGGER dbo.zero_delete ON t AFTER DELETE AS
       INSERT INTO fired SELECT COUNT(*) FROM deleted
   `)
-  expect(executeBatch(s, 'DELETE FROM t WHERE id = 99')).toEqual([ { kind: 'count', rowCount: 0 } ])
+  expect(executeBatch(s, 'DELETE FROM t WHERE id = 99')).toEqual([
+    { kind: 'count', rowCount: 1 },
+    { kind: 'count', rowCount: 0 }
+  ])
   expect(rowsOf(executeBatch(s, 'SELECT n FROM fired')).rows).toEqual([ [ 0 ] ])
   executeBatch(s, `
     CREATE TRIGGER dbo.readonly_inserted ON t AFTER INSERT AS

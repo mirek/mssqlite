@@ -9,7 +9,6 @@ work is complete.
 
 ## Semantics and type fidelity
 
-- [SET NOCOUNT](todo/set-nocount.md) — Suppress affected-row DONE counts when `NOCOUNT` is enabled.
 - [Computed columns](todo/computed-columns.md) — Map computed definitions to SQLite generated columns and catalog metadata.
 - [Collation surface](todo/collation-surface.md) — Add per-column binary and sensitivity-aware collation behavior.
 - [datetimeoffset semantics](todo/datetimeoffset-semantics.md) — Preserve offsets in comparison, date functions, and wire values.
