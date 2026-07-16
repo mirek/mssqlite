@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [Triggers](todo/triggers.md) — Support `AFTER` and `INSTEAD OF` trigger definitions and execution.
 - [Cursors](todo/cursors.md) — Interpret the cursor lifecycle and maintain `@@FETCH_STATUS`.
 - [Sequences](todo/sequences.md) — Back `CREATE SEQUENCE` and `NEXT VALUE FOR` with cataloged counters.
 

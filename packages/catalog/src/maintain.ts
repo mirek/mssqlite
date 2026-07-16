@@ -414,6 +414,7 @@ export const dropTable =
       .all(objectId) as { object_id: number }[]
     const ids = [ objectId, ...children.map(row => row.object_id) ]
     for (const id of ids) {
+      db.prepare('DELETE FROM "sys.sql_modules" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.index_columns" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.indexes" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.columns" WHERE object_id = ?').run(id)
@@ -539,6 +540,37 @@ export const createFunction =
 
 /** Removes a dropped function and its module row. */
 export const dropFunction =
+  dropModule
+
+/** Registers a table DML trigger with its module definition. */
+export const createTrigger =
+  (
+    db: DatabaseSync,
+    name: Ast.QualifiedName,
+    target: Ast.QualifiedName,
+    definition: string
+  ): number => {
+    const parentObjectId = objectIdOf(db, target)
+    if (parentObjectId === undefined) {
+      throw new Error(`Trigger target ${target.join('.')} does not exist.`)
+    }
+    const at = objectNameOf(name)
+    const objectId = allocateId(db)
+    insertObject(db, {
+      objectId,
+      name: at.name,
+      schemaId: schemaIdOf(db, at.schema),
+      parentObjectId,
+      type: 'TR',
+      typeDesc: 'SQL_TRIGGER'
+    })
+    db.prepare('INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)')
+      .run(objectId, definition)
+    return objectId
+  }
+
+/** Removes a trigger and its module row. */
+export const dropTrigger =
   dropModule
 
 /** Registers columns added by ALTER TABLE ADD. */

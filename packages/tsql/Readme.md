@@ -71,7 +71,10 @@ const statements = parse(`
   CREATE [UNIQUE] INDEX with INCLUDE and filtered WHERE, DROP INDEX,
   CREATE [OR ALTER] VIEW, ALTER TABLE ADD/DROP COLUMN/CONSTRAINT;
   CREATE/ALTER/CREATE OR ALTER FUNCTION supports scalar BEGIN/END bodies and
-  inline `RETURNS TABLE AS RETURN (SELECT ...)`, plus DROP FUNCTION.
+  inline `RETURNS TABLE AS RETURN (SELECT ...)`, plus DROP FUNCTION;
+  CREATE/ALTER/CREATE OR ALTER TRIGGER supports AFTER/FOR and INSTEAD OF
+  INSERT/UPDATE/DELETE event lists, trigger options and bodies, plus
+  DROP TRIGGER [IF EXISTS].
 - **Procedural** — scalar DECLARE with initializers and
   `DECLARE @t TABLE (...)` with column/table constraints, SET @x
   (compound operators),

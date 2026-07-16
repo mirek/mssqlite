@@ -266,14 +266,14 @@ const ifExists: Parser.t<boolean> =
     value => value !== undefined
   )
 
-/** DROP TABLE / DROP VIEW / DROP PROCEDURE / DROP FUNCTION parser. */
+/** DROP TABLE / DROP VIEW / DROP PROCEDURE / DROP FUNCTION / DROP TRIGGER parser. */
 export const drop: Parser.t<Ast.Statement> =
   C.map(
     C.seq(
       C.keyword('drop'),
       C.first(
         C.keyword('table'), C.keyword('view'), C.keyword('procedure'),
-        C.keyword('proc'), C.keyword('function')
+        C.keyword('proc'), C.keyword('function'), C.keyword('trigger')
       ),
       ifExists,
       C.sepBy1(C.qualifiedName, C.punct(','))
@@ -285,7 +285,9 @@ export const drop: Parser.t<Ast.Statement> =
           { kind: 'dropView' as const, names, ifExists: ifExists_ } :
           what === 'function' ?
             { kind: 'dropFunction' as const, names, ifExists: ifExists_ } :
-            { kind: 'dropProcedure' as const, names, ifExists: ifExists_ }
+            what === 'trigger' ?
+              { kind: 'dropTrigger' as const, names, ifExists: ifExists_ } :
+              { kind: 'dropProcedure' as const, names, ifExists: ifExists_ }
   )
 
 /** CREATE INDEX statement parser. */

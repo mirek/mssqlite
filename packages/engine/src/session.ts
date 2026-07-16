@@ -47,6 +47,17 @@ export type UserFunction = {
   readonly definition: string
 }
 
+/** Registered statement-level DML trigger. */
+export type Trigger = {
+  readonly name: Ast.QualifiedName,
+  readonly target: Ast.QualifiedName,
+  readonly timing: 'after' | 'insteadOf',
+  readonly events: readonly Ast.TriggerEvent[],
+  readonly options: readonly string[],
+  readonly body: readonly Ast.Statement[],
+  readonly definition: string
+}
+
 /** Server-wide state shared by sessions. */
 export type Server = {
   readonly db: DatabaseSync,
@@ -57,6 +68,8 @@ export type Server = {
   readonly procedures: Map<string, Procedure>,
   /** User functions keyed by lowercased `schema.name`. */
   readonly functions: Map<string, UserFunction>,
+  /** DML triggers keyed by lowercased `schema.name`. */
+  readonly triggers: Map<string, Trigger>,
   /** SQLite function names whose dispatch callback has been installed. */
   readonly registeredFunctions: Set<string>,
   /** Session whose batch is executing — read by session-scoped UDFs. */
@@ -94,7 +107,12 @@ export type Session = {
   /** Completed status of the most recent procedure call — RPC RETURNSTATUS. */
   lastReturnStatus: number,
   /** Procedure call depth — @@NESTLEVEL. */
-  nestLevel: number
+  nestLevel: number,
+  /** Nested trigger transition rowsets keyed by `inserted` / `deleted`. */
+  readonly transitionTables: Map<string, TableVariable>,
+  nextTransitionTable: number,
+  /** Trigger definitions currently executing; suppresses direct recursion. */
+  readonly activeTriggers: Set<string>
 }
 
 export type t =
@@ -110,6 +128,9 @@ export const procedureKey =
   }
 
 export const functionKey =
+  procedureKey
+
+export const triggerKey =
   procedureKey
 
 // Re-registers procedures persisted in sys.sql_modules (file-backed
@@ -164,6 +185,34 @@ const loadUserFunctions =
     }
   }
 
+const loadTriggers =
+  (server_: Server): void => {
+    const rows = server_.db.prepare(
+      `SELECT m.definition FROM "sys.sql_modules" m
+        JOIN "sys.objects" o ON o.object_id = m.object_id
+        WHERE o.type = 'TR' AND m.definition IS NOT NULL`
+    ).all() as { definition: string }[]
+    for (const row of rows) {
+      try {
+        for (const statement of parse(row.definition)) {
+          if (statement.kind === 'createTrigger') {
+            server_.triggers.set(triggerKey(statement.name), {
+              name: statement.name,
+              target: statement.target,
+              timing: statement.timing,
+              events: statement.events,
+              options: statement.options,
+              body: statement.body,
+              definition: row.definition
+            })
+          }
+        }
+      } catch {
+        // A definition this build can no longer parse stays catalog-only.
+      }
+    }
+  }
+
 /** @returns server over a SQLite database path (`:memory:` by default). */
 export const server =
   (options: { path?: string, databaseName?: string, serverName?: string } = {}): Server => {
@@ -178,12 +227,14 @@ export const server =
       version: 'Microsoft SQL Server 2019 (mssqlite) - 15.0.2000.5 (X64)',
       procedures: new Map(),
       functions: new Map(),
+      triggers: new Map(),
       registeredFunctions: new Set(),
       current: undefined
     }
     registerFunctions(server_)
     loadProcedures(server_)
     loadUserFunctions(server_)
+    loadTriggers(server_)
     return server_
   }
 
@@ -200,7 +251,10 @@ export const session =
       hostName: '',
       variables: new Map(),
       tableVariables: new Map(),
+      transitionTables: new Map(),
       nextTableVariable: 1,
+      nextTransitionTable: 1,
+      activeTriggers: new Set(),
       options: new Map(),
       rowCount: 0,
       lastIdentity: null,

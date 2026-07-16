@@ -187,6 +187,34 @@ test('scalar and inline table functions parse', () => {
     'CREATE FUNCTION f() RETURNS INT AS RETURN 1')).toThrow()
 })
 
+test('create, alter and drop DML triggers parse', () => {
+  expect(parseStatement(`
+    CREATE OR ALTER TRIGGER dbo.audit_orders ON dbo.orders
+    WITH EXECUTE AS OWNER
+    AFTER INSERT, UPDATE WITH APPEND NOT FOR REPLICATION AS
+    BEGIN
+      INSERT INTO audit (id) SELECT id FROM inserted
+    END
+  `)).toMatchObject({
+    kind: 'createTrigger',
+    action: 'createOrAlter',
+    name: [ 'dbo', 'audit_orders' ],
+    target: [ 'dbo', 'orders' ],
+    timing: 'after',
+    events: [ 'insert', 'update' ],
+    options: [ 'execute as owner', 'append', 'not for replication' ],
+    body: [ { kind: 'block' } ],
+    definition: expect.stringContaining('CREATE OR ALTER TRIGGER') as unknown
+  })
+  expect(parseStatement('ALTER TRIGGER t ON dbo.orders INSTEAD OF DELETE AS SELECT * FROM deleted'))
+    .toMatchObject({ kind: 'createTrigger', action: 'alter', timing: 'insteadOf', events: [ 'delete' ] })
+  expect(parseStatement('DROP TRIGGER IF EXISTS dbo.t, dbo.u')).toMatchObject({
+    kind: 'dropTrigger',
+    ifExists: true,
+    names: [ [ 'dbo', 't' ], [ 'dbo', 'u' ] ]
+  })
+})
+
 test('joins are left-associative', () => {
   const statement = parseStatement(
     'SELECT * FROM a JOIN b ON a.id = b.a_id LEFT OUTER JOIN c ON b.id = c.b_id'

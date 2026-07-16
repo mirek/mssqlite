@@ -3,7 +3,8 @@ import { expect, test } from 'vitest'
 import { parseStatement } from '@mssqlite/tsql'
 import {
   addColumns, bootstrap, createFunction, createIndex, createTable, createView,
-  dropColumns, dropFunction, dropIndex, dropTable, objectIdOf, tableColumns
+  createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
+  objectIdOf, tableColumns
 } from './index.ts'
 import type { Ast } from '@mssqlite/tsql'
 
@@ -160,4 +161,23 @@ test('user function modules register object types and drop cleanly', () => {
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 2 })
   dropFunction(db, [ 'dbo', 'scalar_fn' ])
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 1 })
+})
+
+test('trigger modules register against their parent table and clean up', () => {
+  const db = open()
+  const table = createUsers(db)
+  const trigger = createTrigger(
+    db, [ 'dbo', 'users_audit' ], [ 'dbo', 'users' ], 'CREATE TRIGGER users_audit')
+  expect(db.prepare(
+    'SELECT type, type_desc, parent_object_id FROM "sys.objects" WHERE object_id = ?'
+  ).get(trigger)).toEqual({
+    type: 'TR',
+    type_desc: 'SQL_TRIGGER',
+    parent_object_id: table
+  })
+  dropTrigger(db, [ 'dbo', 'users_audit' ])
+  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 0 })
+  createTrigger(db, [ 'dbo', 'users_audit' ], [ 'dbo', 'users' ], 'CREATE TRIGGER users_audit')
+  dropTable(db, [ 'dbo', 'users' ])
+  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 0 })
 })

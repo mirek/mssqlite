@@ -49,6 +49,8 @@ OUTPUT clause with `inserted.*` / `deleted.*` and OUTPUT ... INTO),
 MERGE (all WHEN arms with AND conditions, OUTPUT with `$action`),
 stored procedures (CREATE/ALTER/DROP PROCEDURE, EXEC with named/default/
 OUTPUT parameters, RETURN status, `sys.sql_modules` persistence),
+statement-level AFTER and INSTEAD OF DML triggers with persisted definitions
+and multi-row `inserted` / `deleted` transition tables,
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
 CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
 indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested

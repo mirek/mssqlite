@@ -272,6 +272,10 @@ export type FunctionParameter = {
   readonly default_?: Expression
 }
 
+/** DML event that can fire a table trigger. */
+export type TriggerEvent =
+  'insert' | 'update' | 'delete'
+
 /** Scalar or table-shaped local variable declaration. */
 export type Declaration =
   | {
@@ -466,6 +470,23 @@ export type Statement =
     }
   | {
       readonly kind: 'dropFunction',
+      readonly names: readonly QualifiedName[],
+      readonly ifExists: boolean
+    }
+  | {
+      readonly kind: 'createTrigger',
+      readonly name: QualifiedName,
+      readonly action: 'create' | 'alter' | 'createOrAlter',
+      readonly target: QualifiedName,
+      readonly timing: 'after' | 'insteadOf',
+      readonly events: readonly TriggerEvent[],
+      readonly options: readonly string[],
+      readonly body: readonly Statement[],
+      /** Source text of the whole batch, stored in sys.sql_modules. */
+      readonly definition: string
+    }
+  | {
+      readonly kind: 'dropTrigger',
       readonly names: readonly QualifiedName[],
       readonly ifExists: boolean
     }
