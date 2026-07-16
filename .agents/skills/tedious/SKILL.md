@@ -57,6 +57,9 @@ connection.execSql(request)
   `Record<name, { value }>`. Values are decoded per COLMETADATA TYPE_INFO:
   `IntN` → number, `NVarChar` → string, `DateTimeN`/`DateTime2N` → JS
   `Date`, `BitN` → boolean, `FloatN` → number.
+  Duplicate labels necessarily overwrite in this object form. Use
+  `useColumnNames: false` when labels may repeat; the `row` event then receives
+  an ordered column array and mssqlite preserves every positional value.
 - **`infoMessage` fires on the Connection, not the Request** — PRINT
   output and other INFO tokens land there. `errorMessage` likewise.
 - The request callback's error is an MSSQL-shaped error with `.number`

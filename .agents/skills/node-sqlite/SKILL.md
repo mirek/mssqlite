@@ -46,8 +46,10 @@ v22.22.2 (mssqlite's floor is Node ≥ 22.18):
   for computed/expression columns — only direct table columns carry
   origin info. mssqlite's engine falls back to value-shape inference for
   such columns (`packages/engine/src/metadata.ts`).
-- The `returnArrays` open option is not available — rows always come back
-  as objects, so duplicate column names collapse.
+- `StatementSync.setReturnArrays(true)` is available at the Node 22.18 floor
+  (added in 22.16). mssqlite enables it for client-facing SELECT/OUTPUT
+  extraction so duplicate labels remain distinct positional values. The
+  database/prepare `returnArrays` options are newer Node APIs and are not used.
 - Available and relied on by mssqlite: `DatabaseSync`, `StatementSync`,
   `db.function()` (with `deterministic` / `varargs`), named parameters
   with bare keys (bind `{ x: 1 }` for SQL `@x`), math functions
@@ -62,7 +64,8 @@ variables as native `@name` parameters with prefix-stripped keys.
 Table-variable backing tables also use this shared connection's `temp`
 schema, so their generated names include the session spid plus a monotonic
 counter. `StatementSync.columns()` origins are matched back to the active
-declaration to preserve TDS type and nullability metadata.
+declaration by positional index to preserve duplicate labels plus TDS type and
+nullability metadata.
 The bundled build includes JSON1's `json_each` but not the optional
 `generate_series` module. The engine registers scalar adapters for
 STRING_SPLIT's JSON rowset and GENERATE_SERIES step validation; the

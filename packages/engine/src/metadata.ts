@@ -224,7 +224,7 @@ export const columnsOf =
   (
     db: DatabaseSync,
     statement: StatementSync,
-    rows: readonly Record<string, Value>[],
+    rows: readonly (readonly Value[])[],
     tableVariables: Iterable<TableVariable> = [],
     hints: readonly ColumnHint[] = []
   ): Column[] => {
@@ -250,7 +250,7 @@ export const columnsOf =
           return { ...variable, name: source.name }
         }
       }
-      const values = rows.map(row => row[source.name] ?? null)
+      const values = rows.map(row => row[index] ?? null)
       return {
         name: source.name,
         typeInfo: typeInfoOfValues(values),

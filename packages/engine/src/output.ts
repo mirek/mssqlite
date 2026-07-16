@@ -5,7 +5,8 @@ import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { ColumnHint } from '@mssqlite/transpile'
 import type { Item, Rows } from './execute.ts'
-import { countVisibility, type Session, type Value } from './session.ts'
+import { countVisibility, type Session } from './session.ts'
+import positionalRows from './positional-rows.ts'
 
 /** @returns result rows of a rendered SELECT with TDS column metadata. */
 export const query =
@@ -16,10 +17,9 @@ export const query =
     hints: readonly ColumnHint[] = []
   ): Rows => {
     const statement = session.db.prepare(sql)
-    const records = statement.all(bindings(session, variables)) as Record<string, Value>[]
+    const rows = positionalRows(statement, bindings(session, variables))
     const columns = columnsOf(
-      session.db, statement, records, session.tableVariables.values(), hints)
-    const rows = records.map(record => columns.map(column => record[column.name] ?? null))
+      session.db, statement, rows, session.tableVariables.values(), hints)
     session.rowCount = rows.length
     return { kind: 'rows', columns, rows, rowCount: rows.length, ...countVisibility(session) }
   }
