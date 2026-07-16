@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [Table variables](todo/table-variables.md) — Add session-scoped `DECLARE @t TABLE` storage and query support.
 - [Table-valued functions](todo/table-valued-functions.md) — Expose `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` in `FROM`.
 - [CROSS and OUTER APPLY](todo/cross-outer-apply.md) — Translate common lateral TVF and correlated subquery patterns.
 - [PIVOT and UNPIVOT](todo/pivot-unpivot.md) — Rewrite pivot operations to conditional aggregation and `UNION ALL`.

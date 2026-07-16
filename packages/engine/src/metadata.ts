@@ -1,6 +1,6 @@
-import { objectIdOf, tableColumns, type ColumnRow } from '@mssqlite/catalog'
+import { objectIdOf, tableColumns, TypeRow, type ColumnRow } from '@mssqlite/catalog'
 import { TypeInfo } from '@mssqlite/tds'
-import type { Value } from './session.ts'
+import type { TableVariable, Value } from './session.ts'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 
 /** Result set column with TDS metadata. */
@@ -127,13 +127,60 @@ const catalogColumn =
       .find(row => row.name.toLowerCase() === column.toLowerCase())
   }
 
+const tableVariableColumn =
+  (tables: Iterable<TableVariable>, table: string, column: string): Column | undefined => {
+    for (const variable of tables) {
+      const backing = variable.table[variable.table.length - 1] ?? ''
+      if (backing.toLowerCase() !== table.toLowerCase()) {
+        continue
+      }
+      const definition = variable.columns.find(candidate =>
+        candidate.name.toLowerCase() === column.toLowerCase())
+      if (definition === undefined) {
+        return undefined
+      }
+      const type = TypeRow.columnType(definition.type)
+      if (type === undefined) {
+        return undefined
+      }
+      const tablePrimaryKey = variable.constraints.some(constraint =>
+        constraint.kind === 'primaryKey' && constraint.columns.some(candidate =>
+          candidate.name.toLowerCase() === column.toLowerCase()))
+      const row: ColumnRow = {
+        object_id: 0,
+        name: definition.name,
+        column_id: 0,
+        system_type_id: type.systemTypeId,
+        user_type_id: type.userTypeId,
+        max_length: type.maxLength,
+        precision: type.precision,
+        scale: type.scale,
+        collation_name: type.collationName,
+        is_nullable: definition.nullable === false || definition.primaryKey === true || tablePrimaryKey ? 0 : 1,
+        is_identity: definition.identity === undefined ? 0 : 1
+      }
+      return {
+        name: definition.name,
+        typeInfo: typeInfoOfCatalogRow(row),
+        nullable: row.is_nullable !== 0
+      }
+    }
+    return undefined
+  }
+
 /**
  * @returns TDS column metadata for a prepared statement's result — catalog
  * lookups when the column maps to a table column, value shape otherwise.
  */
 export const columnsOf =
-  (db: DatabaseSync, statement: StatementSync, rows: readonly Record<string, Value>[]): Column[] => {
+  (
+    db: DatabaseSync,
+    statement: StatementSync,
+    rows: readonly Record<string, Value>[],
+    tableVariables: Iterable<TableVariable> = []
+  ): Column[] => {
     const sources = statement.columns() as unknown as SourceColumn[]
+    const variables = [ ...tableVariables ]
     return sources.map(source => {
       if (source.table !== null && source.column !== null) {
         const row = catalogColumn(db, source.table, source.column)
@@ -143,6 +190,10 @@ export const columnsOf =
             typeInfo: typeInfoOfCatalogRow(row),
             nullable: row.is_nullable !== 0
           }
+        }
+        const variable = tableVariableColumn(variables, source.table, source.column)
+        if (variable !== undefined) {
+          return { ...variable, name: source.name }
         }
       }
       const values = rows.map(row => row[source.name] ?? null)

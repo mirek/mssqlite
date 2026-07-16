@@ -59,3 +59,7 @@ v22.22.2 (mssqlite's floor is Node ≥ 22.18):
 `@mssqlite/engine` opens one `DatabaseSync` per server, registers all
 `mssqlite_*` UDFs once (see the `architecture` skill), and binds T-SQL
 variables as native `@name` parameters with prefix-stripped keys.
+Table-variable backing tables also use this shared connection's `temp`
+schema, so their generated names include the session spid plus a monotonic
+counter. `StatementSync.columns()` origins are matched back to the active
+declaration to preserve TDS type and nullability metadata.

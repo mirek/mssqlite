@@ -64,7 +64,9 @@ const statements = parse(`
   PRIMARY KEY, UNIQUE, FOREIGN KEY, CHECK), DROP TABLE/VIEW [IF EXISTS],
   CREATE [UNIQUE] INDEX with INCLUDE and filtered WHERE, DROP INDEX,
   CREATE [OR ALTER] VIEW, ALTER TABLE ADD/DROP COLUMN/CONSTRAINT.
-- **Procedural** — DECLARE with initializers, SET @x (compound operators),
+- **Procedural** — scalar DECLARE with initializers and
+  `DECLARE @t TABLE (...)` with column/table constraints, SET @x
+  (compound operators),
   SET session options (NOCOUNT, ANSI_NULLS lists, TRANSACTION ISOLATION
   LEVEL, IDENTITY_INSERT), IF/ELSE, WHILE, BEGIN...END blocks, BREAK,
   CONTINUE, RETURN, THROW, PRINT, EXEC[UTE] with named/positional/OUTPUT

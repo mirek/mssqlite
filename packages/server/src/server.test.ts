@@ -128,6 +128,18 @@ test('variables and batches', async () => {
   expect(result.rows).toEqual([ { answer: 42 } ])
 })
 
+test('table variable workflow over the wire', async () => {
+  const result = await query(`
+    DECLARE @items TABLE (id INT PRIMARY KEY, name NVARCHAR(20) NOT NULL, qty INT DEFAULT 1)
+    INSERT INTO @items (id, name) VALUES (1, N'apple'), (2, N'pear')
+    UPDATE @items SET qty += 2 WHERE id = 1
+    DELETE FROM @items WHERE id = 2
+    SELECT id, name, qty FROM @items
+  `)
+  expect(result.rows).toEqual([ { id: 1, name: 'apple', qty: 3 } ])
+  await expect(query('SELECT * FROM @items')).rejects.toMatchObject({ number: 1087 })
+})
+
 test('sys catalog over the wire', async () => {
   const result = await query(`
     SELECT t.name, s.name AS schema_name

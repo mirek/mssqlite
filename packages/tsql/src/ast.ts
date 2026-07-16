@@ -201,6 +201,21 @@ export type ProcedureParameter = {
   readonly output: boolean
 }
 
+/** Scalar or table-shaped local variable declaration. */
+export type Declaration =
+  | {
+      readonly kind: 'scalar',
+      readonly name: string,
+      readonly type: TypeName.t,
+      readonly initial?: Expression
+    }
+  | {
+      readonly kind: 'table',
+      readonly name: string,
+      readonly columns: readonly ColumnDefinition[],
+      readonly constraints: readonly TableConstraint[]
+    }
+
 /**
  * OUTPUT clause of INSERT / UPDATE / DELETE — select items over the
  * `inserted` / `deleted` pseudo-tables, optionally routed INTO a table.
@@ -313,11 +328,7 @@ export type Statement =
     }
   | {
       readonly kind: 'declare',
-      readonly declarations: readonly {
-        readonly name: string,
-        readonly type: TypeName.t,
-        readonly initial?: Expression
-      }[]
+      readonly declarations: readonly Declaration[]
     }
   | {
       readonly kind: 'setVariable',

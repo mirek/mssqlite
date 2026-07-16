@@ -32,7 +32,7 @@ const tablePrimary: Parser.t<Ast.TableSource> =
       })
     ),
     C.map(
-      C.seq(C.qualifiedName, tableHints, alias, tableHints),
+      C.seq(C.tableName, tableHints, alias, tableHints),
       ([ name, hintsBefore, alias_, hintsAfter ]) => {
         const hints = hintsBefore ?? hintsAfter
         return {

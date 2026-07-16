@@ -11,7 +11,7 @@ export const query =
   (session: Session, sql: string, variables: readonly string[]): Rows => {
     const statement = session.db.prepare(sql)
     const records = statement.all(bindings(session, variables)) as Record<string, Value>[]
-    const columns = columnsOf(session.db, statement, records)
+    const columns = columnsOf(session.db, statement, records, session.tableVariables.values())
     const rows = records.map(record => columns.map(column => record[column.name] ?? null))
     session.rowCount = rows.length
     return { kind: 'rows', columns, rows, rowCount: rows.length }

@@ -21,6 +21,7 @@ export {
   type Procedure,
   type Server,
   type Session,
+  type TableVariable,
   type Value,
   type Variable
 } from './session.ts'

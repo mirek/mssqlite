@@ -94,11 +94,18 @@ The language pipeline lives in three packages:
   `deleted.` items and stars, and `OUTPUT … INTO`; unlike SQL Server,
   source columns in MERGE OUTPUT are rejected (the row images are
   assembled after the arms apply, when source pairing is gone).
+- `DECLARE @t TABLE (...)` reuses CREATE TABLE column/constraint members but
+  requires the table variable to be the only declaration in that DECLARE.
+  Object-position variables parse only in SELECT/INSERT/UPDATE/DELETE. The
+  engine gives each declaration a unique SQLite temp backing table and
+  scopes it to the declaring batch or procedure; nested procedures and
+  `sp_executesql` cannot see a caller's table variables. Backing tables are
+  dropped on normal or exceptional scope exit.
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
-GOTO, table variables (DECLARE @t TABLE), source columns in MERGE OUTPUT,
+GOTO, source columns in MERGE OUTPUT,
 table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

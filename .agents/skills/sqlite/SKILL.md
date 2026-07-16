@@ -68,6 +68,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - Dotted object names inside quoted identifiers (`"sys.tables"`,
   `"app.users"`) to flatten MSSQL schemas without query interception,
   and the `temp` schema for `#temp` tables.
+- Table variables use unique tables in the SQLite `temp` schema. Their names
+  stay out of the catalog; the engine keeps the T-SQL column definitions for
+  result metadata and drops each backing table at batch/procedure scope exit.
+  Current divergence: their DML shares the surrounding SQLite transaction,
+  while SQL Server table-variable updates survive user transaction rollback.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

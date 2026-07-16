@@ -37,6 +37,8 @@ const { sql, variables } = statement(parseStatement(
 - **Variables** — `@x` stays a native SQLite `@x` parameter (lowercased);
   globals map to engine-bound parameters (`@@ROWCOUNT` → `@__rowcount`).
   Every rendered statement reports the variables it binds.
+- **Table variables** — the engine resolves `@t` object references to
+  collision-free temp-table names before calling the pure renderer.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

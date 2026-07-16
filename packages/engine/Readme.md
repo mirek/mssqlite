@@ -4,7 +4,7 @@ T-SQL execution engine over `node:sqlite`. Parses batches with
 [`@mssqlite/tsql`](../tsql), renders SQL with
 [`@mssqlite/transpile`](../transpile), maintains the
 [`@mssqlite/catalog`](../catalog), and interprets what SQLite can't run —
-variables, control flow, transactions, procedures.
+variables, table variables, control flow, transactions, procedures.
 
 ## API
 
@@ -37,9 +37,14 @@ const items = executeBatch(s, `
 
 ## Interpretation
 
-- **DECLARE / SET / SELECT @x = …** — variables live in the session,
+- **DECLARE / SET / SELECT @x = …** — scalar variables live in the session,
   bound as native SQLite parameters. Assignment SELECTs return no result
   set and assign from the last row, as MSSQL does.
+- **DECLARE @t TABLE (…)** — allocates a collision-free SQLite temp table
+  for the active batch or procedure scope. SELECT/INSERT/UPDATE/DELETE and
+  OUTPUT INTO references resolve through that scope; nested procedures and
+  dynamic batches get isolated scopes, and every backing table is dropped
+  when its declaring scope exits, including on errors.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
@@ -76,8 +81,8 @@ const items = executeBatch(s, `
 ## Column metadata
 
 Result columns get TDS `TYPE_INFO` two ways: `StatementSync.columns()`
-table/column origins resolve through the catalog (exact declared types,
-nullability); computed columns fall back to value-shape inference
+table/column origins resolve through the catalog or active table-variable
+definitions (exact declared types, nullability); computed columns fall back to value-shape inference
 (int32/int64/float/nvarchar(max)/varbinary(max)/bit).
 
 ## UDFs
