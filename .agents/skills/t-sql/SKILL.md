@@ -109,10 +109,16 @@ The language pipeline lives in three packages:
   or empty input, preserves empty interior tokens, and only promises source
   position through its bigint `ordinal` column. OPENJSON supports lax paths;
   strict path mode remains unsupported.
+- CROSS/OUTER APPLY parse as left-associative join nodes without ON. The
+  transpiler supports correlated two-argument STRING_SPLIT and simple
+  derived `SELECT TOP (1)` with equality correlations in WHERE. The latter
+  rewrites to a partitioned row-number join; GROUP/HAVING/set operations,
+  non-equality correlation, other correlated TVFs, and star projection over
+  the rewritten source are cleanly unsupported.
 
 ### Not yet implemented (raise clean errors)
 
-CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
+CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
 FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,

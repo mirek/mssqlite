@@ -124,7 +124,7 @@ export type TableSource =
   | { readonly kind: 'derived', readonly select: Select, readonly alias: string }
   | {
       readonly kind: 'join',
-      readonly join: 'inner' | 'left' | 'right' | 'full' | 'cross',
+      readonly join: 'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply',
       readonly left: TableSource,
       readonly right: TableSource,
       readonly on?: Expression

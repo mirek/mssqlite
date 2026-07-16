@@ -77,6 +77,8 @@ connection.execSql(request)
 - TVF result metadata is available even for NULL/empty inputs. Remember that
   tedious surfaces STRING_SPLIT's bigint `ordinal` as a string, while
   GENERATE_SERIES over int literals retains IntN(4) and surfaces numbers.
+- APPLY e2e tests should cover both CROSS row elimination and OUTER NULL
+  extension; use explicit projected columns for rewritten TOP (1) sources.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

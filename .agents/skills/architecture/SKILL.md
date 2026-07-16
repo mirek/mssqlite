@@ -69,6 +69,13 @@ the engine:
   build has no series module). The transpiler attaches output type hints to
   simple TVF SELECTs so the engine can emit exact metadata before stepping,
   including for empty inputs.
+- **APPLY has shape-specific lowering** — correlated two-argument
+  STRING_SPLIT lowers to SQLite's implicitly lateral `json_each` source;
+  simple correlated TOP (1) derived queries move equality correlation keys
+  into a join and rank right rows with `ROW_NUMBER() OVER (PARTITION BY ...
+  ORDER BY ...)`. CROSS APPLY uses INNER JOIN, OUTER APPLY uses LEFT JOIN.
+  Complex correlation and star projection over ranked helper columns are
+  rejected explicitly.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an

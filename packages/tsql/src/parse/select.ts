@@ -107,8 +107,10 @@ const tablePrimary: Parser.t<Ast.TableSource> =
     )
   )
 
-const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross'> =
+const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply'> =
   C.first(
+    C.map(C.seq(C.keyword('cross'), C.keyword('apply')), () => 'crossApply' as const),
+    C.map(C.seq(C.keyword('outer'), C.keyword('apply')), () => 'outerApply' as const),
     C.map(C.seq(C.keyword('inner'), C.keyword('join')), () => 'inner' as const),
     C.map(C.seq(C.keyword('left'), C.maybe(C.keyword('outer')), C.keyword('join')), () => 'left' as const),
     C.map(C.seq(C.keyword('right'), C.maybe(C.keyword('outer')), C.keyword('join')), () => 'right' as const),
@@ -135,8 +137,8 @@ export const tableSource: Parser.t<Ast.TableSource> =
       if (Result.failed(right)) {
         return right
       }
-      if (kind.value === 'cross') {
-        left = { kind: 'join', join: 'cross', left, right: right.value }
+      if (kind.value === 'cross' || kind.value === 'crossApply' || kind.value === 'outerApply') {
+        left = { kind: 'join', join: kind.value, left, right: right.value }
         current = right.reader
         continue
       }

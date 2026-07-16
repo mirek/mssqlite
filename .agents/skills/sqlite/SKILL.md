@@ -79,6 +79,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   schemas. Node's bundled SQLite does not expose the optional
   `generate_series` virtual table, so `GENERATE_SERIES` renders as a
   streaming recursive CTE with SQL Server's direction-sensitive default step.
+- SQLite has no general LATERAL keyword, but eponymous virtual-table function
+  arguments can reference earlier FROM sources. mssqlite uses that for
+  correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
+  lower to a ROW_NUMBER-partitioned INNER/LEFT join.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

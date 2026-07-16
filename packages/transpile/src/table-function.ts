@@ -227,6 +227,19 @@ export const source =
     }
   }
 
+/** @returns directly lateral SQLite source for APPLY-compatible TVF shapes. */
+export const applySource =
+  (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
+    if (finalName(source_.name) !== 'string_split' || source_.args.length !== 2 ||
+      source_.with !== undefined || source_.columns !== undefined) {
+      return unsupported(
+        'Correlated APPLY currently supports two-argument STRING_SPLIT without a column alias list.')
+    }
+    const input = render(ctx, source_.args[0] ?? { kind: 'null' })
+    const separator = render(ctx, source_.args[1] ?? { kind: 'null' })
+    return `json_each(mssqlite_string_split(${input}, ${separator})) AS ${Quote.identifier(alias(source_))}`
+  }
+
 /** @returns exact output hints for a simple SELECT over one table function. */
 export const selectHints =
   (select: Ast.Select): readonly ColumnHint[] | undefined => {

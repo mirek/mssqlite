@@ -44,6 +44,12 @@ const { sql, variables } = statement(parseStatement(
   default or explicit schema, and `GENERATE_SERIES` uses a recursive CTE
   because Node's bundled SQLite omits the series extension. Rendered SELECTs
   carry declared column hints so empty results retain exact TDS metadata.
+- **APPLY** — correlated two-argument STRING_SPLIT uses SQLite's implicit
+  lateral virtual-table arguments; correlated simple `SELECT TOP (1)`
+  derived sources become partitioned `ROW_NUMBER()` joins. CROSS uses INNER
+  semantics, OUTER uses LEFT/NULL-extension semantics. Other TVFs, complex
+  derived queries, and star projection over rewritten top-one sources fail
+  cleanly rather than exposing helper columns or changing cardinality.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

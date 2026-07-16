@@ -217,6 +217,32 @@ test('table-valued functions over the wire include empty inputs', async () => {
   expect((await query('SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
 })
 
+test('apply correlation and null extension over the wire', async () => {
+  await query(`
+    CREATE TABLE wire_apply_tags (id INT, csv NVARCHAR(20));
+    INSERT INTO wire_apply_tags VALUES (1, 'a,b'), (2, NULL);
+    CREATE TABLE wire_apply_notes (tag_id INT, note NVARCHAR(20), created INT);
+    INSERT INTO wire_apply_notes VALUES (1, 'old', 1), (1, 'new', 2);
+  `)
+  const split = await query(`
+    SELECT t.id, part.value
+    FROM wire_apply_tags t OUTER APPLY STRING_SPLIT(t.csv, ',') part
+    ORDER BY t.id, part.value
+  `)
+  expect(split.rows).toEqual([
+    { id: 1, value: 'a' }, { id: 1, value: 'b' }, { id: 2, value: null }
+  ])
+  const latest = await query(`
+    SELECT t.id, n.note
+    FROM wire_apply_tags t OUTER APPLY (
+      SELECT TOP (1) x.note FROM wire_apply_notes x
+      WHERE x.tag_id = t.id ORDER BY x.created DESC
+    ) n
+    ORDER BY t.id
+  `)
+  expect(latest.rows).toEqual([ { id: 1, note: 'new' }, { id: 2, note: null } ])
+})
+
 test('update and delete counts', async () => {
   const update = await query('UPDATE users SET age = 31 WHERE name = N\'Alice\'')
   expect(update.rowCount).toBe(1)
