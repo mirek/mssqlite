@@ -193,8 +193,15 @@ the engine:
   RETURNING into a second temp table for the `inserted` image, and emits
   a UNION ALL of one SELECT per arm with `$action` folded to a literal.
 - **Column metadata** — `StatementSync.columns()` origins resolve through
-  the catalog for exact declared types; computed columns infer from value
-  shape (int32/int64/float/nvarchar(max)/varbinary(max)).
+  the catalog for exact declared types. Computed-column types are inferred
+  from base and earlier computed definitions before CREATE/ALTER rendering,
+  then persisted in `sys.columns` for stable empty-result and TDS metadata.
+- **Computed columns use SQLite generated columns** — non-PERSISTED definitions
+  render VIRTUAL and PERSISTED definitions render STORED. Generated-expression
+  mode selects deterministic checked-integer and exact-decimal UDFs; SQLite
+  enforces forbidden direct writes and rejects nondeterministic definitions.
+  `sys.computed_columns_extra` retains normalized definition text and the
+  persistence bit behind the derived catalog view.
 - **Date/time as TEXT** — MSSQL-format strings
   (`YYYY-MM-DD HH:MM:SS.fff…`); TDS codecs parse/format via proleptic
   civil-date math (no JS `Date` range limits); date UDFs implement MSSQL

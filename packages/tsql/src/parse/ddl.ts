@@ -63,6 +63,36 @@ const indexColumns: Parser.t<{ name: string, descending: boolean }[]> =
 /** Column definition parser — type plus constraints in any order. */
 export const columnDefinition: Parser.t<Ast.ColumnDefinition> =
   reader => {
+    const computedName = C.anyIdentifier(reader)
+    if (!Result.failed(computedName)) {
+      const as = C.keyword('as')(computedName.reader)
+      if (!Result.failed(as)) {
+        const computedExpression = expression(as.reader)
+        if (Result.failed(computedExpression)) {
+          return computedExpression
+        }
+        const persisted = C.keyword('persisted')(computedExpression.reader)
+        const afterPersisted = Result.failed(persisted) ? computedExpression.reader : persisted.reader
+        const notNull = C.seq(C.keyword('not'), C.keyword('null'))(afterPersisted)
+        const end = Result.failed(notNull) ? afterPersisted : notNull.reader
+        const definition = reader.tokens
+          .slice(as.reader.offset, computedExpression.reader.offset)
+          .map(token => token.kind === 'string' ?
+            `${token.national === true ? 'N' : ''}'${token.value.replaceAll('\'', '\'\'')}'` :
+            token.kind === 'quoted' ? `[${token.value.replaceAll(']', ']]')}]` : token.value)
+          .join(' ')
+        return Result.ok(end, {
+          name: computedName.value,
+          type: { name: 'sql_variant', args: [] },
+          ...Result.failed(notNull) ? {} : { nullable: false },
+          computed: {
+            expression: computedExpression.value,
+            persisted: !Result.failed(persisted),
+            definition
+          }
+        })
+      }
+    }
     const head = C.seq(C.anyIdentifier, typeName)(reader)
     if (Result.failed(head)) {
       return head

@@ -203,6 +203,17 @@ const sourceColumns =
     return columns.map(column => ({ name: column.name }))
   }
 
+/** Declared source columns for an already resolved table name. */
+export const columnsOfTable =
+  (session: Session, name: Ast.QualifiedName): readonly Ast.SourceColumn[] => {
+    const table = Transpile.Quote.objectName(name)
+    const tableName = name[name.length - 1] ?? ''
+    const pragma = tableName.startsWith('#') ?
+      `PRAGMA temp.table_info(${Transpile.Quote.identifier(tableName)})` :
+      `PRAGMA table_info(${table})`
+    return sourceColumns(session, name, pragma)
+  }
+
 type Substitutions =
   ReadonlyMap<string, Ast.Expression>
 
@@ -427,18 +438,13 @@ const resolveTableSource =
           session.transitionTables.has(source.name[0]?.toLowerCase() ?? '') ?
           source.name[0] : undefined
         const name = resolveName(session, source.name)
-        const table = Transpile.Quote.objectName(name)
-        const tableName = name[name.length - 1] ?? ''
-        const pragma = tableName.startsWith('#') ?
-          `PRAGMA temp.table_info(${Transpile.Quote.identifier(tableName)})` :
-          `PRAGMA table_info(${table})`
         return {
           ...source,
           name,
           ...source.alias === undefined && transitionAlias !== undefined ?
             { alias: transitionAlias } :
             {},
-          columns: sourceColumns(session, name, pragma)
+          columns: columnsOfTable(session, name)
         }
       }
       case 'function':
@@ -603,9 +609,10 @@ export const declareTableVariable =
         `The variable name '${declaration.name}' has already been declared. Variable names must be unique within a query batch or stored procedure.`,
         134, 15)
     }
+    const columns = Transpile.Computed.columns(declaration.columns)
     const table: TableVariable = {
       table: [ `#__mssqlite_table_${session.spid}_${session.nextTableVariable}` ],
-      columns: declaration.columns,
+      columns,
       constraints: declaration.constraints
     }
     session.nextTableVariable++

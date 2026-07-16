@@ -123,6 +123,27 @@ test('create, insert, select round trip', async () => {
   ])
 })
 
+test('computed values and sys.computed_columns metadata cross tedious', async () => {
+  await query(`
+    CREATE TABLE wire_computed (
+      quantity INT,
+      price DECIMAL(10,2),
+      total AS quantity * price PERSISTED
+    )
+    INSERT INTO wire_computed (quantity, price) VALUES (3, 1.25)
+  `)
+  const values = await query('SELECT quantity, price, total FROM wire_computed')
+  expect(values.rows).toEqual([ { quantity: 3, price: 1.25, total: 3.75 } ])
+  expect(values.columns.map(column => column.type)).toEqual([ 'IntN', 'DecimalN', 'DecimalN' ])
+  const catalog = await query(`
+    SELECT name, is_computed, definition, is_persisted
+    FROM sys.computed_columns WHERE object_id = OBJECT_ID(N'wire_computed')
+  `)
+  expect(catalog.rows).toEqual([ {
+    name: 'total', is_computed: 1, definition: 'quantity * price', is_persisted: 1
+  } ])
+})
+
 test('parameterized query via sp_executesql rpc', async () => {
   const result = await query('SELECT name FROM users WHERE age > @age', [
     { name: 'age', type: TYPES.Int, value: 18 }

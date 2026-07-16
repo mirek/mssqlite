@@ -64,6 +64,7 @@ export type ColumnRow = {
   readonly collation_name: string | null,
   readonly is_nullable: number,
   readonly is_identity: number
+  readonly is_computed: number
 }
 
 /** @returns sys.columns rows of an object ordered by column id. */
@@ -184,21 +185,32 @@ const insertColumn =
     db.prepare(
       `INSERT INTO "sys.columns"
         (object_id, name, column_id, system_type_id, user_type_id, max_length,
-         precision, scale, collation_name, is_nullable, is_rowguidcol, is_identity)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         precision, scale, collation_name, is_nullable, is_rowguidcol, is_identity, is_computed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       objectId, column.name, columnId,
       type.systemTypeId, type.userTypeId, type.maxLength,
       type.precision, type.scale, type.collationName,
       column.nullable === false || column.primaryKey === true || column.identity !== undefined ? 0 : 1,
       column.rowguidcol === true ? 1 : 0,
-      column.identity === undefined ? 0 : 1
+      column.identity === undefined ? 0 : 1,
+      column.computed === undefined ? 0 : 1
     )
     if (column.identity !== undefined) {
       db.prepare(
         `INSERT INTO "sys.identity_columns_extra" (object_id, column_id, seed_value, increment_value)
           VALUES (?, ?, ?, ?)`
       ).run(objectId, columnId, String(column.identity.seed), String(column.identity.increment))
+    }
+    if (column.computed !== undefined) {
+      db.prepare(
+        `INSERT INTO "sys.computed_columns_extra"
+          (object_id, column_id, definition, uses_database_collation, is_persisted)
+          VALUES (?, ?, ?, 0, ?)`
+      ).run(
+        objectId, columnId, column.computed.definition,
+        column.computed.persisted ? 1 : 0
+      )
     }
   }
 
@@ -424,6 +436,7 @@ export const dropTable =
       db.prepare('DELETE FROM "sys.check_constraints" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.default_constraints" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.identity_columns_extra" WHERE object_id = ?').run(id)
+      db.prepare('DELETE FROM "sys.computed_columns_extra" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(id)
     }
   }
@@ -719,6 +732,14 @@ export const dropColumns =
       return
     }
     for (const column of columns) {
+      const row = db.prepare(
+        'SELECT column_id FROM "sys.columns" WHERE object_id = ? AND name = ?'
+      ).get(objectId, column) as { column_id: number } | undefined
+      if (row !== undefined) {
+        db.prepare(
+          'DELETE FROM "sys.computed_columns_extra" WHERE object_id = ? AND column_id = ?'
+        ).run(objectId, row.column_id)
+      }
       db.prepare('DELETE FROM "sys.columns" WHERE object_id = ? AND name = ?').run(objectId, column)
     }
   }

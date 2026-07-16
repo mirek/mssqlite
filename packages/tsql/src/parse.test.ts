@@ -431,6 +431,28 @@ test('create table with constraints', () => {
   })
 })
 
+test('computed columns retain expression, persistence and nullability', () => {
+  expect(parseStatement(`
+    CREATE TABLE totals (
+      quantity INT,
+      price DECIMAL(10,2),
+      total AS quantity * price PERSISTED NOT NULL,
+      doubled AS (quantity * 2)
+    )
+  `)).toMatchObject({
+    kind: 'createTable',
+    columns: [
+      { name: 'quantity' },
+      { name: 'price' },
+      {
+        name: 'total', nullable: false,
+        computed: { expression: { kind: 'binaryOp', operator: '*' }, persisted: true }
+      },
+      { name: 'doubled', computed: { persisted: false } }
+    ]
+  })
+})
+
 test('composite primary key constraint', () => {
   expect(parseStatement('CREATE TABLE t (a INT, b INT, PRIMARY KEY (a, b DESC))')).toMatchObject({
     constraints: [ {

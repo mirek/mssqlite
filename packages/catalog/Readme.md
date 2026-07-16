@@ -29,7 +29,8 @@ no query interception.
     sys.objects type `FN` / `IF`, and triggers use table-parented type `TR`;
     `createSequence` / `alterSequence` / `dropSequence` maintain `SO` objects
     and lossless counter state behind `sys.sequences`;
-    `addColumns` / `dropColumns`.
+    computed columns populate `is_computed` plus definition/persistence rows
+    behind `sys.computed_columns`; `addColumns` / `dropColumns`.
 - Lookups — `objectIdOf(db, name)` (schema-aware, case-insensitive),
   `tableColumns(db, objectId)` (the engine derives TDS column metadata from
   these rows), `schemaIdOf`, `allocateId`.

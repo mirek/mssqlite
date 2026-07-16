@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { parseExpression, parseStatement } from '@mssqlite/tsql'
-import { scalar, statement, UnsupportedError } from './index.ts'
+import { Computed, scalar, statement, UnsupportedError } from './index.ts'
 
 const sqlOf =
   (tsql: string): string =>
@@ -346,6 +346,28 @@ test('create table', () => {
     '"email" TEXT COLLATE NOCASE UNIQUE, ' +
     '"team_id" INTEGER REFERENCES "teams" ("id") ON DELETE CASCADE, ' +
     'CONSTRAINT "uq_name" UNIQUE ("name"))'
+  )
+})
+
+test('computed columns render inferred virtual and stored generated columns', () => {
+  const parsed = parseStatement(`
+    CREATE TABLE totals (
+      quantity INT,
+      price DECIMAL(10,2),
+      total AS quantity * price PERSISTED,
+      doubled AS quantity * 2
+    )
+  `)
+  if (parsed.kind !== 'createTable') {
+    throw new Error('Expected CREATE TABLE.')
+  }
+  const resolved = { ...parsed, columns: Computed.columns(parsed.columns) }
+  expect(statement(resolved).sql).toBe(
+    'CREATE TABLE "totals" (' +
+    '"quantity" INTEGER, "price" TEXT, ' +
+    '"total" TEXT GENERATED ALWAYS AS (' +
+    'mssqlite_decimal_generated_arithmetic(\'*\', "quantity", "price", 0, 2, 21, 2)) STORED, ' +
+    '"doubled" INTEGER GENERATED ALWAYS AS (mssqlite_generated_arithmetic(\'*\', "quantity", 2, 32)) VIRTUAL)'
   )
 })
 

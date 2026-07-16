@@ -239,6 +239,11 @@ export type ColumnDefinition = {
   readonly collate?: string,
   readonly rowguidcol?: boolean,
   readonly constraintName?: string
+  readonly computed?: {
+    readonly expression: Expression,
+    readonly persisted: boolean,
+    readonly definition: string
+  }
 }
 
 export type ReferentialAction =

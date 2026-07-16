@@ -79,6 +79,26 @@ export const of =
         statementTerminating: true
       })
     }
+    if (message.includes('generated column')) {
+      if (message.includes('subqueries prohibited')) {
+        return new MssqlError('Subqueries are not allowed in this context.', 1046, 15)
+      }
+      if (message.includes('non-deterministic')) {
+        return new MssqlError(
+          `Computed column cannot be persisted because the column is non-deterministic. ${message}`,
+          4936, 16)
+      }
+      if (message.includes('cannot INSERT') || message.includes('cannot UPDATE')) {
+        return new MssqlError(
+          `The column cannot be modified because it is a computed column. ${message}`,
+          271, 16, 1, { statementTerminating: true })
+      }
+    }
+    if (message.includes('misuse of aggregate function')) {
+      return new MssqlError(
+        `Computed column expression cannot contain an aggregate function. ${message}`,
+        4936, 16)
+    }
     if (message.includes('already exists')) {
       return new MssqlError(`There is already an object with that name. ${message}`, 2714, 16)
     }

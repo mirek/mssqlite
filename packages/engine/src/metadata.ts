@@ -158,7 +158,8 @@ const tableVariableColumn =
         scale: type.scale,
         collation_name: type.collationName,
         is_nullable: definition.nullable === false || definition.primaryKey === true || tablePrimaryKey ? 0 : 1,
-        is_identity: definition.identity === undefined ? 0 : 1
+        is_identity: definition.identity === undefined ? 0 : 1,
+        is_computed: definition.computed === undefined ? 0 : 1
       }
       return {
         name: definition.name,
@@ -186,7 +187,8 @@ const hintedColumn =
       scale: type.scale,
       collation_name: type.collationName,
       is_nullable: hint.nullable ? 1 : 0,
-      is_identity: 0
+      is_identity: 0,
+      is_computed: 0
     }
     return {
       name: hint.name,
