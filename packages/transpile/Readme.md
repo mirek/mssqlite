@@ -37,6 +37,12 @@ const { sql, variables } = statement(parseStatement(
   schema.
 - **Variables** — `@x` stays a native SQLite `@x` parameter (lowercased);
   globals map to engine-bound parameters (`@@ROWCOUNT` → `@__rowcount`).
+
+Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
+operands execute once and the engine can enforce divide-by-zero/overflow and
+session options. SUM renders a checked int aggregate, with an explicit BIGINT
+argument selecting its 64-bit variant; explicit DECIMAL/NUMERIC keeps SQLite's
+native SUM pending exact-decimal execution support.
   Every rendered statement reports the variables it binds.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.

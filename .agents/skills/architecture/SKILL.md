@@ -163,6 +163,13 @@ the engine:
   Integer CAST/CONVERT routes through a strict UDF so invalid text raises 245,
   overflow raises 8115, and TRY_CAST/TRY_CONVERT returns NULL instead of relying
   on SQLite's permissive conversion-to-zero behavior.
+- **Integer arithmetic is checked before SQLite can coerce it** — inferred
+  32/64-bit `+`, `-`, `*`, `/`, `%` expressions render one nondeterministic
+  scalar UDF call, preserving one evaluation per operand, NULL propagation,
+  integer division, 8134 divide-by-zero, and 8115 overflow. SUM uses checked
+  32-bit state by default and 64-bit state for an explicit BIGINT argument.
+  When both ARITHABORT and ANSI_WARNINGS are OFF, these failures produce NULL;
+  otherwise they enter normal TRY/CATCH / statement-error / XACT_ABORT flow.
 - **Stored procedures are interpreted AST** — `CREATE PROCEDURE` stores
   the parsed body in a server-wide registry (`server.procedures`, keyed
   `schema.name` lowercased) and persists the batch source in
@@ -239,7 +246,9 @@ toward broader SQL Server compatibility.
 - Error classification currently covers mapped constraints, known conversion/
   arithmetic numbers, RAISERROR, cursor and sequence ranges; additional SQL
   Server statement-vs-batch cases will be added as their operations land.
-  Division by zero still yields NULL (SQLite) instead of error 8134.
+  Decimal precision/scale arithmetic remains tied to the exact-decimal TODO;
+  checked width inference for uncast columns currently follows SUM(int) and
+  treats scalar columns of unknown declared width conservatively.
 - Duplicate column names in one result set collapse (rows read as
   objects; `returnArrays` lands in newer node:sqlite).
 - `USE db` switches the session label only — one database per server.

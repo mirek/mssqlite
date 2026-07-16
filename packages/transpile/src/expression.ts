@@ -58,6 +58,7 @@ const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const left = expression(ctx, expression_.left)
     const right = expression(ctx, expression_.right)
+    const width = Math.max(integerWidth(expression_.left), integerWidth(expression_.right))
     switch (expression_.operator) {
       case '+': {
         const leftType = infer(expression_.left)
@@ -69,10 +70,15 @@ const binaryOp =
           return `(${left} || ${right})`
         }
         if (leftType === 'number' && rightType === 'number') {
-          return `(${left} + ${right})`
+          return `mssqlite_arithmetic('+', ${left}, ${right}, ${width})`
         }
         return `mssqlite_add(${left}, ${right})`
       }
+      case '-':
+      case '*':
+      case '/':
+      case '%':
+        return `mssqlite_arithmetic('${expression_.operator}', ${left}, ${right}, ${width})`
       case 'and':
         return `(${left} AND ${right})`
       case 'or':
@@ -86,6 +92,26 @@ const binaryOp =
         return `(${left} >= ${right})`
       default:
         return `(${left} ${expression_.operator} ${right})`
+    }
+  }
+
+const integerWidth =
+  (expression_: Ast.Expression): number => {
+    switch (expression_.kind) {
+      case 'number': {
+        const value = Number(expression_.value)
+        return Number.isInteger(value) && value >= -2147483648 && value <= 2147483647 ? 32 : 0
+      }
+      case 'cast':
+      case 'convert':
+        return expression_.type.name === 'bigint' ? 64 :
+          Type.category(expression_.type) === 'integer' ? 32 : 0
+      case 'unary':
+        return integerWidth(expression_.operand)
+      case 'binaryOp':
+        return Math.max(integerWidth(expression_.left), integerWidth(expression_.right))
+      default:
+        return 0
     }
   }
 

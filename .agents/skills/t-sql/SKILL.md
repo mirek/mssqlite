@@ -70,6 +70,13 @@ The language pipeline lives in three packages:
   TRY/CATCH intercepts errors before this outer classification.
   Integer CAST/CONVERT validates text and type bounds (245/8115); TRY variants
   convert either failure to NULL.
+- Integer `+ - * / %` uses checked evaluation: NULL propagates, integer division
+  truncates toward zero, zero divisors raise 8134, and inferred int/bigint bounds
+  raise 8115. SUM defaults to SQL Server's int-width accumulator; explicitly
+  casting its argument to BIGINT selects a 64-bit accumulator. Both ARITHABORT
+  OFF and ANSI_WARNINGS OFF are required to turn an arithmetic failure into NULL;
+  otherwise the error is catchable and honors XACT_ABORT. Exact decimal
+  precision/scale formulas remain deferred to the exact-decimal implementation.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

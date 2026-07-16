@@ -79,6 +79,11 @@ const items = executeBatch(s, `
   ignores it. TRY/CATCH remains the inner interception boundary.
   Integer CAST/CONVERT is strict (245 conversion, 8115 overflow), with TRY
   variants returning NULL.
+- **Checked arithmetic** — integer `+ - * / %` preserves NULL and integer-
+  division semantics while raising 8134 for zero divisors and 8115 for inferred
+  int/bigint overflow. SUM checks int width, or bigint width when its argument
+  is explicitly cast. With both ARITHABORT and ANSI_WARNINGS OFF failures return
+  NULL; otherwise they follow TRY/CATCH, continuation, and XACT_ABORT rules.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
 - **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.
