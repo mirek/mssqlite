@@ -585,6 +585,67 @@ const createProcedure: Parser.t<Ast.Statement> =
     })
   )
 
+const integerConstant: Parser.t<string> =
+  reader => {
+    const sign = C.maybe(C.first(C.punct('-'), C.punct('+')))(reader)
+    if (Result.failed(sign)) {
+      return sign
+    }
+    const token = Reader.peek(sign.reader)
+    if (token?.kind !== 'number' || !/^\d+$/.test(token.value)) {
+      return Result.fail(reader, 'Expected an integer constant.')
+    }
+    return Result.ok(Reader.advanced(sign.reader), `${sign.value ?? ''}${token.value}`)
+  }
+
+const sequenceOption: Parser.t<Ast.SequenceOption> =
+  C.first(
+    C.map(C.seq(C.keyword('start'), C.keyword('with'), integerConstant),
+      ([ , , value ]) => ({ kind: 'start' as const, value })),
+    C.map(C.seq(C.keyword('increment'), C.keyword('by'), integerConstant),
+      ([ , , value ]) => ({ kind: 'increment' as const, value })),
+    C.map(C.seq(
+      C.keyword('restart'),
+      C.maybe(C.map(C.seq(C.keyword('with'), integerConstant), ([ , value ]) => value))
+    ), ([ , value ]) => ({ kind: 'restart' as const, ...value === undefined ? {} : { value } })),
+    C.map(C.seq(C.keyword('minvalue'), integerConstant),
+      ([ , value ]) => ({ kind: 'min' as const, value })),
+    C.map(C.keywords('no', 'minvalue'), () => ({ kind: 'min' as const })),
+    C.map(C.seq(C.keyword('maxvalue'), integerConstant),
+      ([ , value ]) => ({ kind: 'max' as const, value })),
+    C.map(C.keywords('no', 'maxvalue'), () => ({ kind: 'max' as const })),
+    C.map(C.keyword('cycle'), () => ({ kind: 'cycle' as const, enabled: true })),
+    C.map(C.keywords('no', 'cycle'), () => ({ kind: 'cycle' as const, enabled: false })),
+    C.map(C.seq(C.keyword('cache'), C.maybe(integerConstant)),
+      ([ , size ]) => ({
+        kind: 'cache' as const,
+        enabled: true,
+        ...size === undefined ? {} : { size }
+      })),
+    C.map(C.keywords('no', 'cache'), () => ({ kind: 'cache' as const, enabled: false }))
+  )
+
+const createSequence: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('create'), C.keyword('sequence'), C.qualifiedName,
+      C.maybe(C.map(C.seq(C.keyword('as'), typeName), ([ , type ]) => type)),
+      C.many0(sequenceOption)
+    ),
+    ([ , , name, dataType, options ]) => ({
+      kind: 'createSequence' as const,
+      name,
+      ...dataType === undefined ? {} : { dataType },
+      options
+    })
+  )
+
+const alterSequence: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(C.keyword('alter'), C.keyword('sequence'), C.qualifiedName, C.many1(sequenceOption)),
+    ([ , , name, options ]) => ({ kind: 'alterSequence' as const, name, options })
+  )
+
 const triggerAction: Parser.t<'create' | 'alter' | 'createOrAlter'> =
   C.first(
     C.map(
@@ -659,6 +720,8 @@ export const statement: Parser.t<Ast.Statement> =
     update,
     delete_,
     merge,
+    createSequence,
+    alterSequence,
     createTable,
     createIndex,
     createView,

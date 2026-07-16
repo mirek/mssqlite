@@ -111,6 +111,12 @@ const existsExpression: Parser.t<Ast.Expression> =
     ([ , select_ ]) => ({ kind: 'exists' as const, select: select_ })
   )
 
+const nextValueExpression: Parser.t<Ast.Expression> =
+  C.map(
+    C.seq(C.keyword('next'), C.keyword('value'), C.keyword('for'), C.qualifiedName),
+    ([ , , , sequence ]) => ({ kind: 'nextValue' as const, sequence })
+  )
+
 const overClause: Parser.t<Ast.Over> =
   C.map(
     C.seq(
@@ -238,6 +244,7 @@ const primary: Parser.t<Ast.Expression> =
     castExpression,
     convertExpression,
     existsExpression,
+    nextValueExpression,
     parenthesized,
     columnOrCall
   )

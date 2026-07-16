@@ -2,9 +2,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, test } from 'vitest'
 import { parseStatement } from '@mssqlite/tsql'
 import {
-  addColumns, bootstrap, createFunction, createIndex, createTable, createView,
+  addColumns, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
   createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
-  objectIdOf, tableColumns
+  dropSequence, objectIdOf, sequenceRows, tableColumns, updateSequenceValue
 } from './index.ts'
 import type { Ast } from '@mssqlite/tsql'
 
@@ -180,4 +180,27 @@ test('trigger modules register against their parent table and clean up', () => {
   createTrigger(db, [ 'dbo', 'users_audit' ], [ 'dbo', 'users' ], 'CREATE TRIGGER users_audit')
   dropTable(db, [ 'dbo', 'users' ])
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.sql_modules"').get()).toEqual({ n: 0 })
+})
+
+test('sequence state backs sys.sequences and allocation updates', () => {
+  const db = open()
+  const objectId = createSequence(db, [ 'dbo', 'numbers' ], {
+    dataType: { name: 'int', args: [] },
+    start: '10', increment: '2', minimum: '0', maximum: '20',
+    cycling: true, cached: false, cacheSize: null,
+    current: '10', exhausted: false, lastUsed: null
+  })
+  expect(sequenceRows(db)[0]).toMatchObject({
+    object_id: objectId,
+    schema_name: 'dbo',
+    name: 'numbers',
+    type_name: 'int',
+    current_value: '10'
+  })
+  updateSequenceValue(db, objectId, '12', false, '12')
+  expect(db.prepare(
+    'SELECT type, current_value, last_used_value, is_cycling FROM "sys.sequences"'
+  ).get()).toEqual({ type: 'SO', current_value: 12, last_used_value: 12, is_cycling: 1 })
+  dropSequence(db, [ 'dbo', 'numbers' ])
+  expect(sequenceRows(db)).toEqual([])
 })

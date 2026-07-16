@@ -5,6 +5,12 @@ import { bindable, bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { executeMerge } from './merge.ts'
 import {
+  defineSequence,
+  flushSequences,
+  redefineSequence,
+  removeSequence
+} from './sequence.ts'
+import {
   declareTableVariable,
   resolveTableVariableExpression,
   resolveTableVariables,
@@ -719,7 +725,7 @@ const executeTransaction =
     }
   }
 
-const executeStatement =
+const executeStatementInner =
   (session: Session, statement_: Ast.Statement, items: Item[]): Signal => {
     const transitionTarget = statement_.kind === 'insert' ? statement_.table :
       statement_.kind === 'update' || statement_.kind === 'delete' ? statement_.target :
@@ -789,6 +795,20 @@ const executeStatement =
     if (statement.kind === 'deallocateCursor') {
       const cursor = cursorOf(session, statement.name)
       session.cursors.delete(cursor.name.toLowerCase())
+      return undefined
+    }
+    if (statement.kind === 'createSequence') {
+      defineSequence(session, statement)
+      return undefined
+    }
+    if (statement.kind === 'alterSequence') {
+      redefineSequence(session, statement)
+      return undefined
+    }
+    if (statement.kind === 'dropSequence') {
+      for (const name of statement.names) {
+        removeSequence(session, name, statement.ifExists)
+      }
       return undefined
     }
     switch (statement.kind) {
@@ -1087,6 +1107,15 @@ const executeStatement =
         return undefined
       default:
         throw new MssqlError('Statement is not supported.', 40000, 16)
+    }
+  }
+
+const executeStatement =
+  (session: Session, statement: Ast.Statement, items: Item[]): Signal => {
+    try {
+      return executeStatementInner(session, statement, items)
+    } finally {
+      flushSequences(session.server)
     }
   }
 

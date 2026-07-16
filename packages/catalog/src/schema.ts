@@ -213,6 +213,23 @@ export const tables: readonly string[] = [
     execute_as_principal_id INTEGER,
     uses_native_compilation INTEGER NOT NULL DEFAULT 0
   )`,
+  `CREATE TABLE IF NOT EXISTS "sys.sequence_state" (
+    object_id INTEGER PRIMARY KEY,
+    system_type_id INTEGER NOT NULL,
+    user_type_id INTEGER NOT NULL,
+    precision INTEGER NOT NULL,
+    scale INTEGER NOT NULL DEFAULT 0,
+    start_value TEXT NOT NULL,
+    increment_value TEXT NOT NULL,
+    minimum_value TEXT NOT NULL,
+    maximum_value TEXT NOT NULL,
+    is_cycling INTEGER NOT NULL DEFAULT 0,
+    is_cached INTEGER NOT NULL DEFAULT 1,
+    cache_size INTEGER,
+    current_value TEXT NOT NULL,
+    is_exhausted INTEGER NOT NULL DEFAULT 0,
+    last_used_value TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS "sys._next_id" (
     next_id INTEGER NOT NULL
   )`
@@ -246,6 +263,20 @@ export const views: readonly string[] = [
     JOIN "sys.identity_columns_extra" ic
       ON c.object_id = ic.object_id AND c.column_id = ic.column_id
     WHERE c.is_identity = 1`,
+  `CREATE VIEW IF NOT EXISTS "sys.sequences" AS
+    SELECT o.*,
+      q.system_type_id, q.user_type_id, q.precision, q.scale,
+      CAST(q.start_value AS INTEGER) AS start_value,
+      CAST(q.increment_value AS INTEGER) AS increment,
+      CAST(q.minimum_value AS INTEGER) AS minimum_value,
+      CAST(q.maximum_value AS INTEGER) AS maximum_value,
+      q.is_cycling, q.is_cached, q.cache_size,
+      CAST(q.current_value AS INTEGER) AS current_value,
+      q.is_exhausted,
+      CASE WHEN q.last_used_value IS NULL THEN NULL ELSE CAST(q.last_used_value AS INTEGER) END AS last_used_value
+    FROM "sys.objects" o
+    JOIN "sys.sequence_state" q ON q.object_id = o.object_id
+    WHERE o.type = 'SO'`,
   `CREATE VIEW IF NOT EXISTS "information_schema.tables" AS
     SELECT
       (SELECT d.name FROM "sys.databases" d WHERE d.database_id = 5) AS TABLE_CATALOG,

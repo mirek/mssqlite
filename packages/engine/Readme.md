@@ -118,6 +118,11 @@ const items = executeBatch(s, `
   GLOBAL cursors persist in the session. All accepted cursor types currently
   use read-only static snapshots; cursor variables and positioned writes are
   not implemented.
+- **Sequences** — CREATE/ALTER/DROP persists `SO` objects and NEXT VALUE FOR
+  advances a server-wide BigInt counter shared atomically by every session.
+  Signed increments, bounds, exhaustion, cycling, restart, cache metadata, and
+  `sys.sequences` are supported. Dirty allocation state flushes after statements
+  and after COMMIT/ROLLBACK, so consumed values survive rollback and restart.
 
 ## Column metadata
 

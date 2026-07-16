@@ -537,6 +537,22 @@ test('cursor loop executes over tedious', async () => {
   expect(result.rows).toEqual([ { total: 10, status: -1 } ])
 })
 
+test('sequences allocate and report exhaustion over tedious', async () => {
+  await query(`
+    CREATE SEQUENCE dbo.wire_sequence AS INT
+      START WITH 41 INCREMENT BY 2 MINVALUE 41 MAXVALUE 43 NO CYCLE NO CACHE
+  `)
+  expect((await query('SELECT NEXT VALUE FOR dbo.wire_sequence AS id')).rows)
+    .toEqual([ { id: 41 } ])
+  expect((await query('SELECT NEXT VALUE FOR dbo.wire_sequence AS id')).rows)
+    .toEqual([ { id: 43 } ])
+  await expect(query('SELECT NEXT VALUE FOR dbo.wire_sequence AS id'))
+    .rejects.toMatchObject({ number: 11728 })
+  await query('ALTER SEQUENCE dbo.wire_sequence RESTART WITH 42 INCREMENT BY -1')
+  expect((await query('SELECT NEXT VALUE FOR dbo.wire_sequence AS id')).rows)
+    .toEqual([ { id: 42 } ])
+})
+
 test('merge over the wire reports the combined row count', async () => {
   await query(`
     CREATE TABLE stock (sku NVARCHAR(20) PRIMARY KEY, qty INT);

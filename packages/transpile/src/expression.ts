@@ -107,6 +107,8 @@ export const expression =
         return Context.parameter(ctx, expression_.name)
       case 'column':
         return Quote.columnName(expression_.name)
+      case 'nextValue':
+        return `mssqlite_next_value_for(${Quote.string(expression_.sequence.join('.'))})`
       case 'unary':
         switch (expression_.operator) {
           case 'not':
