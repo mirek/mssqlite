@@ -5,7 +5,7 @@ import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { ColumnHint } from '@mssqlite/transpile'
 import type { Item, Rows } from './execute.ts'
-import type { Session, Value } from './session.ts'
+import { countVisibility, type Session, type Value } from './session.ts'
 
 /** @returns result rows of a rendered SELECT with TDS column metadata. */
 export const query =
@@ -21,7 +21,7 @@ export const query =
       session.db, statement, records, session.tableVariables.values(), hints)
     const rows = records.map(record => columns.map(column => record[column.name] ?? null))
     session.rowCount = rows.length
-    return { kind: 'rows', columns, rows, rowCount: rows.length }
+    return { kind: 'rows', columns, rows, rowCount: rows.length, ...countVisibility(session) }
   }
 
 /** Emits OUTPUT rows to the client, or routes them into the INTO target table. */
@@ -41,7 +41,7 @@ export const emitOutput =
       insert.run(...row.map(bindable))
     }
     // OUTPUT INTO returns no result set — the count reflects the DML itself.
-    items.push({ kind: 'count', rowCount: result.rowCount })
+    items.push({ kind: 'count', rowCount: result.rowCount, ...countVisibility(session) })
   }
 
 /** @returns OUTPUT items with `inserted.*` / `deleted.*` expanded to the target table's columns. */

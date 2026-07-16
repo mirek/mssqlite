@@ -79,6 +79,11 @@ The language pipeline lives in three packages:
   fixed-scale strings with scaled-BigInt casts and arithmetic, SQL Server
   operator precision/scale formulas (including the precision-38 reduction
   rules), half-away-from-zero rounding, and 8115/8134 errors.
+- SET NOCOUNT takes effect at statement execution time: ON suppresses the
+  affected-row value in TDS DONE-family tokens but does not change execution or
+  `@@ROWCOUNT`. A nested procedure, trigger, or dynamic batch inherits the
+  caller's setting and restores it on exit; changes within that scope govern
+  each completion produced there.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

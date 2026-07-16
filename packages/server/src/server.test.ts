@@ -49,15 +49,18 @@ const query =
     type: (typeof TYPES)[keyof typeof TYPES],
     value: unknown,
     options?: { precision?: number, scale?: number }
-  }[] = []): Promise<{ rows: Row[], rowCount: number, columns: WireColumn[] }> =>
+  }[] = []): Promise<{
+    rows: Row[], rowCount: number, columns: WireColumn[], doneCounts: (number | undefined)[]
+  }> =>
     new Promise((resolve, reject) => {
       const rows: Row[] = []
       let columns: WireColumn[] = []
+      const doneCounts: (number | undefined)[] = []
       const request = new Request(sql, (error, rowCount) => {
         if (error) {
           reject(error)
         } else {
-          resolve({ rows, rowCount: rowCount ?? 0, columns })
+          resolve({ rows, rowCount: rowCount ?? 0, columns, doneCounts })
         }
       })
       for (const parameter of parameters) {
@@ -77,6 +80,8 @@ const query =
           length: column.dataLength
         }))
       })
+      request.on('done', rowCount => doneCounts.push(rowCount))
+      request.on('doneInProc', rowCount => doneCounts.push(rowCount))
       connection.execSql(request)
     })
 
@@ -157,6 +162,30 @@ test('variables and batches', async () => {
     SELECT @x AS answer
   `)
   expect(result.rows).toEqual([ { answer: 42 } ])
+})
+
+test('NOCOUNT suppresses tedious row counts while preserving rows and nested scope', async () => {
+  await query('CREATE TABLE wire_nocount (id INT)')
+  const hidden = await query(`
+    SET NOCOUNT ON
+    INSERT INTO wire_nocount VALUES (1), (2)
+    SELECT @@ROWCOUNT AS affected
+  `)
+  expect(hidden.rows).toEqual([ { affected: 2 } ])
+  expect(hidden.rowCount).toBe(0)
+  expect(hidden.doneCounts.every(count => count === undefined)).toBe(true)
+
+  await query(`
+    CREATE PROCEDURE dbo.wire_nocount_insert AS
+      SET NOCOUNT ON
+      INSERT INTO wire_nocount VALUES (3)
+  `)
+  const procedure = await query('EXEC dbo.wire_nocount_insert')
+  expect(procedure.rowCount).toBe(0)
+  expect(procedure.doneCounts.every(count => count === undefined)).toBe(true)
+  const visible = await query('INSERT INTO wire_nocount VALUES (4)')
+  expect(visible.rowCount).toBe(1)
+  expect(visible.doneCounts).toContain(1)
 })
 
 test('table variable workflow over the wire', async () => {
@@ -568,6 +597,7 @@ test('statement-level triggers execute over tedious', async () => {
   `)
   await query(`
     CREATE TRIGGER dbo.wire_trigger ON wire_trigger_source AFTER INSERT, UPDATE AS
+      SET NOCOUNT ON
       INSERT INTO wire_trigger_audit (id, value)
       SELECT id, value FROM inserted
   `)

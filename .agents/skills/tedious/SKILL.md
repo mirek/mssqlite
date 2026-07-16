@@ -65,7 +65,10 @@ connection.execSql(request)
   token order; the Connection's `errorMessage` events interleave with Request
   `row` events, so test mixed failing/successful batches through both streams.
 - `done` / `doneInProc` / `doneProc` events mirror the DONE token family;
-  rowCount in the callback comes from the final DONE with DONE_COUNT.
+  counts from tokens carrying DONE_COUNT contribute to the Request callback's
+  rowCount. Trigger-body DML can therefore add to the originating count.
+  NOCOUNT makes the event argument `undefined` and excludes that completion
+  from the callback total; result rows and `@@ROWCOUNT` remain available.
 
 ## Testing patterns
 

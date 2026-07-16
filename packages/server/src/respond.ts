@@ -26,11 +26,15 @@ export const itemTokens =
           for (const row of item.rows) {
             chunks.push(Token.row(columns, row))
           }
-          chunks.push(doneToken(more | Token.Status.count, 0xc1, BigInt(item.rowCount)))
+          chunks.push(item.countValid === false ?
+            doneToken(more, 0xc1, 0n) :
+            doneToken(more | Token.Status.count, 0xc1, BigInt(item.rowCount)))
           break
         }
         case 'count':
-          chunks.push(doneToken(more | Token.Status.count, 0xc3, BigInt(item.rowCount)))
+          chunks.push(item.countValid === false ?
+            doneToken(more, 0xc3, 0n) :
+            doneToken(more | Token.Status.count, 0xc3, BigInt(item.rowCount)))
           break
         case 'message':
           chunks.push(Token.info({

@@ -5,7 +5,7 @@ import { emitOutput, expandOutputStars, query } from './output.ts'
 import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Item } from './execute.ts'
-import type { Session } from './session.ts'
+import { countVisibility, type Session } from './session.ts'
 
 type Merge =
   Ast.Statement & { kind: 'merge' }
@@ -556,7 +556,7 @@ export const executeMerge =
       }
       session.rowCount = total
       if (output === undefined) {
-        items.push({ kind: 'count', rowCount: total })
+        items.push({ kind: 'count', rowCount: total, ...countVisibility(session) })
       }
     } catch (error) {
       if (implicit) {
