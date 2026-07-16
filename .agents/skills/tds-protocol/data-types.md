@@ -328,6 +328,17 @@ XML_INFO = SCHEMA_PRESENT(BYTE)
 
 SCHEMA_PRESENT: 0x01 = typed XML with schema; 0x00 = untyped XML.
 
+### mssqlite codec status
+
+`TypeInfo` and `Value` encode/decode native SSVARIANTTYPE, XMLTYPE, and
+UDTTYPE result shapes. `SqlVariant` preserves and validates the inner base
+token/properties/value; untyped XML uses `F1 00` TYPE_INFO and UTF-16LE PLP;
+CLR types use full COLMETADATA UDT_INFO and opaque binary PLP values. Incoming
+RPC UDT metadata has a shorter layout and remains unsupported. Tedious 18.x
+also throws `not implemented` before sending XML, UDT, or Variant parameters,
+so client parameter attempts fail explicitly rather than falling back to text
+or varbinary.
+
 ### TextPointer and Timestamp (text/ntext/image in ROW/NBCROW)
 
 For text/ntext/image columns:

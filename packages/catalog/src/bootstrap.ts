@@ -67,13 +67,15 @@ export const bootstrap =
     }
     const insertType = db.prepare(
       `INSERT OR IGNORE INTO "sys.types"
-        (user_type_id, name, system_type_id, max_length, precision, scale, collation_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`
+        (user_type_id, name, system_type_id, schema_id, max_length, precision, scale,
+         collation_name, is_assembly_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const row of TypeRow.rows) {
       insertType.run(
-        row.userTypeId, row.name, row.systemTypeId,
-        row.maxLength, row.precision, row.scale, row.collationName
+        row.userTypeId, row.name, row.systemTypeId, row.schemaId ?? 4,
+        row.maxLength, row.precision, row.scale, row.collationName,
+        row.isAssemblyType === true ? 1 : 0
       )
     }
     const insertDatabasePrincipal = db.prepare(

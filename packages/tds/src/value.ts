@@ -87,6 +87,22 @@ const parts =
   (value: Value): DateTime.Parts =>
     DateTime.partsOf(value instanceof Date ? value : stringOf(value))
 
+const variantBytes =
+  (bytes: Uint8Array): Uint8Array => {
+    if (bytes.byteLength < 2) {
+      throw new Error('sql_variant payload is shorter than its header.')
+    }
+    const type = bytes[0] ?? 0
+    const properties = bytes[1] ?? 0
+    if (bytes.byteLength < properties + 2 || DataType.family(type) === undefined ||
+      [ DataType.DataType.sqlVariant, DataType.DataType.xml, DataType.DataType.udt,
+        DataType.DataType.image, DataType.DataType.text, DataType.DataType.ntext ]
+        .includes(type as never)) {
+      throw new Error(`Invalid sql_variant base type 0x${type.toString(16)} or property length.`)
+    }
+    return Uint8Array.from(bytes)
+  }
+
 /** @returns unprefixed payload bytes of a non-null value for its TYPE_INFO. */
 export const encodeBare =
   (typeInfo: TypeInfo.t, value: NonNullable<Value>): Uint8Array => {
@@ -145,6 +161,8 @@ export const encodeBare =
       case DataType.DataType.bigVarbinary:
       case DataType.DataType.bigBinary:
       case DataType.DataType.image:
+      case DataType.DataType.udt:
+      case DataType.DataType.sqlVariant:
         return bytesOf(value)
       case DataType.DataType.xml:
       case DataType.DataType.json:
@@ -303,6 +321,8 @@ export const decodeBare =
       case DataType.DataType.image:
       case DataType.DataType.udt:
         return Uint8Array.from(bytes)
+      case DataType.DataType.sqlVariant:
+        return variantBytes(bytes)
       default:
         throw new Error(`Cannot decode value for type 0x${type.toString(16)}.`)
     }

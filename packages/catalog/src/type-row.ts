@@ -8,7 +8,10 @@ export type TypeRow = {
   readonly maxLength: number,
   readonly precision: number,
   readonly scale: number,
-  readonly collationName: string | null
+  readonly collationName: string | null,
+  readonly schemaId?: number,
+  readonly isAssemblyType?: boolean,
+  readonly assemblyQualifiedName?: string
 }
 
 export type t =
@@ -40,6 +43,21 @@ export const rows: readonly TypeRow[] = [
   { userTypeId: 108, name: 'numeric', systemTypeId: 108, maxLength: 17, precision: 38, scale: 38, collationName: null },
   { userTypeId: 122, name: 'smallmoney', systemTypeId: 122, maxLength: 4, precision: 10, scale: 4, collationName: null },
   { userTypeId: 127, name: 'bigint', systemTypeId: 127, maxLength: 8, precision: 19, scale: 0, collationName: null },
+  {
+    userTypeId: 128, name: 'hierarchyid', systemTypeId: 240, maxLength: 892,
+    precision: 0, scale: 0, collationName: null, schemaId: 4, isAssemblyType: true,
+    assemblyQualifiedName: 'Microsoft.SqlServer.Types.SqlHierarchyId, Microsoft.SqlServer.Types, Version=10.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91'
+  },
+  {
+    userTypeId: 129, name: 'geometry', systemTypeId: 240, maxLength: -1,
+    precision: 0, scale: 0, collationName: null, schemaId: 4, isAssemblyType: true,
+    assemblyQualifiedName: 'Microsoft.SqlServer.Types.SqlGeometry, Microsoft.SqlServer.Types, Version=10.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91'
+  },
+  {
+    userTypeId: 130, name: 'geography', systemTypeId: 240, maxLength: -1,
+    precision: 0, scale: 0, collationName: null, schemaId: 4, isAssemblyType: true,
+    assemblyQualifiedName: 'Microsoft.SqlServer.Types.SqlGeography, Microsoft.SqlServer.Types, Version=10.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91'
+  },
   { userTypeId: 165, name: 'varbinary', systemTypeId: 165, maxLength: 8000, precision: 0, scale: 0, collationName: null },
   { userTypeId: 167, name: 'varchar', systemTypeId: 167, maxLength: 8000, precision: 0, scale: 0, collationName: collation },
   { userTypeId: 173, name: 'binary', systemTypeId: 173, maxLength: 8000, precision: 0, scale: 0, collationName: null },

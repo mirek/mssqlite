@@ -118,5 +118,9 @@ operator results carry SQL Server-derived precision/scale hints to TDS.
   (23, 101-126) via `strftime`. DATETIMEOFFSET casts instead use the exact
   offset-preserving codec UDF; comparisons, IN/BETWEEN, ORDER BY, uniqueness,
   and indexes render a UTC-normalized key while result hints retain scale.
+  SQL_VARIANT casts pack/unpack a persistent base-type envelope; XML casts
+  accept Unicode text, and hierarchyid/geometry/geography casts accept only
+  native binary serialization. Unsupported special-type operators and methods
+  fail explicitly instead of inheriting SQLite TEXT/BLOB behavior.
 - **DATEADD parts** — the bare datepart argument (`month`, `dd`, …)
   normalizes to a canonical literal at transpile time.

@@ -2,6 +2,7 @@ import { expect, test } from 'vitest'
 import { Cursor, Hex, Result } from '@mssqlite/bytes'
 import * as TypeInfo from './type-info.ts'
 import * as Value from './value.ts'
+import * as SqlVariant from './sql-variant.ts'
 
 const roundTrip =
   (typeInfo: TypeInfo.t, value: Value.t): Value.t => {
@@ -74,6 +75,31 @@ test('varbinary round trips', () => {
   expect(roundTrip(TypeInfo.varbinary(10), null)).toBeNull()
 })
 
+test('XML and UDT use native PLP representations', () => {
+  expect(TypeInfo.encode(TypeInfo.xml())).toEqual(Hex.of('f1 00'))
+  expect(roundTrip(TypeInfo.xml(), '<root>é</root>')).toBe('<root>é</root>')
+  const udt = TypeInfo.udt('geometry', 'Microsoft.SqlServer.Types.SqlGeometry', 0xffff)
+  expect(roundTrip(udt, Hex.of('01 02 03'))).toEqual(Hex.of('01 02 03'))
+  expect(TypeInfo.encode(TypeInfo.udt('geometry', 'A', 0xffff, '', 'sys'))).toEqual(Hex.of(
+    'f0 ff ff 00 03 73 00 79 00 73 00 08 67 00 65 00 6f 00 6d 00 65 00 74 00 72 00 79 00 01 00 41 00'
+  ))
+})
+
+test('sql_variant preserves its base type envelope', () => {
+  const integer = SqlVariant.encode(TypeInfo.intN(4), 42)
+  expect(integer).toEqual(Hex.of('38 00 2a 00 00 00'))
+  expect(Value.encode(TypeInfo.sqlVariant(), integer))
+    .toEqual(Hex.of('06 00 00 00 38 00 2a 00 00 00'))
+  expect(SqlVariant.decode(integer)).toMatchObject({
+    typeInfo: { type: 0x38 },
+    value: 42
+  })
+
+  const text = SqlVariant.encode(TypeInfo.nvarchar(2), 'hé')
+  expect(SqlVariant.decode(text)).toMatchObject({ value: 'hé' })
+  expect(roundTrip(TypeInfo.sqlVariant(), text)).toEqual(text)
+})
+
 test('binary(8) rowversion uses BIGBINARY TYPE_INFO and exact bytes', () => {
   const value = Hex.of('00 00 00 00 00 00 00 01')
   expect(TypeInfo.encode(TypeInfo.binary(8))).toEqual(Hex.of('ad 08 00'))
@@ -130,7 +156,10 @@ test('type info encode/decode round trips', () => {
     TypeInfo.datetime2N(7),
     TypeInfo.datetimeOffsetN(2),
     TypeInfo.moneyN(8),
-    TypeInfo.datetimeN(8)
+    TypeInfo.datetimeN(8),
+    TypeInfo.sqlVariant(),
+    TypeInfo.xml(),
+    TypeInfo.udt('geometry', 'Microsoft.SqlServer.Types.SqlGeometry')
   ]
   for (const info of infos) {
     const bytes = TypeInfo.encode(info)

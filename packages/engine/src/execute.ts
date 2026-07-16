@@ -146,7 +146,9 @@ const decimalType =
 
 const storedType =
   (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
-    decimalType(type) ?? (type.name === 'datetimeoffset' ? type : undefined)
+    decimalType(type) ??
+    ([ 'datetimeoffset', 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ]
+      .includes(type.name) ? type : undefined)
 
 const decimalShape =
   (type: Ast.ColumnDefinition['type']): readonly [ number, number ] | undefined => {
@@ -208,12 +210,16 @@ const targetColumns =
       return []
     }
     return Catalog.tableColumns(session.db, objectId).map(column => {
-      const type = column.system_type_id === 106 ? { name: 'decimal', args: [ column.precision, column.scale ] } :
+      const declared = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === column.user_type_id)
+      const opaque = declared !== undefined &&
+        [ 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ].includes(declared.name) ?
+        { name: declared.name, args: [] } : undefined
+      const type = opaque ?? (column.system_type_id === 106 ? { name: 'decimal', args: [ column.precision, column.scale ] } :
         column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
           column.system_type_id === 60 ? { name: 'money', args: [] } :
             column.system_type_id === 122 ? { name: 'smallmoney', args: [] } :
               column.system_type_id === 43 ? { name: 'datetimeoffset', args: [ column.scale ] } :
-                column.system_type_id === 189 ? { name: 'timestamp', args: [] } : undefined
+                column.system_type_id === 189 ? { name: 'timestamp', args: [] } : undefined)
       return {
         name: column.name,
         ...type === undefined ? {} : { type },

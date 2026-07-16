@@ -282,6 +282,21 @@ String types to binary: padded/truncated on the right. Other types to binary: pa
 
 Different families: higher family is greater. Same family: lower type implicitly converted to higher.
 
+### mssqlite opaque compatibility floor
+
+- `sql_variant` is stored as the TDS SSVARIANT instance (base token,
+  properties, and bare value), so base numeric/text/binary identity survives
+  SQLite persistence. Casts out unpack the base value. Variant operators are
+  rejected until SQL Server's comparison-family ordering is implemented.
+- Untyped `xml` accepts and preserves a Unicode string and returns native TDS
+  XML. XML schema collections, well-formedness validation, operators, and XML
+  methods are not implemented and fail explicitly.
+- `hierarchyid`, `geometry`, and `geography` accept only their native serialized
+  bytes (`0x...`/`varbinary`) and return native TDS UDT metadata plus the same
+  bytes. Text constructors, CLR methods, comparisons, and indexing are deferred.
+  Keeping the binary serialization opaque avoids inventing an incompatible
+  text representation.
+
 ## 8. Data Type Synonyms
 
 | Synonym | Maps to |
