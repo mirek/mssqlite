@@ -105,6 +105,21 @@ const resolveItem =
       item :
       { ...item, expression: resolveExpression(session, item.expression) }
 
+const resolveGroupingSetItem =
+  (session: Session, item: Ast.GroupingSetItem): Ast.GroupingSetItem =>
+    item.kind === 'expressions' ?
+      { ...item, expressions: item.expressions.map(value => resolveExpression(session, value)) } :
+      {
+        ...item,
+        units: item.units.map(unit => unit.map(value => resolveExpression(session, value)))
+      }
+
+const resolveGroupByItem =
+  (session: Session, item: Ast.GroupByItem): Ast.GroupByItem =>
+    item.kind === 'sets' ?
+      { ...item, sets: item.sets.map(set => resolveGroupingSetItem(session, set)) } :
+      resolveGroupingSetItem(session, item)
+
 const typeNameOf =
   (row: Catalog.ColumnRow): Ast.SourceColumn['type'] => {
     const type = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === row.user_type_id) ??
@@ -219,7 +234,7 @@ const resolveSelect =
     ...select.from === undefined ? {} : { from: resolveTableSource(session, select.from) },
     ...select.where === undefined ? {} : { where: resolveExpression(session, select.where) },
     ...select.groupBy === undefined ? {} : {
-      groupBy: select.groupBy.map(value => resolveExpression(session, value))
+      groupBy: select.groupBy.map(item => resolveGroupByItem(session, item))
     },
     ...select.having === undefined ? {} : { having: resolveExpression(session, select.having) },
     ...select.orderBy === undefined ? {} : {

@@ -82,6 +82,13 @@ the engine:
   columns. UNPIVOT materializes the source once, expands it with `UNION ALL`,
   and filters NULL values. The metadata annotations also provide stable TDS
   types for generated columns; incompatible known UNPIVOT types are rejected.
+- **Advanced grouping expands before SQLite** — ROLLUP prefixes, CUBE's
+  lattice, and explicit GROUPING SETS become ordered UNION ALL branches;
+  duplicates are intentionally preserved. Each branch substitutes NULL for
+  omitted grouping expressions and folds GROUPING(expr) to a tinyint 0/1.
+  Simple sources are captured in one MATERIALIZED CTE (also stabilizing
+  volatile derived expressions); joins currently repeat their source per
+  branch because one CTE alias cannot preserve every original qualifier.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an

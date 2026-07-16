@@ -32,7 +32,10 @@ test('select with from, where, order by', () => {
     ],
     from: { kind: 'table', name: [ 'dbo', 'users' ], alias: 'u', hints: [ 'NOLOCK' ] },
     where: { kind: 'binaryOp', operator: 'and' },
-    groupBy: [ {}, {} ],
+    groupBy: [
+      { kind: 'expressions', expressions: [ {} ] },
+      { kind: 'expressions', expressions: [ {} ] }
+    ],
     having: { kind: 'binaryOp', operator: '>' },
     orderBy: [ { descending: true } ]
   })
@@ -559,6 +562,38 @@ test('pivot and unpivot parse as postfix table transforms', () => {
   })
   expect(() => parseStatement('SELECT * FROM t PIVOT (SUM(v) FOR k IN ()) p')).toThrow()
   expect(() => parseStatement('SELECT * FROM t UNPIVOT (v FOR k IN (a))')).toThrow()
+})
+
+test('rollup cube and grouping sets preserve grouping units', () => {
+  expect(parseStatement(`
+    SELECT a, b, SUM(v) FROM t
+    GROUP BY a, ROLLUP((b, c), d), GROUPING SETS ((e, f), CUBE(g, h), ())
+  `)).toMatchObject({
+    groupBy: [
+      { kind: 'expressions', expressions: [ { kind: 'column', name: [ 'a' ] } ] },
+      {
+        kind: 'rollup',
+        units: [
+          [ { kind: 'column', name: [ 'b' ] }, { kind: 'column', name: [ 'c' ] } ],
+          [ { kind: 'column', name: [ 'd' ] } ]
+        ]
+      },
+      {
+        kind: 'sets',
+        sets: [
+          { kind: 'expressions', expressions: [ { kind: 'column' }, { kind: 'column' } ] },
+          { kind: 'cube', units: [ [ { kind: 'column' } ], [ { kind: 'column' } ] ] },
+          { kind: 'expressions', expressions: [] }
+        ]
+      }
+    ]
+  })
+  expect(parseStatement('SELECT COUNT(*) FROM t GROUP BY ()')).toMatchObject({
+    groupBy: [ { kind: 'expressions', expressions: [] } ]
+  })
+  expect(() => parseStatement('SELECT a FROM t GROUP BY ROLLUP()')).toThrow()
+  expect(() => parseStatement(
+    'SELECT a FROM t GROUP BY GROUPING SETS (GROUPING SETS ((a)))')).toThrow()
 })
 
 test('control flow', () => {

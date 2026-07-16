@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Grouping from './grouping.ts'
 import * as Output from './output.ts'
 import * as Quote from './quote.ts'
 import * as TableFunction from './table-function.ts'
@@ -245,7 +246,11 @@ const selectCore =
       parts.push(`WHERE ${expression(ctx, select_.where)}`)
     }
     if (select_.groupBy !== undefined) {
-      parts.push(`GROUP BY ${select_.groupBy.map(value => expression(ctx, value)).join(', ')}`)
+      const values = Grouping.ordinary(select_.groupBy)
+      if (values === undefined) {
+        return unsupported('Advanced grouping must be expanded before rendering.')
+      }
+      parts.push(`GROUP BY ${values.map(value => expression(ctx, value)).join(', ')}`)
     }
     if (select_.having !== undefined) {
       parts.push(`HAVING ${expression(ctx, select_.having)}`)
@@ -320,20 +325,80 @@ const setTerm =
       `SELECT * FROM (${core} LIMIT ${topLimit(ctx, term)})`
   }
 
+const cteDefinitions =
+  (ctx: Context.t, ctes: readonly Ast.Cte[]): string[] =>
+    ctes.map(cte => {
+      const columns = cte.columns === undefined ?
+        '' :
+        ` (${cte.columns.map(Quote.identifier).join(', ')})`
+      return `${Quote.identifier(cte.name)}${columns} AS (${select(ctx, cte.select)})`
+    })
+
+const sourceAlias =
+  (source: Ast.TableSource): string | undefined => {
+    switch (source.kind) {
+      case 'table':
+      case 'function':
+        return source.alias ?? source.name[source.name.length - 1]
+      case 'derived':
+      case 'pivot':
+      case 'unpivot':
+        return source.alias
+      default:
+        return undefined
+    }
+  }
+
+const groupingSelect =
+  (ctx: Context.t, select_: Ast.Select): string => {
+    if (select_.union !== undefined || select_.distinct || select_.top !== undefined ||
+      select_.offset !== undefined || select_.fetch !== undefined || select_.into !== undefined) {
+      return unsupported(
+        'Advanced grouping with DISTINCT, TOP, INTO, set operations, or OFFSET/FETCH is not supported.')
+    }
+    const {
+      ctes: _ctes,
+      orderBy: _orderBy,
+      union: _union,
+      top: _top,
+      offset: _offset,
+      fetch: _fetch,
+      ...core
+    } = select_
+    const definitions = cteDefinitions(ctx, select_.ctes ?? [])
+    let branchBase: Ast.Select = core
+    if (select_.from !== undefined && select_.from.kind !== 'join') {
+      const name = `__mssqlite_grouping_${ctx.nextSource++}`
+      const where = select_.where === undefined ? '' : ` WHERE ${expression(ctx, select_.where)}`
+      definitions.push(
+        `${Quote.identifier(name)} AS MATERIALIZED (SELECT * FROM ${tableSource(ctx, select_.from)}${where})`)
+      const alias = sourceAlias(select_.from)
+      const { where: _where, ...withoutWhere } = core
+      branchBase = {
+        ...withoutWhere,
+        from: {
+          kind: 'table',
+          name: [ name ],
+          ...alias === undefined ? {} : { alias }
+        }
+      }
+    }
+    const sets = Grouping.expand(select_.groupBy ?? [])
+    const branches = sets.map(set => selectCore(ctx, Grouping.branch(branchBase, set)))
+    const with_ = definitions.length === 0 ? '' : `WITH ${definitions.join(', ')} `
+    const order = select_.orderBy === undefined ? '' : ` ${orderBy(ctx, select_.orderBy)}`
+    return `${with_}${branches.join(' UNION ALL ')}${order}`
+  }
+
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => {
+    if (Grouping.requiresExpansion(select_)) {
+      return groupingSelect(ctx, select_)
+    }
     const parts: string[] = []
     if (select_.ctes !== undefined) {
-      const ctes = select_.ctes
-        .map(cte => {
-          const columns = cte.columns === undefined ?
-            '' :
-            ` (${cte.columns.map(Quote.identifier).join(', ')})`
-          return `${Quote.identifier(cte.name)}${columns} AS (${select(ctx, cte.select)})`
-        })
-        .join(', ')
-      parts.push(`WITH ${ctes}`)
+      parts.push(`WITH ${cteDefinitions(ctx, select_.ctes).join(', ')}`)
     }
     const inSet = select_.union !== undefined
     parts.push(inSet ? setTerm(ctx, select_) : selectCore(ctx, select_))
@@ -671,7 +736,8 @@ export const statement =
       }
     })()
     const columns = statement_.kind === 'select' ?
-      TableFunction.selectHints(statement_) ?? TableTransform.selectHints(statement_) :
+      TableFunction.selectHints(statement_) ?? TableTransform.selectHints(statement_) ??
+        Grouping.selectHints(statement_) :
       undefined
     return {
       sql,

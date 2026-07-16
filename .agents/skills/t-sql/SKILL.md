@@ -121,11 +121,16 @@ The language pipeline lives in three packages:
   columns while every other input column remains a grouping key. UNPIVOT
   expands listed columns in order, omits NULLs, preserves generated metadata,
   and rejects duplicate names or incompatible known input types.
+- GROUP BY represents expression tuples, ROLLUP units, CUBE units, explicit
+  GROUPING SETS, and `()` independently in the AST. ROLLUP expands from the
+  full list to the empty prefix; CUBE uses all combinations; top-level items
+  combine by Cartesian product; explicit duplicate sets are not deduplicated.
+  GROUPING(expr) is valid for a grouped expression and returns tinyint 0 for
+  an active key or 1 for a subtotal placeholder.
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
-FOR JSON/XML,
-GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
+FOR JSON/XML, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

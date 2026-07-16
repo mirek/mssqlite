@@ -56,6 +56,10 @@ const items = executeBatch(s, `
   conditional-aggregate PIVOT and materialized `UNION ALL` UNPIVOT rewrites
   can validate names and emit stable generated-column metadata. UNPIVOT
   rejects statically known input columns whose declared types differ.
+- **ROLLUP / CUBE / GROUPING SETS** — advanced groups expand into ordinary
+  aggregate branches with GROUPING() replaced by branch-local tinyint bits.
+  Source catalog annotations retain exact grouping/aggregate metadata through
+  the compound result, including subtotal NULLs.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
@@ -91,8 +95,9 @@ const items = executeBatch(s, `
 
 ## Column metadata
 
-Result columns get TDS `TYPE_INFO` three ways: table-valued-function and
-PIVOT/UNPIVOT renderings provide declared hints before execution; `StatementSync.columns()`
+Result columns get TDS `TYPE_INFO` three ways: table-valued-function,
+PIVOT/UNPIVOT, and advanced-grouping renderings provide declared hints before
+execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
 definitions (exact declared types, nullability); computed columns fall back to value-shape inference
 (int32/int64/float/nvarchar(max)/varbinary(max)/bit).

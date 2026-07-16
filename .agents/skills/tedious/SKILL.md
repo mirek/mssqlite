@@ -83,6 +83,10 @@ connection.execSql(request)
   all-NULL generated PIVOT columns must retain the aggregate input TYPE_INFO,
   while UNPIVOT's name column is NVARCHAR and its value column keeps the
   common declared input type.
+- Advanced-grouping e2e tests must include a real NULL detail row and the
+  visually identical subtotal NULL, distinguished by GROUPING(). The latter
+  arrives as nullable-family `IntN(1)` metadata and a JavaScript number;
+  grouped and aggregate columns retain their declared source-derived widths.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,
