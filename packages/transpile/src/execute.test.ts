@@ -153,6 +153,51 @@ test('table-valued functions execute against real SQLite', () => {
   expect(all(db, 'SELECT value FROM GENERATE_SERIES(NULL, 3)')).toEqual([])
 })
 
+test('cross and outer apply evaluate string split per left row', () => {
+  const db = tableFunctionDatabase()
+  run(db, `
+    CREATE TABLE tags (id INT, csv NVARCHAR(20));
+    INSERT INTO tags VALUES (1, 'a,b'), (2, NULL), (3, 'c');
+    CREATE TABLE notes (tag_id INT, note NVARCHAR(20), created INT);
+    INSERT INTO notes VALUES (1, 'old', 1), (1, 'new', 2), (3, 'only', 1);
+  `)
+  expect(all(db, `
+    SELECT t.id, s.value
+    FROM tags t CROSS APPLY STRING_SPLIT(t.csv, ',') s
+    ORDER BY t.id, s.value
+  `)).toEqual([
+    { id: 1, value: 'a' }, { id: 1, value: 'b' }, { id: 3, value: 'c' }
+  ])
+  expect(all(db, `
+    SELECT t.id, s.value
+    FROM tags t OUTER APPLY STRING_SPLIT(t.csv, ',') s
+    ORDER BY t.id, s.value
+  `)).toEqual([
+    { id: 1, value: 'a' }, { id: 1, value: 'b' },
+    { id: 2, value: null }, { id: 3, value: 'c' }
+  ])
+  expect(all(db, `
+    SELECT t.id, latest.note
+    FROM tags t OUTER APPLY (
+      SELECT TOP (1) n.note FROM notes n
+      WHERE n.tag_id = t.id ORDER BY n.created DESC
+    ) latest
+    ORDER BY t.id
+  `)).toEqual([
+    { id: 1, note: 'new' }, { id: 2, note: null }, { id: 3, note: 'only' }
+  ])
+  expect(all(db, `
+    SELECT t.id, latest.note
+    FROM tags t CROSS APPLY (
+      SELECT TOP (1) n.note FROM notes n
+      WHERE n.tag_id = t.id ORDER BY n.created DESC
+    ) latest
+    ORDER BY t.id
+  `)).toEqual([
+    { id: 1, note: 'new' }, { id: 3, note: 'only' }
+  ])
+})
+
 test('window functions execute', () => {
   const db = database()
   run(db, `

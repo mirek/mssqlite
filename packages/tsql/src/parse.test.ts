@@ -495,6 +495,36 @@ test('table-valued functions parse as aliased table sources', () => {
   expect(() => parseStatement('SELECT * FROM OPENJSON(@j) WITH (id INT id)')).toThrow()
 })
 
+test('cross and outer apply preserve lateral join order', () => {
+  expect(parseStatement(`
+    SELECT t.id, s.value
+    FROM tags t
+    CROSS APPLY STRING_SPLIT(t.csv, ',', 1) s
+    OUTER APPLY (
+      SELECT TOP (1) note FROM notes n
+      WHERE n.tag_id = t.id ORDER BY n.created_at DESC
+    ) latest
+  `)).toMatchObject({
+    from: {
+      kind: 'join',
+      join: 'outerApply',
+      left: {
+        kind: 'join',
+        join: 'crossApply',
+        left: { kind: 'table', name: [ 'tags' ], alias: 't' },
+        right: { kind: 'function', name: [ 'STRING_SPLIT' ], alias: 's' }
+      },
+      right: {
+        kind: 'derived',
+        alias: 'latest',
+        select: { kind: 'select', top: {}, orderBy: [ {} ] }
+      }
+    }
+  })
+  expect(() => parseStatement('SELECT * FROM t CROSS APPLY')).toThrow()
+  expect(() => parseStatement('SELECT * FROM t OUTER APPLY f(1) ON 1 = 1')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',

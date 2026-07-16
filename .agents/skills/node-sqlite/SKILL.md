@@ -68,3 +68,6 @@ The bundled build includes JSON1's `json_each` but not the optional
 STRING_SPLIT's JSON rowset and GENERATE_SERIES step validation; the
 transpiler supplies result-column hints where `StatementSync.columns()`
 cannot recover a derived TVF column's declared type.
+Although SQLite has no LATERAL syntax, JSON1 virtual-table calls prepared by
+node:sqlite may reference columns from earlier FROM sources; this is the
+correlated STRING_SPLIT APPLY path.

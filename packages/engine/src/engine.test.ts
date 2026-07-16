@@ -300,6 +300,29 @@ test('table-valued functions return rows and metadata through the engine', () =>
   expect(rowsOf(executeBatch(s, 'SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
 })
 
+test('apply preserves correlated row elimination and null extension', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE apply_tags (id INT, csv NVARCHAR(20));
+    INSERT INTO apply_tags VALUES (1, 'a,b'), (2, NULL), (3, 'c');
+    CREATE TABLE apply_notes (tag_id INT, note NVARCHAR(20), created INT);
+    INSERT INTO apply_notes VALUES (1, 'old', 1), (1, 'new', 2), (3, 'only', 1);
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT t.id, part.value
+    FROM apply_tags t CROSS APPLY STRING_SPLIT(t.csv, ',') part
+    ORDER BY t.id, part.value
+  `)).rows).toEqual([ [ 1, 'a' ], [ 1, 'b' ], [ 3, 'c' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT t.id, latest.note
+    FROM apply_tags t OUTER APPLY (
+      SELECT TOP (1) n.note FROM apply_notes n
+      WHERE n.tag_id = t.id ORDER BY n.created DESC
+    ) latest
+    ORDER BY t.id
+  `)).rows).toEqual([ [ 1, 'new' ], [ 2, null ], [ 3, 'only' ] ])
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))

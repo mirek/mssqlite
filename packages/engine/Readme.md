@@ -49,6 +49,9 @@ const items = executeBatch(s, `
   `OPENJSON` (default and explicit WITH schemas), and `GENERATE_SERIES`.
   Small scalar adapters validate splitting/series arguments; SQLite
   `json_each` and a streaming recursive CTE produce the rows.
+- **CROSS / OUTER APPLY** — supported for correlated two-argument
+  STRING_SPLIT and simple correlated TOP (1) derived queries. CROSS removes
+  empty right sides; OUTER retains the left row with NULL right columns.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the

@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [CROSS and OUTER APPLY](todo/cross-outer-apply.md) — Translate common lateral TVF and correlated subquery patterns.
 - [PIVOT and UNPIVOT](todo/pivot-unpivot.md) — Rewrite pivot operations to conditional aggregation and `UNION ALL`.
 - [Grouping sets](todo/grouping-sets.md) — Expand `ROLLUP`, `CUBE`, and `GROUPING SETS` with `GROUPING()` support.
 - [FOR JSON](todo/for-json.md) — Render `FOR JSON PATH` and `AUTO` with SQLite JSON functions.

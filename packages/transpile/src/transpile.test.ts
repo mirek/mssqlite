@@ -79,6 +79,29 @@ test('table-valued functions render with declared result metadata', () => {
   expect(() => sqlOf('SELECT * FROM unknown_tvf(1)')).toThrow(UnsupportedError)
 })
 
+test('apply maps supported correlated string split sources to lateral virtual tables', () => {
+  expect(sqlOf(`
+    SELECT t.id, s.value FROM tags t
+    CROSS APPLY STRING_SPLIT(t.csv, ',') s
+  `)).toContain('"tags" AS "t" CROSS JOIN json_each(mssqlite_string_split("t"."csv", \',\')) AS "s"')
+  expect(sqlOf(`
+    SELECT t.id, s.value FROM tags t
+    OUTER APPLY STRING_SPLIT(t.csv, ',') s
+  `)).toContain('LEFT JOIN json_each(mssqlite_string_split("t"."csv", \',\')) AS "s" ON TRUE')
+  expect(() => sqlOf(`
+    SELECT * FROM tags t CROSS APPLY GENERATE_SERIES(1, t.id) s
+  `)).toThrow(UnsupportedError)
+  const topOne = sqlOf(`
+    SELECT t.id, latest.note FROM tags t OUTER APPLY (
+      SELECT TOP (1) n.note FROM notes n
+      WHERE n.tag_id = t.id ORDER BY n.created DESC
+    ) latest
+  `)
+  expect(topOne).toContain('row_number() OVER (PARTITION BY "n"."tag_id" ORDER BY "n"."created" DESC)')
+  expect(topOne).toContain('LEFT JOIN')
+  expect(topOne).toContain('"latest"."__mssqlite_apply_rank" = 1')
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')
