@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
 import { nextSequenceValue } from './sequence.ts'
+import { MssqlError } from './error.ts'
 import type { Server } from './session.ts'
 
 type Argument =
@@ -80,6 +81,49 @@ const serverProperties =
     isxtpsupported: 0
   })
 
+const integerBounds: Record<string, readonly [ bigint, bigint ]> = {
+  tinyint: [ 0n, 255n ],
+  smallint: [ -32768n, 32767n ],
+  int: [ -2147483648n, 2147483647n ],
+  integer: [ -2147483648n, 2147483647n ],
+  bigint: [ -9223372036854775808n, 9223372036854775807n ]
+}
+
+const castInteger =
+  (value: Argument, type: Argument, try_: Argument): Argument => {
+    if (value === null) {
+      return null
+    }
+    try {
+      let integer: bigint
+      if (typeof value === 'bigint') {
+        integer = value
+      } else if (typeof value === 'number' && Number.isFinite(value)) {
+        integer = BigInt(Math.trunc(value))
+      } else if (typeof value === 'string' && /^[+-]?\d+$/.test(value.trim())) {
+        integer = BigInt(value.trim())
+      } else {
+        throw new MssqlError(
+          `Conversion failed when converting the value '${String(value)}' to data type ${text(type)}.`,
+          245, 16, 1, { statementTerminating: true })
+      }
+      const [ minimum, maximum ] = integerBounds[text(type).toLowerCase()] ?? integerBounds['bigint'] as
+        readonly [ bigint, bigint ]
+      if (integer < minimum || integer > maximum) {
+        throw new MssqlError('Arithmetic overflow error converting expression to data type int.',
+          8115, 16, 1, { statementTerminating: true })
+      }
+      return integer >= Number.MIN_SAFE_INTEGER && integer <= Number.MAX_SAFE_INTEGER ?
+        Number(integer) :
+        integer
+    } catch (error) {
+      if (Number(try_) !== 0) {
+        return null
+      }
+      throw error
+    }
+  }
+
 /**
  * Registers all `mssqlite_*` SQL functions the transpiler emits. Session
  * scoped functions read `server.current`, set by the engine per batch.
@@ -107,6 +151,7 @@ export const registerFunctions =
       }
       return (a as number) + (b as number)
     })
+    define('mssqlite_cast_integer', castInteger)
     define('mssqlite_string_split', (value, separator) => {
       if (value === null || separator === null || value === '') {
         return '[]'

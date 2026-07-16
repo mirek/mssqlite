@@ -151,6 +151,18 @@ the engine:
   `session.caughtError` slot that `ERROR_NUMBER()`-family UDFs read;
   bare `THROW` rethrows it. RAISERROR severity ≤ 10 becomes a `message`
   item, higher throws.
+- **Batch errors preserve statement boundaries** — parse/name-resolution and
+  explicit THROW failures abort, while mapped constraint errors (515/547/2601/
+  2627), conversion/arithmetic classes, RAISERROR below severity 20, and
+  cursor/sequence runtime errors become ordered engine `error` items and the
+  next statement executes. A `BatchError` still rejects the public call after
+  execution but retains all prior rows/counts/errors for the TDS layer. Each
+  successful statement resets `@@ERROR`; a failure sets it and zeroes
+  `@@ROWCOUNT` before continuation. Qualifying errors under XACT_ABORT ON roll
+  back the user transaction and abort; RAISERROR explicitly ignores XACT_ABORT.
+  Integer CAST/CONVERT routes through a strict UDF so invalid text raises 245,
+  overflow raises 8115, and TRY_CAST/TRY_CONVERT returns NULL instead of relying
+  on SQLite's permissive conversion-to-zero behavior.
 - **Stored procedures are interpreted AST** — `CREATE PROCEDURE` stores
   the parsed body in a server-wide registry (`server.procedures`, keyed
   `schema.name` lowercased) and persists the batch source in
@@ -224,10 +236,10 @@ toward broader SQL Server compatibility.
   reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite
   transaction and therefore roll back with it.
-- Batch error semantics are all-or-nothing: any statement error aborts
-  the rest of the batch (MSSQL continues past most statement-level
-  errors); TRY/CATCH is the supported way to continue. Division by zero
-  yields NULL (SQLite) instead of error 8134.
+- Error classification currently covers mapped constraints, known conversion/
+  arithmetic numbers, RAISERROR, cursor and sequence ranges; additional SQL
+  Server statement-vs-batch cases will be added as their operations land.
+  Division by zero still yields NULL (SQLite) instead of error 8134.
 - Duplicate column names in one result set collapse (rows read as
   objects; `returnArrays` lands in newer node:sqlite).
 - `USE db` switches the session label only — one database per server.

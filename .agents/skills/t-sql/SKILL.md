@@ -60,6 +60,16 @@ The language pipeline lives in three packages:
   `statementRef` and never confuse the terminator scan.
 - RAISERROR takes a parenthesized argument list plus optional
   `WITH option[, …]` (options parsed, lowercased, NOWAIT/LOG ignored).
+- Batch execution classifies failures after each top-level statement.
+  Constraint violations (515/547/2601/2627), conversion/arithmetic classes,
+  RAISERROR severity 11-19, and cursor/sequence runtime errors emit an ERROR
+  and continue; syntax/compile failures, explicit THROW, unsupported operations,
+  and severity 20+ abort. `@@ERROR` exposes the immediately prior failure and
+  `@@ROWCOUNT` is 0 after it. XACT_ABORT ON rolls back and aborts for qualifying
+  runtime errors, but—as on SQL Server—does not change RAISERROR behavior.
+  TRY/CATCH intercepts errors before this outer classification.
+  Integer CAST/CONVERT validates text and type bounds (245/8115); TRY variants
+  convert either failure to NULL.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

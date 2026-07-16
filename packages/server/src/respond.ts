@@ -44,6 +44,17 @@ export const itemTokens =
             chunks.push(doneToken(Token.Status.final, 0, 0n))
           }
           break
+        case 'error':
+          chunks.push(Token.error({
+            number: item.error.number,
+            state: item.error.state,
+            class: item.error.severity,
+            message: item.error.message,
+            serverName,
+            lineNumber: 1
+          }))
+          chunks.push(doneToken(more | Token.Status.error, 0, 0n))
+          break
         default:
           break
       }

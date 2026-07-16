@@ -66,3 +66,8 @@ const connection = new Connection({
 
 Each connection gets its own engine session (variables, transactions,
 `@@`-state); all sessions share the server's SQLite database.
+
+Mixed-success batches retain SQL Server token order: each recoverable engine
+error becomes ERROR + DONE_ERROR/DONE_MORE, followed by later result metadata,
+rows and DONE tokens. A terminal `BatchError` carries already-produced items so
+the server never discards results that preceded the failure.

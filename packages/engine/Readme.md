@@ -28,7 +28,9 @@ const items = executeBatch(s, `
 - `session(server)` — per-connection state: declared variables, SET
   options, `@@ROWCOUNT` / `@@IDENTITY` / `@@TRANCOUNT` / `@@ERROR`, spid.
 - `executeBatch(session, sql)` — items: `rows` (with TDS column metadata),
-  `count`, `message`. Throws `MssqlError` with MSSQL error number, severity
+  `count`, `message`, and ordered recoverable `error` entries. Throws
+  `BatchError` after a mixed-error batch (retaining all produced items) or
+  `MssqlError` for compile/batch-aborting failures, with MSSQL number, severity
   and state (208 invalid object, 2627 unique violation, 547 FK/CHECK,
   515 not null, 102 syntax, 137 undeclared variable, …).
 - `executeSql(session, sql, parameters)` — `sp_executesql` semantics:
@@ -69,6 +71,14 @@ const items = executeBatch(s, `
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
   outermost pair touches SQLite. ROLLBACK unwinds everything; SAVE TRAN
   maps to savepoints; `ROLLBACK TRAN name` targets a savepoint first.
+- **Statement errors** — mapped constraint/conversion/arithmetic failures,
+  RAISERROR below severity 20, and cursor/sequence runtime errors continue at
+  the next statement while preserving ordered rows/counts/errors. Syntax,
+  compile/name-resolution, THROW, severity 20+, and unsupported errors abort.
+  XACT_ABORT ON rolls back and aborts qualifying runtime errors; RAISERROR
+  ignores it. TRY/CATCH remains the inner interception boundary.
+  Integer CAST/CONVERT is strict (245 conversion, 8115 overflow), with TRY
+  variants returning NULL.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
 - **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.

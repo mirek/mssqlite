@@ -34,6 +34,10 @@ const cast =
           `strftime('${format}', ${inner})`
       }
     }
+    if (Type.category(expression_.type) === 'integer') {
+      return `mssqlite_cast_integer(${inner}, ${Quote.string(expression_.type.name)}, ` +
+        `${expression_.try_ ? 1 : 0})`
+    }
     switch (Type.category(expression_.type)) {
       case 'date':
         return `date(${inner})`

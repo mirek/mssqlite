@@ -61,6 +61,9 @@ connection.execSql(request)
   output and other INFO tokens land there. `errorMessage` likewise.
 - The request callback's error is an MSSQL-shaped error with `.number`
   (e.g. 208 invalid object, 2627 unique violation) — assert on it.
+- Multiple ERROR tokens produce an `AggregateError` whose `.errors` retain
+  token order; the Connection's `errorMessage` events interleave with Request
+  `row` events, so test mixed failing/successful batches through both streams.
 - `done` / `doneInProc` / `doneProc` events mirror the DONE token family;
   rowCount in the callback comes from the final DONE with DONE_COUNT.
 

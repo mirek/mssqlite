@@ -1,6 +1,6 @@
 export * as DateFunctions from './date-functions.ts'
 export * as Metadata from './metadata.ts'
-export { MssqlError, of as errorOf } from './error.ts'
+export { BatchError, MssqlError, of as errorOf } from './error.ts'
 export { bindings, globalOf } from './bind.ts'
 export {
   evaluate,
