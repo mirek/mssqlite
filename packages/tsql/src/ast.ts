@@ -169,6 +169,14 @@ export type GroupByItem =
   | GroupingSetItem
   | { readonly kind: 'sets', readonly sets: readonly GroupingSetItem[] }
 
+/** FOR JSON output mode and options. */
+export type ForJson = {
+  readonly mode: 'path' | 'auto',
+  readonly root?: string,
+  readonly includeNullValues: boolean,
+  readonly withoutArrayWrapper: boolean
+}
+
 /** Common table expression. */
 export type Cte = {
   readonly name: string,
@@ -191,6 +199,7 @@ export type Select = {
   readonly orderBy?: readonly OrderBy[],
   readonly offset?: Expression,
   readonly fetch?: Expression,
+  readonly forJson?: ForJson,
   readonly union?: {
     readonly kind: 'union' | 'unionAll' | 'except' | 'intersect',
     readonly select: Select

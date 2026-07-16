@@ -64,6 +64,13 @@ const { sql, variables } = statement(parseStatement(
   volatile derived expressions are not reevaluated per branch. Join sources
   currently repeat per branch, and DISTINCT/TOP/INTO/set-operation and
   OFFSET/FETCH combinations fail cleanly.
+- **FOR JSON** — PATH aliases form nested JSON objects; AUTO keeps dotted
+  aliases literal for one source and derives a root plus one joined child
+  array from table aliases. SQLite `json_object`/`json_patch` and
+  `json_group_array` implement escaping, NULL omission/inclusion, ROOT,
+  empty arrays, and wrapper removal. JSON_QUERY and nested FOR JSON values
+  are tagged with `json()` to avoid double encoding. AUTO joins beyond one
+  root/child level are explicitly deferred.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

@@ -153,6 +153,25 @@ test('advanced grouping expands ordered branches and validates grouping argument
   `)).toThrow(UnsupportedError)
 })
 
+test('for json renders one nvarchar max result and validates projected names', () => {
+  const rendered = statement(parseStatement(`
+    SELECT id, name AS [info.name] FROM users ORDER BY id
+    FOR JSON PATH, ROOT('users')
+  `))
+  expect(rendered.sql).toContain('json_group_array')
+  expect(rendered.sql).toContain('json_object(\'info\'')
+  expect(rendered.sql).toContain('AS "JSON_F52E2B61-18A1-11d1-B105-00805F49916B"')
+  expect(rendered.columns).toEqual([ {
+    name: 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B',
+    type: { name: 'nvarchar', args: [ 'max' ] },
+    nullable: false
+  } ])
+  expect(() => sqlOf('SELECT 1 FOR JSON PATH')).toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT 1 AS a, 2 AS a FOR JSON PATH')).toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT 1 AS a, 2 AS [a.b] FOR JSON PATH')).toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT 1 AS a FOR JSON AUTO')).toThrow(UnsupportedError)
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')

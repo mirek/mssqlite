@@ -329,6 +329,88 @@ test('advanced grouping materializes a simple volatile source once', () => {
   expect(calls).toBe(3)
 })
 
+test('for json path nests aliases, omits nulls and preserves JSON fragments', () => {
+  const db = database()
+  const jsonColumn = 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B'
+  run(db, `
+    CREATE TABLE json_people (id INT, name NVARCHAR(20), nick NVARCHAR(20), note NVARCHAR(40));
+    INSERT INTO json_people VALUES
+      (1, 'Ada', NULL, 'quote " slash \\'), (2, 'Bob', 'b', NULL);
+  `)
+  const path = all(db, `
+    SELECT id, name AS [info.name], nick AS [info.nick], note
+    FROM json_people ORDER BY id FOR JSON PATH
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(path[0]?.[jsonColumn]))).toEqual([
+    { id: 1, info: { name: 'Ada' }, note: 'quote " slash \\' },
+    { id: 2, info: { name: 'Bob', nick: 'b' } }
+  ])
+
+  const included = all(db, `
+    SELECT id, name AS [info.name], nick AS [info.nick], note
+    FROM json_people WHERE id = 1
+    FOR JSON PATH, INCLUDE_NULL_VALUES, ROOT('people')
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(included[0]?.[jsonColumn]))).toEqual({
+    people: [ { id: 1, info: { name: 'Ada', nick: null }, note: 'quote " slash \\' } ]
+  })
+
+  const unwrapped = all(db, `
+    SELECT id, JSON_QUERY('{"nested":[1,2]}') AS payload,
+      '{"escaped":true}' AS text
+    FROM json_people WHERE id = 1 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(unwrapped[0]?.[jsonColumn]))).toEqual({
+    id: 1,
+    payload: { nested: [ 1, 2 ] },
+    text: '{"escaped":true}'
+  })
+
+  const empty = all(db, 'SELECT id FROM json_people WHERE id < 0 FOR JSON PATH') as
+    Record<string, unknown>[]
+  expect(empty[0]?.[jsonColumn]).toBe('[]')
+
+})
+
+test('for json auto keeps dotted keys and nests one joined child alias', () => {
+  const db = database()
+  const jsonColumn = 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B'
+  run(db, `
+    CREATE TABLE json_parents (id INT, name NVARCHAR(20));
+    CREATE TABLE json_children (parent_id INT, value NVARCHAR(20));
+    INSERT INTO json_parents VALUES (1, 'one'), (2, 'two');
+    INSERT INTO json_children VALUES (1, 'a'), (1, 'b');
+  `)
+  const single = all(db, `
+    SELECT p.id, p.name AS [info.name]
+    FROM json_parents p ORDER BY p.id FOR JSON AUTO
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(single[0]?.[jsonColumn]))).toEqual([
+    { id: 1, 'info.name': 'one' }, { id: 2, 'info.name': 'two' }
+  ])
+
+  const joined = all(db, `
+    SELECT p.id, p.name, c.value
+    FROM json_parents p LEFT JOIN json_children c ON c.parent_id = p.id
+    ORDER BY p.id, c.value FOR JSON AUTO
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(joined[0]?.[jsonColumn]))).toEqual([
+    { id: 1, name: 'one', c: [ { value: 'a' }, { value: 'b' } ] },
+    { id: 2, name: 'two' }
+  ])
+
+  const nested = all(db, `
+    SELECT p.id,
+      (SELECT c.value FROM json_children c WHERE c.parent_id = p.id
+       ORDER BY c.value FOR JSON PATH) AS children
+    FROM json_parents p ORDER BY p.id FOR JSON PATH
+  `) as Record<string, unknown>[]
+  expect(JSON.parse(String(nested[0]?.[jsonColumn]))).toEqual([
+    { id: 1, children: [ { value: 'a' }, { value: 'b' } ] },
+    { id: 2, children: [] }
+  ])
+})
+
 test('window functions execute', () => {
   const db = database()
   run(db, `

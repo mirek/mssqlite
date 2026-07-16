@@ -154,7 +154,7 @@ const reserved = new Set([
   'values', 'set', 'declare', 'if', 'while', 'begin', 'commit', 'rollback', 'return',
   'exec', 'execute', 'use', 'print', 'truncate', 'top', 'distinct', 'option', 'by',
   'asc', 'desc', 'offset', 'fetch', 'pivot', 'unpivot', 'break', 'continue', 'throw',
-  'goto', 'waitfor', 'merge', 'using', 'output', 'default', 'primary', 'foreign', 'references',
+  'goto', 'waitfor', 'merge', 'using', 'output', 'for', 'default', 'primary', 'foreign', 'references',
   'constraint', 'check', 'unique', 'identity'
 ])
 

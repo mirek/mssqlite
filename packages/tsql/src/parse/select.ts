@@ -236,6 +236,61 @@ const groupByItem: Parser.t<Ast.GroupByItem> =
     }
   }
 
+type ForJsonOption =
+  | { readonly kind: 'root', readonly name: string }
+  | { readonly kind: 'includeNullValues' }
+  | { readonly kind: 'withoutArrayWrapper' }
+
+const rootOption: Parser.t<ForJsonOption> =
+  reader => {
+    const root = C.keyword('root')(reader)
+    if (Result.failed(root)) {
+      return root
+    }
+    const name = C.maybe(C.parens(expression))(root.reader)
+    if (Result.failed(name)) {
+      return name
+    }
+    if (name.value !== undefined && name.value.kind !== 'string') {
+      return Result.fail(root.reader, 'FOR JSON ROOT expects a string literal.')
+    }
+    return Result.ok(name.reader, {
+      kind: 'root',
+      name: name.value?.kind === 'string' ? name.value.value : 'root'
+    })
+  }
+
+const forJsonOption: Parser.t<ForJsonOption> =
+  C.first(
+    rootOption,
+    C.map(C.keyword('include_null_values'), () => ({ kind: 'includeNullValues' as const })),
+    C.map(C.keyword('without_array_wrapper'), () => ({ kind: 'withoutArrayWrapper' as const }))
+  )
+
+const forJson: Parser.t<Ast.ForJson> =
+  reader => {
+    const parsed = C.seq(
+      C.keywords('for', 'json'),
+      C.first(C.keyword('path'), C.keyword('auto')),
+      C.many0(C.map(C.seq(C.punct(','), forJsonOption), ([ , option ]) => option))
+    )(reader)
+    if (Result.failed(parsed)) {
+      return parsed
+    }
+    const [ , mode, options ] = parsed.value
+    if (new Set(options.map(option => option.kind)).size !== options.length) {
+      return Result.fail(reader, 'FOR JSON options cannot be repeated.')
+    }
+    const root = options.find((option): option is ForJsonOption & { kind: 'root' } =>
+      option.kind === 'root')
+    return Result.ok(parsed.reader, {
+      mode: mode as 'path' | 'auto',
+      ...root === undefined ? {} : { root: root.name },
+      includeNullValues: options.some(option => option.kind === 'includeNullValues'),
+      withoutArrayWrapper: options.some(option => option.kind === 'withoutArrayWrapper')
+    })
+  }
+
 const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply'> =
   C.first(
     C.map(C.seq(C.keyword('cross'), C.keyword('apply')), () => 'crossApply' as const),
@@ -486,6 +541,11 @@ export const select: Parser.t<Ast.Select> =
         offsetFetch = { offset: offsetFetch.offset, fetch: fetch.value[2] }
       }
     }
+    const json = C.maybe(forJson)(current)
+    if (Result.failed(json)) {
+      return json
+    }
+    current = json.reader
     const withCtes = ctes.value === undefined ? core : { ...core, ctes: ctes.value }
     return Result.ok(current, {
       ...withCtes,
@@ -493,7 +553,8 @@ export const select: Parser.t<Ast.Select> =
       ...offsetFetch === undefined ? {} : {
         offset: offsetFetch.offset,
         ...offsetFetch.fetch === undefined ? {} : { fetch: offsetFetch.fetch }
-      }
+      },
+      ...json.value === undefined ? {} : { forJson: json.value }
     })
   }
 

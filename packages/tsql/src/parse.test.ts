@@ -596,6 +596,31 @@ test('rollup cube and grouping sets preserve grouping units', () => {
     'SELECT a FROM t GROUP BY GROUPING SETS (GROUPING SETS ((a)))')).toThrow()
 })
 
+test('for json modes and options parse at the select tail', () => {
+  expect(parseStatement(`
+    SELECT id, name AS [info.name] FROM users ORDER BY id
+    FOR JSON PATH, ROOT('users'), INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER
+  `)).toMatchObject({
+    forJson: {
+      mode: 'path',
+      root: 'users',
+      includeNullValues: true,
+      withoutArrayWrapper: true
+    }
+  })
+  expect(parseStatement('SELECT t.id FROM t FOR JSON AUTO')).toMatchObject({
+    forJson: {
+      mode: 'auto',
+      includeNullValues: false,
+      withoutArrayWrapper: false
+    }
+  })
+  expect(() => parseStatement('SELECT 1 FOR JSON XML')).toThrow()
+  expect(() => parseStatement('SELECT 1 FOR JSON PATH, ROOT(1)')).toThrow()
+  expect(() => parseStatement(
+    'SELECT 1 FOR JSON PATH, INCLUDE_NULL_VALUES, INCLUDE_NULL_VALUES')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',

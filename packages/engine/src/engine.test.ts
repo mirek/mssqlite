@@ -415,6 +415,29 @@ test('grouping sets preserve subtotal indicators and metadata', () => {
   ])
 })
 
+test('for json returns one nvarchar max value with nested path objects', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE engine_json_people (id INT, name NVARCHAR(20), nick NVARCHAR(20));
+    INSERT INTO engine_json_people VALUES (1, 'Ada', NULL), (2, 'Bob', 'b');
+  `)
+  const result = rowsOf(executeBatch(s, `
+    SELECT id, name AS [info.name], nick AS [info.nick]
+    FROM engine_json_people ORDER BY id FOR JSON PATH, ROOT('people')
+  `))
+  expect(result.columns).toMatchObject([ {
+    name: 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B',
+    typeInfo: { type: DataType.DataType.nvarchar, maxLength: 65535 },
+    nullable: false
+  } ])
+  expect(JSON.parse(String(result.rows[0]?.[0]))).toEqual({
+    people: [
+      { id: 1, info: { name: 'Ada' } },
+      { id: 2, info: { name: 'Bob', nick: 'b' } }
+    ]
+  })
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))

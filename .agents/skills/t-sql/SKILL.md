@@ -127,10 +127,15 @@ The language pipeline lives in three packages:
   combine by Cartesian product; explicit duplicate sets are not deduplicated.
   GROUPING(expr) is valid for a grouped expression and returns tinyint 0 for
   an active key or 1 for a subtotal placeholder.
+- FOR JSON PATH/AUTO is a SELECT-tail AST option. ROOT accepts an optional
+  string (default `root`); INCLUDE_NULL_VALUES and WITHOUT_ARRAY_WRAPPER are
+  flags and duplicate options are rejected. PATH dotted aliases create
+  nested properties. AUTO requires FROM; current execution supports one
+  source or a root plus one joined child alias. FOR XML remains deferred.
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
-FOR JSON/XML, COLLATE as expression operator,
+FOR XML, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

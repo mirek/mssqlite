@@ -89,6 +89,13 @@ the engine:
   Simple sources are captured in one MATERIALIZED CTE (also stabilizing
   volatile derived expressions); joins currently repeat their source per
   branch because one CTE alias cannot preserve every original qualifier.
+- **FOR JSON is an outer aggregation rewrite** — a synthetic inner SELECT
+  evaluates and orders projected expressions once; PATH builds alias trees
+  with JSON objects/patches, while AUTO classifies selected columns by source
+  alias and groups one child array beneath each root row. JSON_QUERY and
+  nested FOR JSON expressions are explicitly re-tagged as SQLite JSON after
+  crossing the inner-query boundary. The output always has SQL Server's
+  magic column name and nvarchar(max) hint.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
