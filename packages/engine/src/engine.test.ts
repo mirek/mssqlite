@@ -382,6 +382,39 @@ test('pivot and unpivot expose generated values and metadata', () => {
   `)).toThrowError(expect.objectContaining({ number: 40000 }) as Error)
 })
 
+test('grouping sets preserve subtotal indicators and metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE grouping_sales (region NVARCHAR(10), product NVARCHAR(10), amount INT);
+    INSERT INTO grouping_sales VALUES
+      ('east', 'a', 10), ('east', 'b', 20), ('west', 'a', 5), (NULL, 'a', 7);
+  `)
+  const result = rowsOf(executeBatch(s, `
+    SELECT region, product, SUM(amount) AS total,
+      GROUPING(region) AS gr, GROUPING(product) AS gp
+    FROM grouping_sales
+    GROUP BY ROLLUP(region, product)
+    ORDER BY gr, gp, region, product
+  `))
+  expect(result.rows).toEqual([
+    [ null, 'a', 7, 0, 0 ],
+    [ 'east', 'a', 10, 0, 0 ], [ 'east', 'b', 20, 0, 0 ],
+    [ 'west', 'a', 5, 0, 0 ],
+    [ null, null, 7, 0, 1 ],
+    [ 'east', null, 30, 0, 1 ], [ 'west', null, 5, 0, 1 ],
+    [ null, null, 42, 1, 1 ]
+  ])
+  expect(result.columns.map(column => [
+    column.name, column.typeInfo.type, column.typeInfo.maxLength
+  ])).toEqual([
+    [ 'region', DataType.DataType.nvarchar, 20 ],
+    [ 'product', DataType.DataType.nvarchar, 20 ],
+    [ 'total', DataType.DataType.intN, 4 ],
+    [ 'gr', DataType.DataType.intN, 1 ],
+    [ 'gp', DataType.DataType.intN, 1 ]
+  ])
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))

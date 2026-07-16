@@ -155,6 +155,20 @@ export type TableSource =
       readonly on?: Expression
     }
 
+/** One grouping unit; multiple expressions in a unit roll up together. */
+export type GroupingUnit = readonly Expression[]
+
+/** ROLLUP/CUBE or an explicit expression tuple inside GROUPING SETS. */
+export type GroupingSetItem =
+  | { readonly kind: 'expressions', readonly expressions: readonly Expression[] }
+  | { readonly kind: 'rollup', readonly units: readonly GroupingUnit[] }
+  | { readonly kind: 'cube', readonly units: readonly GroupingUnit[] }
+
+/** One comma-separated top-level GROUP BY item. */
+export type GroupByItem =
+  | GroupingSetItem
+  | { readonly kind: 'sets', readonly sets: readonly GroupingSetItem[] }
+
 /** Common table expression. */
 export type Cte = {
   readonly name: string,
@@ -172,7 +186,7 @@ export type Select = {
   readonly into?: QualifiedName,
   readonly from?: TableSource,
   readonly where?: Expression,
-  readonly groupBy?: readonly Expression[],
+  readonly groupBy?: readonly GroupByItem[],
   readonly having?: Expression,
   readonly orderBy?: readonly OrderBy[],
   readonly offset?: Expression,

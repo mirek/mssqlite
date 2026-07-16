@@ -90,6 +90,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   SQLite's dynamic affinity can carry mixed numeric values in direct
   rendering, but engine execution rejects differing known declared types to
   retain SQL Server's stable result metadata.
+- SQLite has no ROLLUP, CUBE, GROUPING SETS, or GROUPING function. mssqlite
+  expands them into one ordinary GROUP BY query per grouping set joined by
+  UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch
+  constants. A MATERIALIZED CTE evaluates simple sources once; duplicate
+  explicit sets remain separate branches as SQL Server requires.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

@@ -313,6 +313,38 @@ test('pivot and unpivot values and metadata over the wire', async () => {
   ])
 })
 
+test('grouping sets values and metadata over the wire', async () => {
+  await query(`
+    CREATE TABLE wire_grouping (region NVARCHAR(10), product NVARCHAR(10), amount INT);
+    INSERT INTO wire_grouping VALUES
+      ('east', 'a', 10), ('east', 'b', 20), ('west', 'a', 5), (NULL, 'a', 7);
+  `)
+  const result = await query(`
+    SELECT region, product, SUM(amount) AS total,
+      GROUPING(region) AS gr, GROUPING(product) AS gp
+    FROM wire_grouping
+    GROUP BY ROLLUP(region, product)
+    ORDER BY gr, gp, region, product
+  `)
+  expect(result.rows).toEqual([
+    { region: null, product: 'a', total: 7, gr: 0, gp: 0 },
+    { region: 'east', product: 'a', total: 10, gr: 0, gp: 0 },
+    { region: 'east', product: 'b', total: 20, gr: 0, gp: 0 },
+    { region: 'west', product: 'a', total: 5, gr: 0, gp: 0 },
+    { region: null, product: null, total: 7, gr: 0, gp: 1 },
+    { region: 'east', product: null, total: 30, gr: 0, gp: 1 },
+    { region: 'west', product: null, total: 5, gr: 0, gp: 1 },
+    { region: null, product: null, total: 42, gr: 1, gp: 1 }
+  ])
+  expect(result.columns).toEqual([
+    { name: 'region', type: 'NVarChar', length: 20 },
+    { name: 'product', type: 'NVarChar', length: 20 },
+    { name: 'total', type: 'IntN', length: 4 },
+    { name: 'gr', type: 'IntN', length: 1 },
+    { name: 'gp', type: 'IntN', length: 1 }
+  ])
+})
+
 test('update and delete counts', async () => {
   const update = await query('UPDATE users SET age = 31 WHERE name = N\'Alice\'')
   expect(update.rowCount).toBe(1)

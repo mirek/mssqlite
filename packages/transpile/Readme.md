@@ -57,6 +57,13 @@ const { sql, variables } = statement(parseStatement(
   Duplicate output names and incompatible declared UNPIVOT types fail
   cleanly; generated SELECT metadata preserves aggregate/value types even
   for empty or all-NULL outputs.
+- **Advanced grouping** — ROLLUP, CUBE, explicit/empty GROUPING SETS, and
+  GROUPING() expand to ordered `UNION ALL` aggregate branches. Omitted group
+  expressions become subtotal NULL placeholders while GROUPING returns 0/1.
+  Duplicate sets remain duplicate; a simple source is materialized once so
+  volatile derived expressions are not reevaluated per branch. Join sources
+  currently repeat per branch, and DISTINCT/TOP/INTO/set-operation and
+  OFFSET/FETCH combinations fail cleanly.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

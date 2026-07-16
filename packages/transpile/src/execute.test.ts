@@ -241,6 +241,94 @@ test('unpivot omits nulls and preserves compatible mixed numeric affinities', ()
   ])
 })
 
+test('rollup distinguishes ordinary nulls from subtotal nulls', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE grouped_sales (region NVARCHAR(10), product NVARCHAR(10), amount INT);
+    INSERT INTO grouped_sales VALUES
+      ('east', 'a', 10), ('east', 'b', 20), ('west', 'a', 5), (NULL, 'a', 7);
+  `)
+  expect(all(db, `
+    SELECT region, product, SUM(amount) AS total,
+      GROUPING(region) AS gr, GROUPING(product) AS gp
+    FROM grouped_sales
+    GROUP BY ROLLUP(region, product)
+    ORDER BY gr, gp, region, product
+  `)).toEqual([
+    { region: null, product: 'a', total: 7, gr: 0, gp: 0 },
+    { region: 'east', product: 'a', total: 10, gr: 0, gp: 0 },
+    { region: 'east', product: 'b', total: 20, gr: 0, gp: 0 },
+    { region: 'west', product: 'a', total: 5, gr: 0, gp: 0 },
+    { region: null, product: null, total: 7, gr: 0, gp: 1 },
+    { region: 'east', product: null, total: 30, gr: 0, gp: 1 },
+    { region: 'west', product: null, total: 5, gr: 0, gp: 1 },
+    { region: null, product: null, total: 42, gr: 1, gp: 1 }
+  ])
+})
+
+test('cube and grouping sets preserve branch and duplicate-set order', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE dimensions (a NVARCHAR(2), b NVARCHAR(2), v INT);
+    INSERT INTO dimensions VALUES ('x', 'p', 1), ('x', 'q', 2), ('y', 'p', 4);
+  `)
+  expect(all(db, `
+    SELECT GROUPING(a) AS ga, GROUPING(b) AS gb, SUM(v) AS total
+    FROM dimensions GROUP BY CUBE(a, b)
+    ORDER BY ga, gb, total
+  `)).toEqual([
+    { ga: 0, gb: 0, total: 1 }, { ga: 0, gb: 0, total: 2 },
+    { ga: 0, gb: 0, total: 4 }, { ga: 0, gb: 1, total: 3 },
+    { ga: 0, gb: 1, total: 4 }, { ga: 1, gb: 0, total: 2 },
+    { ga: 1, gb: 0, total: 5 }, { ga: 1, gb: 1, total: 7 }
+  ])
+  expect(all(db, `
+    SELECT GROUPING(a) AS ga, SUM(v) AS total
+    FROM dimensions GROUP BY GROUPING SETS ((a), (), ())
+  `)).toEqual([
+    { ga: 0, total: 3 }, { ga: 0, total: 4 },
+    { ga: 1, total: 7 }, { ga: 1, total: 7 }
+  ])
+  expect(all(db, `
+    SELECT a, GROUPING(a) AS ga, SUM(v) AS total
+    FROM dimensions GROUP BY GROUPING SETS ((), (a))
+    ORDER BY ga DESC, a
+  `)).toEqual([
+    { a: null, ga: 1, total: 7 },
+    { a: 'x', ga: 0, total: 3 }, { a: 'y', ga: 0, total: 4 }
+  ])
+  expect(all(db, `
+    SELECT a, GROUPING(a) AS ga, SUM(v) AS total
+    FROM dimensions GROUP BY a HAVING GROUPING(a) = 0 ORDER BY a
+  `)).toEqual([
+    { a: 'x', ga: 0, total: 3 }, { a: 'y', ga: 0, total: 4 }
+  ])
+
+  run(db, 'CREATE TABLE empty_dimensions (a INT)')
+  expect(all(db, 'SELECT COUNT(*) AS n FROM empty_dimensions GROUP BY ()'))
+    .toEqual([ { n: 0 } ])
+})
+
+test('advanced grouping materializes a simple volatile source once', () => {
+  const db = database()
+  let calls = 0
+  db.function('mssqlite_tick', value => {
+    calls++
+    return value
+  })
+  run(db, 'CREATE TABLE ticks (id INT); INSERT INTO ticks VALUES (1), (2), (3)')
+  expect(all(db, `
+    SELECT k, COUNT(*) AS n, GROUPING(k) AS g
+    FROM (SELECT mssqlite_tick(id) AS k FROM ticks) source
+    GROUP BY ROLLUP(k)
+    ORDER BY g, k
+  `)).toEqual([
+    { k: 1, n: 1, g: 0 }, { k: 2, n: 1, g: 0 },
+    { k: 3, n: 1, g: 0 }, { k: null, n: 3, g: 1 }
+  ])
+  expect(calls).toBe(3)
+})
+
 test('window functions execute', () => {
   const db = database()
   run(db, `

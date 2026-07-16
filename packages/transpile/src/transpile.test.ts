@@ -128,6 +128,31 @@ test('pivot and unpivot render one source evaluation and reject ambiguous output
   `)).toThrow(UnsupportedError)
 })
 
+test('advanced grouping expands ordered branches and validates grouping arguments', () => {
+  const rollup = sqlOf(`
+    SELECT a, b, SUM(v) AS total, GROUPING(a) AS ga, GROUPING(b) AS gb
+    FROM t GROUP BY ROLLUP(a, b)
+  `)
+  expect(rollup).toContain('AS MATERIALIZED')
+  expect(rollup.match(/UNION ALL/g)).toHaveLength(2)
+  const detail = rollup.indexOf('GROUP BY "a", "b"')
+  expect(detail).toBeGreaterThan(0)
+  expect(rollup.indexOf('GROUP BY "a"', detail + 1)).toBeGreaterThan(detail)
+  expect(rollup).toContain('NULL AS "a", NULL AS "b"')
+
+  const combined = sqlOf(`
+    SELECT a, b, SUM(v) FROM t
+    GROUP BY a, GROUPING SETS ((b), ())
+  `)
+  expect(combined.match(/UNION ALL/g)).toHaveLength(1)
+  expect(() => sqlOf(`
+    SELECT GROUPING(c) FROM t GROUP BY ROLLUP(a, b)
+  `)).toThrow(UnsupportedError)
+  expect(() => sqlOf(`
+    SELECT a, SUM(v) FROM t GROUP BY CUBE(a, b) OFFSET 1 ROWS
+  `)).toThrow(UnsupportedError)
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')

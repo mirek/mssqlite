@@ -1,4 +1,5 @@
 import * as C from './combinators.ts'
+import * as Reader from './reader.ts'
 import * as Result from './result.ts'
 import typeName from './type-name.ts'
 import { expression, operand, orderByItem, useSelectParser } from './expression.ts'
@@ -180,6 +181,61 @@ const tableFactor: Parser.t<Ast.TableSource> =
     }
   }
 
+const emptyGroupingSet: Parser.t<Ast.GroupingSetItem> =
+  C.map(C.seq(C.punct('('), C.punct(')')), () => ({
+    kind: 'expressions' as const,
+    expressions: []
+  }))
+
+const groupingUnit: Parser.t<Ast.GroupingUnit> =
+  C.first(
+    C.parens(C.sepBy1(expression, C.punct(','))),
+    C.map(expression, value => [ value ])
+  )
+
+const rollup: Parser.t<Ast.GroupingSetItem> =
+  C.map(
+    C.seq(C.keyword('rollup'), C.parens(C.sepBy1(groupingUnit, C.punct(',')))),
+    ([ , units ]) => ({ kind: 'rollup' as const, units })
+  )
+
+const cube: Parser.t<Ast.GroupingSetItem> =
+  C.map(
+    C.seq(C.keyword('cube'), C.parens(C.sepBy1(groupingUnit, C.punct(',')))),
+    ([ , units ]) => ({ kind: 'cube' as const, units })
+  )
+
+const groupingExpressions: Parser.t<Ast.GroupingSetItem> =
+  C.map(groupingUnit, expressions => ({ kind: 'expressions' as const, expressions }))
+
+const groupingSetItem: Parser.t<Ast.GroupingSetItem> =
+  C.first(emptyGroupingSet, rollup, cube, groupingExpressions)
+
+const groupingSets: Parser.t<Ast.GroupByItem> =
+  C.map(
+    C.seq(
+      C.keywords('grouping', 'sets'),
+      C.parens(C.sepBy1(groupingSetItem, C.punct(',')))
+    ),
+    ([ , sets ]) => ({ kind: 'sets' as const, sets })
+  )
+
+const groupByItem: Parser.t<Ast.GroupByItem> =
+  reader => {
+    const token = Reader.peek(reader)
+    const keyword = token?.kind === 'word' ? token.value.toLowerCase() : undefined
+    switch (keyword) {
+      case 'grouping':
+        return groupingSets(reader)
+      case 'rollup':
+        return rollup(reader)
+      case 'cube':
+        return cube(reader)
+      default:
+        return C.first(emptyGroupingSet, groupingExpressions)(reader)
+    }
+  }
+
 const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply'> =
   C.first(
     C.map(C.seq(C.keyword('cross'), C.keyword('apply')), () => 'crossApply' as const),
@@ -330,7 +386,7 @@ const selectCore: Parser.t<Ast.Select> =
       return where
     }
     const groupBy = C.maybe(C.map(
-      C.seq(C.keywords('group', 'by'), C.sepBy1(expression, C.punct(','))),
+      C.seq(C.keywords('group', 'by'), C.sepBy1(groupByItem, C.punct(','))),
       ([ , values ]) => values
     ))(where.reader)
     if (Result.failed(groupBy)) {

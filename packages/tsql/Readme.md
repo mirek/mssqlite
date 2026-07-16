@@ -39,7 +39,8 @@ const statements = parse(`
   aliases (`AS x`, `x = expr`), variable assignment items (`@x = expr`),
   INTO, FROM with aliases and parsed-but-ignored table hints, INNER/LEFT/
   RIGHT/FULL/CROSS JOIN and comma cross joins, derived tables, WHERE,
-  GROUP BY, HAVING, ORDER BY ASC/DESC, OFFSET/FETCH, UNION [ALL], EXCEPT,
+  GROUP BY including `()`, ROLLUP, CUBE, and GROUPING SETS, HAVING,
+  ORDER BY ASC/DESC, OFFSET/FETCH, UNION [ALL], EXCEPT,
   INTERSECT, CTEs (`WITH a AS (...)`), and table-valued functions in FROM
   with aliases/positional column aliases and `OPENJSON ... WITH (...)`;
   CROSS/OUTER APPLY preserve lateral source order in the AST, and PIVOT /
