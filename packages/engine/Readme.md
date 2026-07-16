@@ -149,6 +149,12 @@ const items = executeBatch(s, `
   MERGE writes; explicit assignments are restricted to INSERT DEFAULT.
   `@@DBTS` reads the last value, rollback leaves gaps, and state is shared by
   tables, table variables, and sessions and survives restart.
+- **Opaque special types** — target-column DML packs sql_variant base metadata,
+  keeps untyped XML as Unicode text, and requires native serialized bytes for
+  hierarchyid/geometry/geography. Catalog-derived results use Variant, XML,
+  and UDT TDS metadata, so tedious receives primitive/XML/Buffer values without
+  a text/binary fallback. Tedious 18.x cannot generate these parameter types;
+  those client-side attempts fail with its explicit `not implemented` error.
 
 ## Column metadata
 

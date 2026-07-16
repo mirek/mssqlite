@@ -94,6 +94,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   DECIMAL/NUMERIC: columns have TEXT affinity and contain canonical fixed-scale
   strings. Scalar and aggregate UDFs perform scaled-BigInt operations; a
   sortable decimal key UDF replaces lexical TEXT ordering.
+- Opaque special types keep identity outside SQLite affinity: `xml` is Unicode
+  TEXT, CLR `hierarchyid`/`geometry`/`geography` values are native serialized
+  BLOBs, and `sql_variant` is a BLOB containing its TDS base-type envelope.
+  Target-column DML injects cast UDFs before binding, so a number or string
+  cannot be affinity-coerced into an indistinguishable value. Variant casts
+  unpack the envelope; special-type operators and methods are rejected before
+  SQLite sees them.
 - SQLite has no offset-preserving temporal storage class. mssqlite stores
   `datetimeoffset(n)` as canonical fixed-scale TEXT containing local civil
   time and `±HH:MM`, and uses `mssqlite_datetimeoffset_key` (UTC day plus

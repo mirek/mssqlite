@@ -50,10 +50,13 @@ packet size, collation, begin/commit/rollback transaction).
 - `TypeInfo` — TYPE_INFO codec plus constructors: `intN`, `bitN`, `floatN`,
   `moneyN`, `datetimeN`, `nvarchar(n | 'max')`, `varchar`, `varbinary`,
   fixed-width `binary`, `decimalN(p, s)`, `guid`, `dateN`, `timeN(s)`, `datetime2N(s)`,
-  `datetimeOffsetN(s)`.
+  `datetimeOffsetN(s)`, `sqlVariant`, untyped/typed `xml`, and CLR `udt`.
 - `Value` — TYPE_VARBYTE encode/decode between wire bytes and JS values
   (`null`, `boolean`, `number`, `bigint`, `string`, `Uint8Array`, `Date`),
   including PLP chunking for `max` types.
+- `SqlVariant` — validates, packs, and unpacks the base type token,
+  type-specific properties, and bare value without losing inner type identity.
+  XML uses UTF-16LE PLP; UDT values use opaque binary PLP and full UDT_INFO.
 - `DateTime` — proleptic-Gregorian civil date math (no JS `Date` range
   limits); datetime (1/300s), smalldatetime, date, time(n), datetime2(n),
   datetimeoffset(n). DATETIMEOFFSET encodes UTC time/date plus the retained

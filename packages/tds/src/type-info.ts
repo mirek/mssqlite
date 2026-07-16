@@ -13,7 +13,19 @@ export type TypeInfo = {
   readonly maxLength?: number,
   readonly precision?: number,
   readonly scale?: number,
-  readonly collation?: Collation.t
+  readonly collation?: Collation.t,
+  readonly xml?: {
+    readonly database: string,
+    readonly schema: string,
+    readonly collection: string
+  },
+  readonly udt?: {
+    readonly maxByteSize: number,
+    readonly database: string,
+    readonly schema: string,
+    readonly name: string,
+    readonly assembly: string
+  }
 }
 
 export type t =
@@ -114,6 +126,25 @@ export const datetimeOffsetN =
   (scale = 7): TypeInfo =>
     ({ type: DataType.DataType.datetimeOffsetN, scale })
 
+/** @returns sql_variant, whose value carries its own inner TYPE_INFO. */
+export const sqlVariant =
+  (): TypeInfo =>
+    ({ type: DataType.DataType.sqlVariant, maxLength: 8016 })
+
+/** @returns untyped XML, or XML associated with a schema collection. */
+export const xml =
+  (schema?: TypeInfo['xml']): TypeInfo => ({
+    type: DataType.DataType.xml,
+    ...schema === undefined ? {} : { xml: schema }
+  })
+
+/** @returns SQL CLR UDT metadata for a PLP-encoded opaque binary value. */
+export const udt =
+  (name: string, assembly: string, maxByteSize = 0xffff, database = '', schema = 'sys'): TypeInfo => ({
+    type: DataType.DataType.udt,
+    udt: { maxByteSize, database, schema, name, assembly }
+  })
+
 /** @returns TYPE_INFO wire bytes. */
 export const encode =
   (typeInfo: TypeInfo): Uint8Array => {
@@ -144,6 +175,27 @@ export const encode =
         chunks.push(Encode.uint32(typeInfo.maxLength ?? 0))
         break
       case 'plp':
+        if (type === DataType.DataType.xml) {
+          chunks.push(Encode.uint8(typeInfo.xml === undefined ? 0 : 1))
+          if (typeInfo.xml !== undefined) {
+            chunks.push(
+              Encode.bVarchar(typeInfo.xml.database),
+              Encode.bVarchar(typeInfo.xml.schema),
+              Encode.usVarchar(typeInfo.xml.collection)
+            )
+          }
+        } else if (type === DataType.DataType.udt) {
+          if (typeInfo.udt === undefined) {
+            throw new Error('UDT TYPE_INFO requires UDT_INFO metadata.')
+          }
+          chunks.push(
+            Encode.uint16(typeInfo.udt.maxByteSize),
+            Encode.bVarchar(typeInfo.udt.database),
+            Encode.bVarchar(typeInfo.udt.schema),
+            Encode.bVarchar(typeInfo.udt.name),
+            Encode.usVarchar(typeInfo.udt.assembly)
+          )
+        }
         break
       default:
         throw new Error(`Cannot encode TYPE_INFO for type 0x${type.toString(16)}.`)
@@ -159,6 +211,24 @@ const withCollation =
     DataType.collated(typeInfo.type) ?
       Decode.map(Collation.decode, collation => ({ ...typeInfo, collation }))(cursor) :
       Result.ok(cursor, typeInfo)
+
+const decodeXml: Read.t<TypeInfo> =
+  cursor => Decode.chain(Decode.uint8, present => {
+    if (present === 0) {
+      return next => Result.ok(next, xml())
+    }
+    return Decode.map(
+      Decode.seq(Decode.bVarchar, Decode.bVarchar, Decode.usVarchar),
+      ([ database, schema, collection ]) => xml({ database, schema, collection })
+    )
+  })(cursor)
+
+const decodeUdt: Read.t<TypeInfo> =
+  Decode.map(
+    Decode.seq(Decode.uint16, Decode.bVarchar, Decode.bVarchar, Decode.bVarchar, Decode.usVarchar),
+    ([ maxByteSize, database, schema, name, assembly ]) =>
+      udt(name, assembly, maxByteSize, database, schema)
+  )
 
 /** TYPE_INFO decoder. */
 export const decode: Read.t<TypeInfo> =
@@ -176,6 +246,12 @@ export const decode: Read.t<TypeInfo> =
       case 'fixed':
       case 'date':
       case 'plp':
+        if (type === DataType.DataType.xml) {
+          return decodeXml(type_.cursor)
+        }
+        if (type === DataType.DataType.udt) {
+          return decodeUdt(type_.cursor)
+        }
         return withCollation({ type }, type_.cursor)
       case 'byteLen':
         return Decode.chain(Decode.uint8, maxLength =>

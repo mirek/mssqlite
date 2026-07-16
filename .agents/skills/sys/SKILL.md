@@ -13,7 +13,7 @@ Source: `sql-docs/docs/relational-databases/system-catalog-views/`
 
 This spec is implemented in [`packages/catalog`](../../../packages/catalog):
 
-- **Phase 1 + 2 + most of phase 3 are done** — schemas, types (all 31
+- **Phase 1 + 2 + most of phase 3 are done** — schemas, types (34
   seed rows), objects, columns, tables/views/procedures views, databases,
   indexes, index_columns, key_constraints, foreign_keys +
   foreign_key_columns, check/default constraints, database/server
@@ -49,6 +49,11 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   table; it is surfaced by `@@DBTS`, not as a public catalog view. Result
   metadata maps non-null rows to BIGBINARY(8) and nullable rows to
   BIGVARBINARY(8).
+- Opaque CLR built-ins are seeded as assembly types: hierarchyid
+  `(user_type_id 128, system_type_id 240, max_length 892)`, geometry `(129,
+  240, -1)`, and geography `(130, 240, -1)`. Their columns retain distinct
+  user type ids while result metadata uses native UDT_INFO. `sql_variant` 98
+  and untyped XML 241 likewise retain their declared catalog and wire types.
 - `sys.computed_columns` joins computed `sys.columns` rows to
   `sys.computed_columns_extra`, exposing normalized definition text,
   `uses_database_collation`, and `is_persisted`. CREATE/ALTER/DROP maintain
@@ -205,6 +210,9 @@ system_type_id is the key identifier used by sys.columns. user_type_id equals sy
 | 108 | numeric | 108 | 17 | 38 | 38 | NULL |
 | 122 | smallmoney | 122 | 4 | 10 | 4 | NULL |
 | 127 | bigint | 127 | 8 | 19 | 0 | NULL |
+| 128 | hierarchyid | 240 | 892 | 0 | 0 | NULL |
+| 129 | geometry | 240 | -1 | 0 | 0 | NULL |
+| 130 | geography | 240 | -1 | 0 | 0 | NULL |
 | 165 | varbinary | 165 | 8000 | 0 | 0 | NULL |
 | 167 | varchar | 167 | 8000 | 0 | 0 | SQL_Latin1_General_CP1_CI_AS |
 | 173 | binary | 173 | 8000 | 0 | 0 | NULL |
@@ -439,6 +447,10 @@ When a user creates a table, each column's SQL type declaration maps to sys.colu
 | varbinary(max) | 165 | -1 | 0 | 0 |
 | uniqueidentifier | 36 | 16 | 0 | 0 |
 | xml | 241 | -1 | 0 | 0 |
+| sql_variant | 98 | 8016 | 0 | 0 |
+| hierarchyid | 240 (user 128) | 892 | 0 | 0 |
+| geometry | 240 (user 129) | -1 | 0 | 0 |
+| geography | 240 (user 130) | -1 | 0 | 0 |
 
 † decimal/numeric max_length: 5 (p 1-9), 9 (p 10-19), 13 (p 20-28), 17 (p 29-38)
 ‡ time max_length: 3 (n 0-2), 4 (n 3-4), 5 (n 5-7); datetime2: 6 (n<3), 7 (n 3-4), 8 (n 5-7); datetimeoffset: 8 (n 0-2), 9 (n 3-4), 10 (n 5-7)

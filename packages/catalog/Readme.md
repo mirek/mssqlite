@@ -13,7 +13,9 @@ no query interception.
   (`sys.tables`, `sys.views`, `sys.procedures`, `sys.identity_columns`,
   `INFORMATION_SCHEMA.TABLES/COLUMNS`) and seed rows (schemas, all 31 system
   types, databases incl. the user database as id 5, database/server
-  principals, object id allocator). Idempotent.
+  principals, object id allocator). The 34 rows include CLR assembly types
+  hierarchyid/geometry/geography with distinct user ids over system type 240.
+  Idempotent.
 - DDL maintenance — called by the engine as DDL executes:
   - `createTable(db, ast)` — sys.objects (`U`), sys.columns with exact
     MSSQL type mapping (`system_type_id`, byte `max_length`,
@@ -39,6 +41,8 @@ no query interception.
 - `TypeRow.columnType(typeName)` — declared T-SQL type → sys.columns fields
   (`decimal(p,s)` wire lengths, `time/datetime2/datetimeoffset` scale
   lengths, `nvarchar` byte doubling, `max` → -1).
+  Opaque sql_variant/XML/CLR declarations retain ids 98/241/240 and the CLR
+  user type id needed to select native UDT result metadata.
   Per-column COLLATE names override the type default in `collation_name` and
   are later translated to TDS collation bytes by engine metadata.
 

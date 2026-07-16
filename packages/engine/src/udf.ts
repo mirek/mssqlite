@@ -6,6 +6,7 @@ import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
 import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
+import { SqlVariant, TypeInfo } from '@mssqlite/tds'
 import type { Server } from './session.ts'
 
 type Argument =
@@ -18,6 +19,60 @@ const text =
 const decimalArgument =
   (value: Argument): string | number | bigint | null =>
     value instanceof Uint8Array ? text(value) : value
+
+const variantDecimalType =
+  (value: Argument, precision: number, scale: number): TypeInfo.t => {
+    if (precision >= 1 && scale >= 0) {
+      return TypeInfo.decimalN(precision, scale)
+    }
+    const source = text(value).replace(/^[+-]/, '')
+    const [ whole = '', fraction = '' ] = source.toLowerCase().split('e')[0]?.split('.') ?? []
+    const resolvedScale = fraction.length
+    return TypeInfo.decimalN(Math.min(38, Math.max(1, whole.replace(/^0+/, '').length + resolvedScale)), resolvedScale)
+  }
+
+const variantBase =
+  (value: Exclude<Argument, null>, name: string, first: number, second: number): TypeInfo.t => {
+    switch (name) {
+      case 'tinyint':
+        return TypeInfo.intN(1)
+      case 'smallint':
+        return TypeInfo.intN(2)
+      case 'int':
+      case 'integer':
+        return TypeInfo.intN(4)
+      case 'bigint':
+        return TypeInfo.intN(8)
+      case 'bit':
+        return TypeInfo.bitN()
+      case 'real':
+        return TypeInfo.floatN(4)
+      case 'float':
+        return TypeInfo.floatN(8)
+      case 'decimal':
+      case 'numeric':
+      case 'dec':
+        return variantDecimalType(value, first, second)
+      case 'varchar':
+      case 'char':
+        return TypeInfo.varchar(first >= 0 ? first : text(value).length)
+      case 'varbinary':
+      case 'binary':
+        return TypeInfo.varbinary(first >= 0 ? first : (value as Uint8Array).byteLength)
+      case 'nvarchar':
+      case 'nchar':
+      case 'string':
+        return TypeInfo.nvarchar(first >= 0 ? first : text(value).length)
+      case 'uniqueidentifier':
+        return TypeInfo.guid()
+      default:
+        return value instanceof Uint8Array ? TypeInfo.varbinary(value.byteLength) :
+          typeof value === 'bigint' ? TypeInfo.intN(8) :
+            typeof value === 'number' ?
+              (Number.isInteger(value) ? TypeInfo.intN(4) : TypeInfo.floatN(8)) :
+              TypeInfo.nvarchar(text(value).length)
+    }
+  }
 
 const collationKey =
   (value: Argument, collation: Argument): Argument => {
@@ -273,6 +328,44 @@ export const registerFunctions =
     define('mssqlite_next_rowversion', () => nextRowversionValue(server), { deterministic: false })
     define('mssqlite_decimal_cast', (value, precision, scale, try_) =>
       DecimalExact.cast(decimalArgument(value), Number(precision), Number(scale), Number(try_) !== 0))
+    define('mssqlite_variant_pack', (value, name, first, second) => {
+      if (value === null) {
+        return null
+      }
+      const declared = text(name).toLowerCase()
+      const typeInfo = variantBase(value, declared, Number(first), Number(second))
+      const coerced = declared === 'bigint' ? BigInt(value as number | bigint | string) :
+        [ 'tinyint', 'smallint', 'int', 'integer', 'bit', 'real', 'float' ].includes(declared) ?
+          Number(value) : value
+      return SqlVariant.encode(typeInfo, coerced)
+    })
+    define('mssqlite_variant_unpack', value => {
+      if (value === null) {
+        return null
+      }
+      if (!(value instanceof Uint8Array)) {
+        throw new TypeError('sql_variant storage payload must be binary.')
+      }
+      return SqlVariant.decode(value).value as Argument
+    })
+    define('mssqlite_udt_cast', (value, type, try_) => {
+      if (value === null || value instanceof Uint8Array) {
+        return value
+      }
+      if (Number(try_) !== 0) {
+        return null
+      }
+      throw new TypeError(`${text(type)} accepts only its native binary serialization.`)
+    })
+    define('mssqlite_xml_cast', (value, try_) => {
+      if (value === null || typeof value === 'string') {
+        return value
+      }
+      if (Number(try_) !== 0) {
+        return null
+      }
+      throw new TypeError('xml accepts a Unicode character representation.')
+    })
     define('mssqlite_decimal_arithmetic',
       (operator, left, right, leftScale, rightScale, precision, scale) => {
         try {

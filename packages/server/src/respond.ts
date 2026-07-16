@@ -20,6 +20,7 @@ export const itemTokens =
           const columns = item.columns.map(column => ({
             name: column.name,
             typeInfo: column.typeInfo,
+            ...column.userType === undefined ? {} : { userType: column.userType },
             flags: flagsOf(column.nullable)
           }))
           chunks.push(Token.colMetadata(columns))

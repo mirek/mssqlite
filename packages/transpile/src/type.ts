@@ -15,6 +15,8 @@ export type Category =
   | 'guid'
   | 'bit'
   | 'variant'
+  | 'xml'
+  | 'udt'
 
 const categories: Record<string, Category> = {
   tinyint: 'integer',
@@ -58,7 +60,10 @@ const categories: Record<string, Category> = {
   datetimeoffset: 'datetime',
   uniqueidentifier: 'guid',
   sql_variant: 'variant',
-  xml: 'ntext',
+  xml: 'xml',
+  hierarchyid: 'udt',
+  geography: 'udt',
+  geometry: 'udt',
   json: 'ntext'
 } as const
 
@@ -87,6 +92,8 @@ export const columnType =
       case 'ntext':
         return `TEXT COLLATE ${collation === undefined ? 'NOCASE' : Collation.sqlite(collation)}`
       case 'blob':
+      case 'variant':
+      case 'udt':
         return 'BLOB'
       case 'date':
       case 'time':
@@ -94,6 +101,8 @@ export const columnType =
         return 'TEXT'
       case 'guid':
         return 'TEXT COLLATE NOCASE'
+      case 'xml':
+        return 'TEXT'
       default:
         return ''
     }

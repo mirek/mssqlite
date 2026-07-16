@@ -143,6 +143,13 @@ the engine:
   nullability chooses BIGBINARY(8) or BIGVARBINARY(8) TDS metadata.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
+- **Opaque special types preserve identity at boundaries** — XML uses TEXT
+  storage and native XML PLP; hierarchyid/geometry/geography use BLOB storage
+  and native UDT PLP with catalog-selected UDT_INFO; sql_variant stores its
+  complete SSVARIANT inner envelope as BLOB. DML target resolution injects
+  pack/representation casts, while result metadata comes from the catalog.
+  Unsupported operators/methods stop in the transpiler rather than acquiring
+  accidental SQLite text/blob semantics.
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
   `mssqlite_*` function registered once per server (`engine/udf.ts`).
   Session-dependent UDFs (`db_name`, `scope_identity`, …) read

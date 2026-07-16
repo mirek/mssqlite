@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { DataType } from '@mssqlite/tds'
+import { DataType, SqlVariant } from '@mssqlite/tds'
 import { BatchError, executeBatch, executeSql, MssqlError, server, session } from './index.ts'
 import type { Item, Rows } from './execute.ts'
 
@@ -50,6 +50,86 @@ test('create, insert, select round trip with catalog metadata', () => {
     nullable: false
   })
   expect(result.rows).toEqual([ [ 1, 'Alice', 30 ], [ 2, 'Bob', null ] ])
+})
+
+test('opaque special types preserve storage and native result metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE opaque_values (
+      id INT PRIMARY KEY,
+      variant_value SQL_VARIANT,
+      xml_value XML,
+      hierarchy_value HIERARCHYID,
+      geometry_value GEOMETRY,
+      geography_value GEOGRAPHY
+    );
+    INSERT INTO opaque_values VALUES (
+      1, CAST(42 AS bigint), N'<root>hé</root>',
+      0x010203, 0x040506, 0x070809
+    )
+  `)
+  const result = rowsOf(executeBatch(s, `
+    SELECT variant_value, xml_value, hierarchy_value, geometry_value, geography_value
+    FROM opaque_values
+  `))
+  expect(result.columns.map(column => column.typeInfo.type)).toEqual([
+    DataType.DataType.sqlVariant,
+    DataType.DataType.xml,
+    DataType.DataType.udt,
+    DataType.DataType.udt,
+    DataType.DataType.udt
+  ])
+  expect(result.columns[2]?.typeInfo.udt).toMatchObject({ name: 'hierarchyid', maxByteSize: 892 })
+  expect(result.columns[3]?.typeInfo.udt).toMatchObject({ name: 'geometry', maxByteSize: 0xffff })
+  const row = result.rows[0]
+  expect(SqlVariant.decode(row?.[0] as Uint8Array)).toMatchObject({ value: 42n })
+  expect(row?.[1]).toBe('<root>hé</root>')
+  expect(row?.[2]).toEqual(Uint8Array.from([ 1, 2, 3 ]))
+  expect(row?.[3]).toEqual(Uint8Array.from([ 4, 5, 6 ]))
+  expect(row?.[4]).toEqual(Uint8Array.from([ 7, 8, 9 ]))
+
+  expect(rowsOf(executeBatch(s,
+    'SELECT CAST(variant_value AS bigint) AS value FROM opaque_values')).rows)
+    .toEqual([ [ 42 ] ])
+})
+
+test('opaque special types reject representation loss and unsupported operators', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE opaque_errors (x XML, g GEOMETRY)')
+  expect(() => executeBatch(s, 'INSERT INTO opaque_errors VALUES (N\'<x/>\', N\'POINT (1 2)\')'))
+    .toThrow(/native binary serialization/)
+  executeBatch(s, 'INSERT INTO opaque_errors VALUES (N\'<x/>\', 0x01)')
+  expect(() => executeBatch(s, 'SELECT * FROM opaque_errors WHERE x = x'))
+    .toThrow(/not supported for xml values/)
+  expect(() => executeBatch(s, 'SELECT * FROM opaque_errors WHERE g = g'))
+    .toThrow(/not supported for udt values/)
+})
+
+test('opaque special types and catalog identities survive database restart', () => {
+  const path = join(tmpdir(), `mssqlite-opaque-${process.pid}-${Date.now()}.db`)
+  try {
+    const firstServer = server({ path })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE TABLE persisted_opaque (v SQL_VARIANT, x XML, h HIERARCHYID)
+      INSERT INTO persisted_opaque VALUES (CAST(N'hé' AS nvarchar(2)), N'<x/>', 0x0102)
+    `)
+    firstServer.db.close()
+
+    const secondServer = server({ path })
+    const result = rowsOf(executeBatch(session(secondServer),
+      'SELECT v, x, h FROM persisted_opaque'))
+    expect(result.columns.map(column => [ column.typeInfo.type, column.userType ])).toEqual([
+      [ DataType.DataType.sqlVariant, 98 ],
+      [ DataType.DataType.xml, 241 ],
+      [ DataType.DataType.udt, 128 ]
+    ])
+    expect(SqlVariant.decode(result.rows[0]?.[0] as Uint8Array)).toMatchObject({ value: 'hé' })
+    expect(result.rows[0]?.slice(1)).toEqual([ '<x/>', Uint8Array.from([ 1, 2 ]) ])
+    secondServer.db.close()
+  } finally {
+    rmSync(path, { force: true })
+  }
 })
 
 test('computed columns infer types, recompute, index and expose catalog metadata', () => {

@@ -31,7 +31,15 @@ const createUsers =
 test('bootstrap seeds schemas, types, databases and principals', () => {
   const db = open()
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.schemas"').get()).toEqual({ n: 4 })
-  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.types"').get()).toEqual({ n: 31 })
+  expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.types"').get()).toEqual({ n: 34 })
+  expect(db.prepare(
+    `SELECT name, system_type_id, user_type_id, is_assembly_type
+     FROM "sys.types" WHERE name IN ('hierarchyid', 'geometry', 'geography') ORDER BY user_type_id`
+  ).all()).toEqual([
+    { name: 'hierarchyid', system_type_id: 240, user_type_id: 128, is_assembly_type: 1 },
+    { name: 'geometry', system_type_id: 240, user_type_id: 129, is_assembly_type: 1 },
+    { name: 'geography', system_type_id: 240, user_type_id: 130, is_assembly_type: 1 }
+  ])
   expect(db.prepare('SELECT name FROM "sys.databases" WHERE database_id = 5').get())
     .toEqual({ name: 'test' })
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.server_principals"').get()).toEqual({ n: 10 })

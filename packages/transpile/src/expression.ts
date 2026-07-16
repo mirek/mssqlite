@@ -7,7 +7,7 @@ import * as Type from './type.ts'
 import call, { convertStyle } from './functions.ts'
 import infer from './infer.ts'
 import { unsupported } from './error.ts'
-import type { Ast } from '@mssqlite/tsql'
+import type { Ast, TypeName } from '@mssqlite/tsql'
 
 /** Renders a SELECT — injected by statement.ts to break the module cycle. */
 let selectRender: ((ctx: Context.t, select: Ast.Select) => string) | undefined
@@ -24,13 +24,48 @@ const subquery =
       unsupported('Select renderer not wired.') :
       selectRender(ctx, select)
 
+const numberSourceType =
+  (value: string): TypeName.t => {
+    if (value.includes('.') || /e/i.test(value)) {
+      return { name: 'decimal', args: [] }
+    }
+    const integer = BigInt(value)
+    return integer >= -2147483648n && integer <= 2147483647n ?
+      { name: 'int', args: [] } : { name: 'decimal', args: [] }
+  }
+
 const cast =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'cast' | 'convert' }): string => {
     const source = expression_.expression
+    const sourceType = source.kind === 'cast' || source.kind === 'convert' ? source.type :
+      source.kind === 'column' ? Context.columnType(ctx, source.name) :
+        source.kind === 'unary' && source.operand.kind === 'number' ? numberSourceType(source.operand.value) :
+          source.kind === 'number' ? numberSourceType(source.value) :
+            source.kind === 'string' ? { name: 'nvarchar', args: [ source.value.length ] } :
+              source.kind === 'binary' ? { name: 'varbinary', args: [ Math.ceil((source.value.length - 2) / 2) ] } :
+                undefined
     const signedLiteral = source.kind === 'unary' && [ '+', '-' ].includes(source.operator) &&
       source.operand.kind === 'number' ? `${source.operator}${source.operand.value}` : undefined
-    const inner = source.kind === 'number' ? Quote.string(source.value) :
+    const rendered = source.kind === 'number' ? Quote.string(source.value) :
       signedLiteral === undefined ? expression(ctx, source) : Quote.string(signedLiteral)
+    const inner = sourceType !== undefined && Type.category(sourceType) === 'variant' ?
+      `mssqlite_variant_unpack(${rendered})` : rendered
+    if (Type.category(expression_.type) === 'variant') {
+      if (sourceType !== undefined && Type.category(sourceType) === 'variant') {
+        return rendered
+      }
+      const base = sourceType?.name ?? ''
+      const first = typeof sourceType?.args[0] === 'number' ? sourceType.args[0] : -1
+      const second = typeof sourceType?.args[1] === 'number' ? sourceType.args[1] : -1
+      return `mssqlite_variant_pack(${rendered}, ${Quote.string(base)}, ${first}, ${second})`
+    }
+    if (Type.category(expression_.type) === 'udt') {
+      return `mssqlite_udt_cast(${inner}, ${Quote.string(expression_.type.name)}, ` +
+        `${expression_.try_ ? 1 : 0})`
+    }
+    if (Type.category(expression_.type) === 'xml') {
+      return `mssqlite_xml_cast(${inner}, ${expression_.try_ ? 1 : 0})`
+    }
     if (expression_.kind === 'convert' && expression_.style !== undefined) {
       const style = expression_.style.kind === 'number' ? Number(expression_.style.value) : undefined
       const format = style === undefined ? undefined : convertStyle(style)
@@ -70,8 +105,20 @@ const cast =
     }
   }
 
+const opaqueCategory =
+  (ctx: Context.t, value: Ast.Expression): Type.Category | undefined => {
+    const type = value.kind === 'column' ? Context.columnType(ctx, value.name) :
+      value.kind === 'cast' || value.kind === 'convert' ? value.type : undefined
+    const category = type === undefined ? undefined : Type.category(type)
+    return category === 'variant' || category === 'xml' || category === 'udt' ? category : undefined
+  }
+
 const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
+    const opaque = opaqueCategory(ctx, expression_.left) ?? opaqueCategory(ctx, expression_.right)
+    if (opaque !== undefined) {
+      return unsupported(`Operator '${expression_.operator}' is not supported for ${opaque} values.`)
+    }
     const left = expression(ctx, expression_.left)
     const right = expression(ctx, expression_.right)
     const leftOffset = DateTimeOffset.scaleOf(ctx, expression_.left)
@@ -229,6 +276,13 @@ export const expression =
         return binaryOp(ctx, expression_)
       case 'call': {
         const callName = expression_.name[expression_.name.length - 1]?.toLowerCase()
+        if (expression_.name.length > 1 && [
+          'query', 'value', 'exist', 'nodes', 'modify',
+          'starea', 'stdistance', 'stintersects', 'stcontains', 'stastext', 'tostring',
+          'getancestor', 'getdescendant', 'getlevel', 'isdescendantof'
+        ].includes(callName ?? '')) {
+          return unsupported(`Special-type method '${callName}' is not supported.`)
+        }
         const input = expression_.args[0] === undefined ? undefined : Decimal.typeOf(ctx, expression_.args[0])
         if ([ 'sum', 'avg', 'min', 'max' ].includes(callName ?? '') && input !== undefined) {
           const output = Decimal.typeOf(ctx, expression_)
@@ -276,6 +330,10 @@ export const expression =
         return `(CASE${operand} ${whens}${else_} END)`
       }
       case 'in': {
+        const opaque = opaqueCategory(ctx, expression_.expression)
+        if (opaque !== undefined) {
+          return unsupported(`Operator 'IN' is not supported for ${opaque} values.`)
+        }
         const offsetScale = DateTimeOffset.scaleOf(ctx, expression_.expression) ??
           (Array.isArray(expression_.values) ? expression_.values
             .map(value => DateTimeOffset.scaleOf(ctx, value))
@@ -303,6 +361,10 @@ export const expression =
         return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
       }
       case 'like': {
+        const opaque = opaqueCategory(ctx, expression_.expression)
+        if (opaque !== undefined) {
+          return unsupported(`Operator 'LIKE' is not supported for ${opaque} values.`)
+        }
         const collation = Collation.ofExpression(ctx, expression_.expression) ??
           Collation.ofExpression(ctx, expression_.pattern)
         if (collation !== undefined && expression_.escape === undefined) {
@@ -316,6 +378,10 @@ export const expression =
         return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT LIKE' : 'LIKE'} ${expression(ctx, expression_.pattern)}${escape})`
       }
       case 'between': {
+        const opaque = opaqueCategory(ctx, expression_.expression)
+        if (opaque !== undefined) {
+          return unsupported(`Operator 'BETWEEN' is not supported for ${opaque} values.`)
+        }
         const scale = DateTimeOffset.scaleOf(ctx, expression_.expression) ??
           DateTimeOffset.scaleOf(ctx, expression_.low) ?? DateTimeOffset.scaleOf(ctx, expression_.high)
         if (scale !== undefined) {

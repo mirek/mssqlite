@@ -255,6 +255,45 @@ test('rowversion values and metadata round trip through tedious', async () => {
     .toEqual(Buffer.from('0000000000000003', 'hex'))
 })
 
+test('opaque special types retain native wire identity through tedious', async () => {
+  await query(`
+    CREATE TABLE wire_opaque (
+      variant_value SQL_VARIANT,
+      xml_value XML,
+      hierarchy_value HIERARCHYID,
+      geometry_value GEOMETRY,
+      geography_value GEOGRAPHY
+    )
+    INSERT INTO wire_opaque VALUES (
+      42, N'<root>hé</root>', 0x010203, 0x040506, 0x070809
+    )
+  `)
+  const result = await query(`
+    SELECT variant_value, xml_value, hierarchy_value, geometry_value, geography_value
+    FROM wire_opaque
+  `)
+  expect(result.columns.map(column => column.type)).toEqual([
+    'Variant', 'Xml', 'UDT', 'UDT', 'UDT'
+  ])
+  expect(result.rows).toEqual([ {
+    variant_value: 42,
+    xml_value: '<root>hé</root>',
+    hierarchy_value: Buffer.from('010203', 'hex'),
+    geometry_value: Buffer.from('040506', 'hex'),
+    geography_value: Buffer.from('070809', 'hex')
+  } ])
+
+  for (const [ type, value ] of [
+    [ TYPES.Xml, '<x />' ],
+    [ TYPES.UDT, Buffer.from('01', 'hex') ],
+    [ TYPES.Variant, 1 ]
+  ] as const) {
+    await expect(query('SELECT @value AS value', [ {
+      name: 'value', type, value
+    } ])).rejects.toThrow(/not implemented/)
+  }
+})
+
 test('variables and batches', async () => {
   const result = await query(`
     DECLARE @x INT = 40

@@ -8,7 +8,8 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite'
 export type Column = {
   readonly name: string,
   readonly typeInfo: TypeInfo.t,
-  readonly nullable: boolean
+  readonly nullable: boolean,
+  readonly userType?: number
 }
 
 export type t =
@@ -52,6 +53,8 @@ export const typeInfoOfCatalogRow =
         return TypeInfo.datetimeOffsetN(row.scale)
       case 36:
         return TypeInfo.guid()
+      case 98:
+        return TypeInfo.sqlVariant()
       case 167:
       case 175:
       case 35:
@@ -61,7 +64,6 @@ export const typeInfoOfCatalogRow =
       case 231:
       case 239:
       case 99:
-      case 241:
         return TypeInfo.nvarchar(
           row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length / 2,
           Collation.ofName(row.collation_name))
@@ -71,6 +73,14 @@ export const typeInfoOfCatalogRow =
         return TypeInfo.varbinary(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
       case 189:
         return row.is_nullable === 0 ? TypeInfo.binary(8) : TypeInfo.varbinary(8)
+      case 240: {
+        const type = TypeRow.rows.find(candidate => candidate.userTypeId === row.user_type_id)
+        return type?.assemblyQualifiedName === undefined ? TypeInfo.varbinary('max') :
+          TypeInfo.udt(type.name, type.assemblyQualifiedName,
+            type.maxLength < 0 ? 0xffff : type.maxLength)
+      }
+      case 241:
+        return TypeInfo.xml()
       default:
         return TypeInfo.nvarchar('max')
     }
@@ -171,7 +181,8 @@ const tableVariableColumn =
       return {
         name: definition.name,
         typeInfo: typeInfoOfCatalogRow(row),
-        nullable: row.is_nullable !== 0
+        nullable: row.is_nullable !== 0,
+        userType: row.user_type_id
       }
     }
     return undefined
@@ -200,7 +211,8 @@ const hintedColumn =
     return {
       name: hint.name,
       typeInfo: typeInfoOfCatalogRow(row),
-      nullable: hint.nullable
+      nullable: hint.nullable,
+      userType: row.user_type_id
     }
   }
 
@@ -229,7 +241,8 @@ export const columnsOf =
           return {
             name: source.name,
             typeInfo: typeInfoOfCatalogRow(row),
-            nullable: row.is_nullable !== 0
+            nullable: row.is_nullable !== 0,
+            userType: row.user_type_id
           }
         }
         const variable = tableVariableColumn(variables, source.table, source.column)
