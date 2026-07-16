@@ -155,6 +155,9 @@ their type inferred before DDL and catalog
 registration, so VIRTUAL/STORED values retain declared metadata even for empty
 results and after restart. Direct writes and nondeterministic definitions map
 to SQL Server errors 271 and 4936.
+Exact decimal and datetimeoffset projections also provide expression-derived
+hints. Typed RPC datetimeoffset parameters retain their scale through direct
+SELECTs instead of falling back to inferred text metadata.
 
 ## UDFs
 
@@ -164,6 +167,7 @@ decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `right`, `re
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), `translate`,
 `datalength`, `round` (negative digits, truncate flag), `isnumeric`,
 `isdate`, `name`, `dateadd`/`datediff`/`datepart`/`datename`/`eomonth`
-(civil-calendar math with MSSQL boundary semantics), and session-scoped
+(civil-calendar math with MSSQL boundary semantics, including offset-preserving
+datetimeoffset arithmetic, UTC-normalized differences, and TZOFFSET), and session-scoped
 `db_name`, `db_id`, `scope_identity`, `suser_sname`, `user_name`,
 `host_name`, `app_name`, `serverproperty`.

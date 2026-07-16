@@ -204,6 +204,13 @@ All deterministic.
 | DATETIME2FROMPARTS | `DATETIME2FROMPARTS(y,m,d,h,mi,s,frac,prec)` | datetime2(prec) | Yes | All args required. |
 | DATETIMEFROMPARTS | `DATETIMEFROMPARTS(y,m,d,h,mi,s,ms)` | datetime | Yes | ms range 0-999. |
 
+For `datetimeoffset`, DATEADD modifies local civil fields and preserves the
+stored offset (it does not apply DST rules). DATEDIFF first accounts for the
+offsets and counts boundaries between UTC-normalized instants. DATEADD accepts
+microsecond and nanosecond parts; nanoseconds round to the 100ns storage tick.
+`DATEPART(tzoffset, value)` returns signed minutes and DATENAME returns the
+formatted `±HH:MM` offset.
+
 ### Datepart Keywords
 
 | Datepart | Abbreviations |

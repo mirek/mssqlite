@@ -414,7 +414,9 @@ export type Statement =
       readonly columns: readonly {
         readonly name: string,
         readonly descending: boolean,
-        readonly collation?: string
+        readonly collation?: string,
+        /** Resolved by the engine for storage-sensitive expression indexes. */
+        readonly type?: TypeName.t
       }[],
       readonly include?: readonly string[],
       readonly where?: Expression

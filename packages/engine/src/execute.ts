@@ -20,6 +20,7 @@ import {
 import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
+import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
   functionKey,
@@ -134,6 +135,10 @@ const decimalType =
   (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
     [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney' ].includes(type.name) ? type : undefined
 
+const storedType =
+  (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
+    decimalType(type) ?? (type.name === 'datetimeoffset' ? type : undefined)
+
 const decimalShape =
   (type: Ast.ColumnDefinition['type']): readonly [ number, number ] | undefined => {
     if (type.name === 'money') {
@@ -154,6 +159,20 @@ const decimalShape =
 const decimalArgument =
   (value: Exclude<Value, null>): string | number | bigint =>
     value instanceof Uint8Array ? String(value) : typeof value === 'boolean' ? Number(value) : value
+
+const coercedValue =
+  (type: Ast.ColumnDefinition['type'], value: Value): Value => {
+    if (value === null) {
+      return null
+    }
+    if (type.name === 'datetimeoffset') {
+      const scale = typeof type.args[0] === 'number' ? type.args[0] : 7
+      return DateTimeOffsetExact.cast(String(value), scale, false)
+    }
+    const shape = decimalShape(type)
+    return shape === undefined ? value :
+      DecimalExact.cast(decimalArgument(value), shape[0], shape[1], false)
+  }
 
 const targetColumns =
   (session: Session, name: Ast.QualifiedName): readonly {
@@ -179,7 +198,8 @@ const targetColumns =
       const type = column.system_type_id === 106 ? { name: 'decimal', args: [ column.precision, column.scale ] } :
         column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
           column.system_type_id === 60 ? { name: 'money', args: [] } :
-            column.system_type_id === 122 ? { name: 'smallmoney', args: [] } : undefined
+            column.system_type_id === 122 ? { name: 'smallmoney', args: [] } :
+              column.system_type_id === 43 ? { name: 'datetimeoffset', args: [ column.scale ] } : undefined
       return {
         name: column.name,
         ...type === undefined ? {} : { type },
@@ -188,18 +208,18 @@ const targetColumns =
     })
   }
 
-const decimalCast =
+const storedCast =
   (value: Ast.Expression, type: Ast.ColumnDefinition['type']): Ast.Expression =>
     value.kind === 'default' ? value : { kind: 'cast', expression: value, type, try_: false }
 
-/** Applies target-column decimal conversion before SQLite sees DML values. */
-const resolveDecimalDml =
+/** Applies target-column exact decimal/datetimeoffset conversion before SQLite sees DML values. */
+const resolveStoredDml =
   (session: Session, statement: Ast.Statement): Ast.Statement => {
     if (statement.kind === 'insert') {
       const all = targetColumns(session, statement.table)
       const names = statement.columns ?? all.filter(column => column.computed !== true)
         .map(column => column.name)
-      const types = names.map(name => decimalType(
+      const types = names.map(name => storedType(
         all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
         { name: '', args: [] }))
       if (statement.source.kind === 'values') {
@@ -209,7 +229,7 @@ const resolveDecimalDml =
             ...statement.source,
             rows: statement.source.rows.map(row => row.map((value, index) => {
               const type = types[index]
-              return type === undefined ? value : decimalCast(value, type)
+              return type === undefined ? value : storedCast(value, type)
             }))
           }
         }
@@ -224,7 +244,7 @@ const resolveDecimalDml =
               items: statement.source.select.items.map((item, index) => {
                 const type = types[index]
                 return item.kind !== 'expression' || type === undefined ? item :
-                  { ...item, expression: decimalCast(item.expression, type) }
+                  { ...item, expression: storedCast(item.expression, type) }
               })
             }
           }
@@ -241,22 +261,22 @@ const resolveDecimalDml =
             return assignment
           }
           const name = assignment.target.name[assignment.target.name.length - 1] ?? ''
-          const type = decimalType(columns.find(column =>
+          const type = storedType(columns.find(column =>
             column.name.toLowerCase() === name.toLowerCase())?.type ?? { name: '', args: [] })
           if (type === undefined) {
             return assignment
           }
           if (assignment.operator === '=') {
-            return { ...assignment, value: decimalCast(assignment.value, type) }
+            return { ...assignment, value: storedCast(assignment.value, type) }
           }
           return {
             ...assignment,
             operator: '=',
-            value: decimalCast({
+            value: storedCast({
               kind: 'binaryOp',
               operator: assignment.operator.slice(0, -1),
-              left: decimalCast(assignment.target, type),
-              right: decimalCast(assignment.value, type)
+              left: storedCast(assignment.target, type),
+              right: storedCast(assignment.value, type)
             }, type)
           }
         })
@@ -593,7 +613,7 @@ const applyAssign =
       DecimalExact.cast(
         decimalArgument(input), shape?.[0] ?? 18, shape?.[1] ?? 0, false)
     if (operator === '=') {
-      variable.value = shape === undefined ? value : decimalValue(value)
+      variable.value = coercedValue(variable.type, value)
     } else {
       const current = variable.value
       if (current === null || value === null) {
@@ -903,7 +923,7 @@ const executeStatementInner =
       throw new MssqlError(
         `The logical table '${transitionTarget[0]}' cannot be updated.`, 286, 16)
     }
-    const statement = resolveDecimalDml(session, resolveTableVariables(session, statement_))
+    const statement = resolveStoredDml(session, resolveTableVariables(session, statement_))
     if (statement.kind === 'createFunction') {
       defineFunction(session, statement)
       return undefined
@@ -1073,13 +1093,20 @@ const executeStatementInner =
       case 'createIndex':
         {
           const objectId = Catalog.objectIdOf(session.db, statement.table)
-          const collations = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
+          const catalogColumns = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
           const resolved = {
             ...statement,
             columns: statement.columns.map(column => {
-              const collation = collations.find(candidate =>
-                candidate.name.toLowerCase() === column.name.toLowerCase())?.collation_name
-              return { ...column, ...collation === null || collation === undefined ? {} : { collation } }
+              const catalogColumn = catalogColumns.find(candidate =>
+                candidate.name.toLowerCase() === column.name.toLowerCase())
+              const collation = catalogColumn?.collation_name
+              const type = catalogColumn?.system_type_id === 43 ?
+                { name: 'datetimeoffset' as const, args: [ catalogColumn.scale ] } : undefined
+              return {
+                ...column,
+                ...collation === null || collation === undefined ? {} : { collation },
+                ...type === undefined ? {} : { type }
+              }
             })
           }
           session.db.exec(Transpile.statement(resolved).sql)
@@ -1138,12 +1165,7 @@ const executeStatementInner =
             evaluate(session, declaration.initial)
           session.variables.set(declaration.name.toLowerCase(), {
             type: declaration.type,
-            value: decimalShape(declaration.type) === undefined ? value :
-              value === null ? null : DecimalExact.cast(
-                decimalArgument(value),
-                decimalShape(declaration.type)?.[0] ?? 18,
-                decimalShape(declaration.type)?.[1] ?? 0,
-                false)
+            value: coercedValue(declaration.type, value)
           } as Variable)
         }
         return undefined
@@ -1500,7 +1522,10 @@ const invokeScalarFunction =
           parameter.default_ === undefined ?
             missingFunctionParameter(key, parameter.name) :
             evaluate(session, parameter.default_)
-        session.variables.set(parameter.name.toLowerCase(), { type: parameter.type, value })
+        session.variables.set(parameter.name.toLowerCase(), {
+          type: parameter.type,
+          value: coercedValue(parameter.type, value)
+        })
       })
       session.returnValue = null
       const items: Item[] = []
@@ -1513,7 +1538,7 @@ const invokeScalarFunction =
       if (items.length > 0) {
         throw new MssqlError('Invalid use of a side-effecting operator within a function.', 443, 16)
       }
-      return session.returnValue
+      return coercedValue(function_.returns.type, session.returnValue)
     } finally {
       session.nestLevel--
       session.returnValue = savedReturn
@@ -1616,7 +1641,7 @@ const callUserProcedure =
           `Procedure or function '${procedure.name}' expects parameter '${parameter.name}', which was not supplied.`,
           201, 16)
       }
-      scope.set(key, { type: parameter.type, value } as Variable)
+      scope.set(key, { type: parameter.type, value: coercedValue(parameter.type, value) } as Variable)
     }
     // The variables map reference is shared session state — swap contents
     // rather than the reference, restoring the caller's scope afterwards.
@@ -1716,6 +1741,7 @@ const executeProcedure =
 export type Parameter = {
   readonly name: string,
   readonly value: Value,
+  readonly type?: Ast.ColumnDefinition['type'],
   readonly output?: boolean
 }
 
@@ -1738,8 +1764,9 @@ export const executeSql =
       const key = parameter.name.toLowerCase()
       saved.set(key, session.variables.get(key))
       session.variables.set(key, {
-        type: { name: 'sql_variant', args: [] },
-        value: parameter.value
+        type: parameter.type ?? { name: 'sql_variant', args: [] },
+        value: parameter.type === undefined ? parameter.value :
+          coercedValue(parameter.type, parameter.value)
       } as Variable)
     }
     try {

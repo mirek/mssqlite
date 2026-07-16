@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
 import * as DecimalExact from './decimal.ts'
+import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
 import { MssqlError } from './error.ts'
 import type { Server } from './session.ts'
@@ -252,6 +253,10 @@ export const registerFunctions =
       return (a as number) + (b as number)
     })
     define('mssqlite_collation_key', collationKey)
+    define('mssqlite_datetimeoffset_cast', (value, scale, try_) =>
+      DateTimeOffset.cast(value === null ? null : text(value), Number(scale), Number(try_) !== 0))
+    define('mssqlite_datetimeoffset_key', value =>
+      DateTimeOffset.key(value === null ? null : text(value)))
     define('mssqlite_collation_like', (value, pattern, collation) => {
       if (value === null || pattern === null) {
         return null

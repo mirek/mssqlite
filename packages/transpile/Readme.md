@@ -115,6 +115,8 @@ operator results carry SQL Server-derived precision/scale hints to TDS.
   See the engine package for the UDF implementations.
 - **CAST/CONVERT** — affinity casts, plus date/time renderings
   (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles
-  (23, 101-126) via `strftime`.
+  (23, 101-126) via `strftime`. DATETIMEOFFSET casts instead use the exact
+  offset-preserving codec UDF; comparisons, IN/BETWEEN, ORDER BY, uniqueness,
+  and indexes render a UTC-normalized key while result hints retain scale.
 - **DATEADD parts** — the bare datepart argument (`month`, `dd`, …)
   normalizes to a canonical literal at transpile time.

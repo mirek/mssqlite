@@ -56,7 +56,9 @@ packet size, collation, begin/commit/rollback transaction).
   including PLP chunking for `max` types.
 - `DateTime` — proleptic-Gregorian civil date math (no JS `Date` range
   limits); datetime (1/300s), smalldatetime, date, time(n), datetime2(n),
-  datetimeoffset(n). Date/time values decode to MSSQL-style strings
+  datetimeoffset(n). DATETIMEOFFSET encodes UTC time/date plus the retained
+  signed offset, rounds with civil-day carry, and preserves all 100ns digits.
+  Date/time values decode to MSSQL-style strings
   (`YYYY-MM-DD HH:MM:SS.fff…`), matching how the engine stores them in SQLite.
 - `Decimal` — exact decimal codec (sign byte + little-endian magnitude) with
   string round-tripping, half-away-from-zero scale rounding, and precision

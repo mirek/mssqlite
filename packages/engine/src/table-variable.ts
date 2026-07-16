@@ -31,7 +31,8 @@ const resolveExpression =
     switch (value.kind) {
       case 'variable': {
         const type = session.variables.get(value.name.toLowerCase())?.type
-        return type !== undefined && [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney' ].includes(type.name) ?
+        return type !== undefined &&
+          [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney', 'datetimeoffset' ].includes(type.name) ?
           { kind: 'cast', expression: value, type, try_: false } : value
       }
       case 'unary':

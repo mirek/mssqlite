@@ -13,7 +13,8 @@ const parts: Record<string, string> = {
   second: 'second', ss: 'second', s: 'second',
   millisecond: 'millisecond', ms: 'millisecond',
   microsecond: 'microsecond', mcs: 'microsecond',
-  nanosecond: 'nanosecond', ns: 'nanosecond'
+  nanosecond: 'nanosecond', ns: 'nanosecond',
+  tzoffset: 'tzoffset', tz: 'tzoffset'
 } as const
 
 /**

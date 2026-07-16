@@ -122,6 +122,42 @@ test('datetimeoffset round trips through UTC shift', () => {
   expect(DateTime.decodeDate(days)).toBe('2026-06-30')
 })
 
+test('datetimeoffset wire bytes preserve 100ns precision and signed offset', () => {
+  const parts = DateTime.partsOf('2026-07-01 02:30:00.1234567 +05:30')
+  expect(DateTime.encodeDateTimeOffset(parts, 7))
+    .toEqual(Hex.of('87 5e 2f 05 b0 d4 49 0b 4a 01'))
+})
+
+test('datetimeoffset rounds with day carry and enforces local and UTC ranges', () => {
+  const rounded = DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('2026-12-31 23:59:59.9999999 +00:00'), 3)
+  expect(rounded).toEqual(Hex.of('00 00 00 00 8d 4a 0b 00 00'))
+  const units = new DataView(rounded.buffer).getUint32(0, true)
+  const days = (rounded[4] ?? 0) | ((rounded[5] ?? 0) << 8) | ((rounded[6] ?? 0) << 16)
+  expect(DateTime.decodeDateTimeOffset(units, days, 0, 3))
+    .toBe('2027-01-01 00:00:00.000 +00:00')
+
+  for (const invalid of [
+    '2026-02-29 00:00 +00:00',
+    '2026-01-01 00:00 +12:60',
+    '2026-01-01 00:00 +14:01'
+  ]) {
+    expect(() => DateTime.partsOf(invalid)).toThrow()
+  }
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('0001-01-01 00:00 +14:00'), 7)).toThrow(/UTC datetimeoffset instant/)
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('9999-12-31 23:59 -14:00'), 7)).toThrow(/UTC datetimeoffset instant/)
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('9999-12-31 23:59:59.9999999 +14:00'), 3)).toThrow(/rounded local/)
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('9999-12-31 09:59:59.9999999 -14:00'), 3)).toThrow(/UTC datetimeoffset instant/)
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('0001-01-01 14:00 +14:00'), 7)).not.toThrow()
+  expect(() => DateTime.encodeDateTimeOffset(
+    DateTime.partsOf('9999-12-31 09:59:59.9999999 -14:00'), 7)).not.toThrow()
+})
+
 test('parses Date objects as UTC', () => {
   const parts = DateTime.partsOf(new Date(Date.UTC(2026, 6, 1, 12, 0, 0, 250)))
   expect(parts).toMatchObject({ year: 2026, month: 7, day: 1, hours: 12, ticks: 2500000 })

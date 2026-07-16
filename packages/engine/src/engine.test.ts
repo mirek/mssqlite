@@ -700,6 +700,149 @@ test('decimal values and declared metadata survive a database restart', () => {
   }
 })
 
+test('datetimeoffset compares and orders UTC instants while preserving offsets', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE offset_values (
+      id INT PRIMARY KEY,
+      happened_at DATETIMEOFFSET(7),
+      UNIQUE (happened_at)
+    );
+    INSERT INTO offset_values VALUES
+      (1, '2026-01-01 09:30:00.1234567 +02:00'),
+      (2, '2026-01-01 08:00:00.0000000 +00:00'),
+      (3, '2026-01-01 04:00:00.0000000 -05:00');
+    CREATE INDEX ix_offset_instant ON offset_values (happened_at)
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM offset_values ORDER BY happened_at
+  `)).rows).toEqual([ [ 1 ], [ 2 ], [ 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM offset_values
+    WHERE happened_at = '2026-01-01 07:30:00.1234567 +00:00'
+      AND happened_at IN ('2026-01-01 02:30:00.1234567 -05:00')
+      AND happened_at BETWEEN '2026-01-01 07:30:00.1234567 +00:00'
+        AND '2026-01-01 07:30:00.1234567 +00:00'
+  `)).rows).toEqual([ [ 1 ] ])
+  expect(() => executeBatch(s, `
+    INSERT INTO offset_values VALUES (4, '2026-01-01 02:30:00.1234567 -05:00')
+  `)).toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+})
+
+test('datetimeoffset casts, variables, parameters, defaults and storage retain scale and offset', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE offset_storage (
+      happened_at DATETIMEOFFSET(3)
+        DEFAULT '2026-01-01 00:00:00.1236 -04:30'
+    )
+  `)
+  executeSql(s, 'INSERT INTO offset_storage VALUES (@happened_at)', [ {
+    name: '@happened_at',
+    value: '2026-12-31 23:59:59.9999999 +05:30',
+    type: { name: 'datetimeoffset', args: [ 7 ] }
+  } ])
+  const parameter = rowsOf(executeSql(s, 'SELECT @happened_at AS happened_at', [ {
+    name: '@happened_at',
+    value: '2026-07-01 02:30:00.1234567 +05:30',
+    type: { name: 'datetimeoffset', args: [ 7 ] }
+  } ]).items)
+  expect(parameter.rows).toEqual([ [ '2026-07-01 02:30:00.1234567 +05:30' ] ])
+  expect(parameter.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.datetimeOffsetN,
+    scale: 7
+  })
+  const result = rowsOf(executeBatch(s, `
+    DECLARE @value DATETIMEOFFSET(3) = '2026-07-01 02:30:00.1236 -04:30'
+    SELECT @value AS variable,
+      CAST('2026-07-01 02:30:00.1236 +05:30' AS DATETIMEOFFSET(3)) AS casted,
+      happened_at AS persisted
+    FROM offset_storage
+  `))
+  expect(result.rows).toEqual([ [
+    '2026-07-01 02:30:00.124 -04:30',
+    '2026-07-01 02:30:00.124 +05:30',
+    '2027-01-01 00:00:00.000 +05:30'
+  ] ])
+  expect(result.columns.map(column => column.typeInfo.scale)).toEqual([ 3, 3, 3 ])
+  executeBatch(s, 'INSERT INTO offset_storage DEFAULT VALUES')
+  expect(rowsOf(executeBatch(s, `
+    SELECT happened_at FROM offset_storage ORDER BY rowid DESC
+  `)).rows[0]).toEqual([ '2026-01-01 00:00:00.124 -04:30' ])
+})
+
+test('datetimeoffset date functions preserve local offset and use UTC boundaries', () => {
+  const s = open()
+  const result = rowsOf(executeBatch(s, `
+    SELECT
+      DATEADD(nanosecond, 50,
+        CAST('2026-03-29 01:59:59.1234567 +01:00' AS DATETIMEOFFSET(7))) AS ticked,
+      DATEADD(day, 1,
+        CAST('2026-03-29 01:59:59.1234567 +01:00' AS DATETIMEOFFSET(7))) AS next_day,
+      DATEDIFF(hour,
+        CAST('2026-01-01 10:00 +02:00' AS DATETIMEOFFSET),
+        CAST('2026-01-01 09:00 +00:00' AS DATETIMEOFFSET)) AS elapsed_hours,
+      DATEDIFF(nanosecond,
+        CAST('2026-01-01 00:00:00.0000000 +00:00' AS DATETIMEOFFSET),
+        CAST('2026-01-01 00:00:00.0000001 +00:00' AS DATETIMEOFFSET)) AS elapsed_ns,
+      DATEPART(tzoffset,
+        CAST('2026-01-01 00:00 +05:30' AS DATETIMEOFFSET)) AS offset_minutes,
+      DATENAME(tzoffset,
+        CAST('2026-01-01 00:00 -04:30' AS DATETIMEOFFSET)) AS offset_name
+  `))
+  expect(result.rows).toEqual([ [
+    '2026-03-29 01:59:59.1234568 +01:00',
+    '2026-03-30 01:59:59.1234567 +01:00',
+    1,
+    100,
+    330,
+    '-04:30'
+  ] ])
+  expect(result.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.datetimeOffsetN,
+    scale: 7
+  })
+})
+
+test('datetimeoffset rejects invalid local or UTC ranges and TRY_CAST returns null', () => {
+  const s = open()
+  for (const invalid of [
+    '2026-02-29 00:00 +00:00',
+    '2026-01-01 00:00 +14:01',
+    '0001-01-01 00:00 +14:00',
+    '9999-12-31 23:59 -14:00'
+  ]) {
+    expect(() => executeBatch(s, `SELECT CAST('${invalid}' AS DATETIMEOFFSET)`))
+      .toThrowError(expect.objectContaining({ number: 241 }) as Error)
+  }
+  expect(rowsOf(executeBatch(s, `
+    SELECT TRY_CAST('not a date' AS DATETIMEOFFSET(4)) AS attempted
+  `)).rows).toEqual([ [ null ] ])
+  expect(() => executeBatch(s, `
+    SELECT TRY_CAST('2026-01-01 +00:00' AS DATETIMEOFFSET(8))
+  `)).toThrowError(expect.objectContaining({ number: 1005 }) as Error)
+})
+
+test('datetimeoffset persisted values and metadata survive a database restart', () => {
+  const path = join(tmpdir(), `mssqlite-datetimeoffset-${process.pid}-${Date.now()}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, `
+      CREATE TABLE persisted_offset (happened_at DATETIMEOFFSET(6));
+      INSERT INTO persisted_offset VALUES ('2026-07-01 02:30:00.1234567 +05:30')
+    `)
+    const second = session(server({ path }))
+    const result = rowsOf(executeBatch(second, 'SELECT happened_at FROM persisted_offset'))
+    expect(result.rows).toEqual([ [ '2026-07-01 02:30:00.123457 +05:30' ] ])
+    expect(result.columns[0]?.typeInfo).toMatchObject({
+      type: DataType.DataType.datetimeOffsetN,
+      scale: 6
+    })
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
 test('ARITHABORT and ANSI_WARNINGS OFF return NULL for arithmetic failures', () => {
   const s = open()
   executeBatch(s, 'SET ARITHABORT OFF; SET ANSI_WARNINGS OFF')

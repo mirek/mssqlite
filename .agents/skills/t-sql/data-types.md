@@ -198,6 +198,14 @@ Date range: 0001-01-01 to 9999-12-31. Accuracy: 100ns. Default: 1900-01-01 00:00
 
 TZ offset range: -14:00 to +14:00. Stored/compared/sorted in UTC. Offset is preserved.
 
+Both the displayed local value and its UTC-normalized instant must be within
+`0001-01-01` through `9999-12-31`; for example, midnight on `0001-01-01
++14:00` is invalid because its UTC instant is in year 0. Conversion rounds to
+the declared scale and carries into the next/previous civil day when needed.
+Equality and ordering compare UTC instants, so `10:00 +02:00` equals `08:00
++00:00`, while formatting, `DATEPART(tzoffset, ...)`, and `DATENAME(tzoffset,
+...)` retain the original offset.
+
 ### Date/Time Default Conversion Rules
 
 - DATE only supplied → TIME defaults to 00:00:00, TIMEZONE to +00:00.

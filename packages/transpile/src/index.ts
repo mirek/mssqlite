@@ -1,5 +1,6 @@
 export * as Context from './context.ts'
 export * as DatePart from './date-part.ts'
+export * as DateTimeOffset from './datetimeoffset.ts'
 export * as Functions from './functions.ts'
 export * as Infer from './infer.ts'
 export * as Output from './output.ts'
