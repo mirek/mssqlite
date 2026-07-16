@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Decimal from './decimal.ts'
 import * as Quote from './quote.ts'
 import * as Type from './type.ts'
 import call, { convertStyle } from './functions.ts'
@@ -23,7 +24,11 @@ const subquery =
 
 const cast =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'cast' | 'convert' }): string => {
-    const inner = expression(ctx, expression_.expression)
+    const source = expression_.expression
+    const signedLiteral = source.kind === 'unary' && [ '+', '-' ].includes(source.operator) &&
+      source.operand.kind === 'number' ? `${source.operator}${source.operand.value}` : undefined
+    const inner = source.kind === 'number' ? Quote.string(source.value) :
+      signedLiteral === undefined ? expression(ctx, source) : Quote.string(signedLiteral)
     if (expression_.kind === 'convert' && expression_.style !== undefined) {
       const style = expression_.style.kind === 'number' ? Number(expression_.style.value) : undefined
       const format = style === undefined ? undefined : convertStyle(style)
@@ -37,6 +42,11 @@ const cast =
     if (Type.category(expression_.type) === 'integer') {
       return `mssqlite_cast_integer(${inner}, ${Quote.string(expression_.type.name)}, ` +
         `${expression_.try_ ? 1 : 0})`
+    }
+    if (Type.category(expression_.type) === 'decimal') {
+      const precision = typeof expression_.type.args[0] === 'number' ? expression_.type.args[0] : 18
+      const scale = typeof expression_.type.args[1] === 'number' ? expression_.type.args[1] : 0
+      return `mssqlite_decimal_cast(${inner}, ${precision}, ${scale}, ${expression_.try_ ? 1 : 0})`
     }
     switch (Type.category(expression_.type)) {
       case 'date':
@@ -58,6 +68,23 @@ const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const left = expression(ctx, expression_.left)
     const right = expression(ctx, expression_.right)
+    const leftNumeric = Decimal.numericType(ctx, expression_.left)
+    const rightNumeric = Decimal.numericType(ctx, expression_.right)
+    const decimal = Decimal.typeOf(ctx, expression_.left) !== undefined ||
+      Decimal.typeOf(ctx, expression_.right) !== undefined
+    if (decimal && leftNumeric !== undefined && rightNumeric !== undefined) {
+      if ([ '+', '-', '*', '/', '%' ].includes(expression_.operator)) {
+        const result = Decimal.resultType(expression_.operator, leftNumeric, rightNumeric)
+        return `mssqlite_decimal_arithmetic('${expression_.operator}', ${left}, ${right}, ` +
+          `${leftNumeric.scale}, ${rightNumeric.scale}, ${result.precision}, ${result.scale})`
+      }
+      if ([ '=', '<>', '!=', '<', '<=', '>', '>=', '!>', '!<' ].includes(expression_.operator)) {
+        const operator = expression_.operator === '!>' ? '<=' : expression_.operator === '!<' ? '>=' :
+          expression_.operator
+        return `(mssqlite_decimal_compare(${left}, ${right}, ${leftNumeric.scale}, ` +
+          `${rightNumeric.scale}) ${operator} 0)`
+      }
+    }
     const width = Math.max(integerWidth(expression_.left), integerWidth(expression_.right))
     switch (expression_.operator) {
       case '+': {
@@ -124,6 +151,11 @@ export const expression =
       case 'default':
         return unsupported('DEFAULT is only valid in INSERT column lists.')
       case 'number':
+        if (expression_.value.includes('.') || /e/i.test(expression_.value)) {
+          const type = Decimal.typeOf(ctx, expression_)
+          return type === undefined ? expression_.value :
+            `mssqlite_decimal_cast(${Quote.string(expression_.value)}, ${type.precision}, ${type.scale}, 0)`
+        }
         return expression_.value
       case 'string':
         return Quote.string(expression_.value)
@@ -140,6 +172,13 @@ export const expression =
       case 'nextValue':
         return `mssqlite_next_value_for(${Quote.string(expression_.sequence.join('.'))})`
       case 'unary':
+        if (expression_.operator === '-' && Decimal.typeOf(ctx, expression_.operand) !== undefined) {
+          const type = Decimal.typeOf(ctx, expression_.operand)
+          if (type !== undefined) {
+            return `mssqlite_decimal_arithmetic('-', '0', ${expression(ctx, expression_.operand)}, ` +
+              `0, ${type.scale}, ${type.precision}, ${type.scale})`
+          }
+        }
         switch (expression_.operator) {
           case 'not':
             return `(NOT ${expression(ctx, expression_.operand)})`
@@ -149,6 +188,18 @@ export const expression =
       case 'binaryOp':
         return binaryOp(ctx, expression_)
       case 'call': {
+        const callName = expression_.name[expression_.name.length - 1]?.toLowerCase()
+        const input = expression_.args[0] === undefined ? undefined : Decimal.typeOf(ctx, expression_.args[0])
+        if ([ 'sum', 'avg', 'min', 'max' ].includes(callName ?? '') && input !== undefined) {
+          const output = Decimal.typeOf(ctx, expression_)
+          const value = expression_.args[0]
+          if (output !== undefined && value !== undefined) {
+            return callName === 'min' || callName === 'max' ?
+              `mssqlite_decimal_${callName}(${expression(ctx, value)}, ${input.scale})` :
+              `mssqlite_decimal_${callName}(${expression(ctx, value)}, ${input.scale}, ` +
+                `${output.precision}, ${output.scale})`
+          }
+        }
         const rendered = call(expression_, inner => expression(ctx, inner))
         if (expression_.distinct === true) {
           const name = rendered.slice(0, rendered.indexOf('('))

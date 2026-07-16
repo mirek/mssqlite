@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
+import * as DecimalExact from './decimal.ts'
 import { nextSequenceValue } from './sequence.ts'
 import { MssqlError } from './error.ts'
 import type { Server } from './session.ts'
@@ -11,6 +12,10 @@ type Argument =
 const text =
   (value: Argument): string =>
     typeof value === 'string' ? value : String(value ?? '')
+
+const decimalArgument =
+  (value: Argument): string | number | bigint | null =>
+    value instanceof Uint8Array ? text(value) : value
 
 /** @returns last part of a dotted, optionally bracketed object name. */
 const namePart =
@@ -233,6 +238,50 @@ export const registerFunctions =
     })
     define('mssqlite_arithmetic', (operator, left, right, width) =>
       checkedArithmetic(server, operator, left, right, width), { deterministic: false })
+    define('mssqlite_decimal_cast', (value, precision, scale, try_) =>
+      DecimalExact.cast(decimalArgument(value), Number(precision), Number(scale), Number(try_) !== 0))
+    define('mssqlite_decimal_arithmetic',
+      (operator, left, right, leftScale, rightScale, precision, scale) => {
+        try {
+          return DecimalExact.arithmetic(
+            text(operator), decimalArgument(left), decimalArgument(right), Number(leftScale), Number(rightScale),
+            Number(precision), Number(scale))
+        } catch (error) {
+          if (error instanceof MssqlError && (error.number === 8115 || error.number === 8134)) {
+            return arithmeticError(server, error)
+          }
+          throw error
+        }
+      }, { deterministic: false })
+    define('mssqlite_decimal_compare', (left, right, leftScale, rightScale) =>
+      DecimalExact.compare(
+        decimalArgument(left), decimalArgument(right), Number(leftScale), Number(rightScale)))
+    define('mssqlite_decimal_sort_key', (value, scale) =>
+      DecimalExact.sortKey(decimalArgument(value), Number(scale)))
+    db.aggregate('mssqlite_decimal_sum', {
+      start: 'empty' as string,
+      step: (state, value, inputScale, precision, scale) => DecimalExact.aggregateStep(
+        String(state), decimalArgument(value as Argument), Number(inputScale), Number(precision), Number(scale)),
+      result: state => DecimalExact.aggregateResult(String(state), false)
+    })
+    db.aggregate('mssqlite_decimal_avg', {
+      start: 'empty' as string,
+      step: (state, value, inputScale, precision, scale) => DecimalExact.aggregateStep(
+        String(state), decimalArgument(value as Argument), Number(inputScale), Number(precision), Number(scale)),
+      result: state => DecimalExact.aggregateResult(String(state), true)
+    })
+    db.aggregate('mssqlite_decimal_min', {
+      start: 'empty' as string,
+      step: (state, value, scale) => DecimalExact.extremumStep(
+        String(state), decimalArgument(value as Argument), Number(scale), false),
+      result: state => state === 'empty' ? null : String(state)
+    })
+    db.aggregate('mssqlite_decimal_max', {
+      start: 'empty' as string,
+      step: (state, value, scale) => DecimalExact.extremumStep(
+        String(state), decimalArgument(value as Argument), Number(scale), true),
+      result: state => state === 'empty' ? null : String(state)
+    })
     db.aggregate('mssqlite_sum', {
       start: 'empty' as string,
       step: (state, value) => sumStep(String(state), value as Argument, 32),

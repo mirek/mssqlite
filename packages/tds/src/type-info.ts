@@ -1,6 +1,7 @@
 import { Decode, Encode, Result, type Cursor, type Read } from '@mssqlite/bytes'
 import * as Collation from './collation.ts'
 import * as DataType from './data-type.ts'
+import * as Decimal from './decimal.ts'
 
 /** PLP max length marker in USHORTLEN TYPE_INFO. */
 export const plpMarker = 0xffff
@@ -76,7 +77,7 @@ export const varbinary =
 export const decimalN =
   (precision = 18, scale = 0): TypeInfo => ({
     type: DataType.DataType.decimalN,
-    maxLength: 17,
+    maxLength: Decimal.length(precision),
     precision,
     scale
   })

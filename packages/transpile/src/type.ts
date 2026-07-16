@@ -79,7 +79,9 @@ export const columnType =
       case 'real':
         return 'REAL'
       case 'decimal':
-        return 'NUMERIC'
+        // Exact decimals are stored as canonical strings; NUMERIC affinity
+        // would coerce them through SQLite binary floating point.
+        return 'TEXT'
       case 'text':
       case 'ntext':
         return 'TEXT COLLATE NOCASE'

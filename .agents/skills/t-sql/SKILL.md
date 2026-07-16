@@ -75,8 +75,10 @@ The language pipeline lives in three packages:
   raise 8115. SUM defaults to SQL Server's int-width accumulator; explicitly
   casting its argument to BIGINT selects a 64-bit accumulator. Both ARITHABORT
   OFF and ANSI_WARNINGS OFF are required to turn an arithmetic failure into NULL;
-  otherwise the error is catchable and honors XACT_ABORT. Exact decimal
-  precision/scale formulas remain deferred to the exact-decimal implementation.
+  otherwise the error is catchable and honors XACT_ABORT. DECIMAL/NUMERIC uses
+  fixed-scale strings with scaled-BigInt casts and arithmetic, SQL Server
+  operator precision/scale formulas (including the precision-38 reduction
+  rules), half-away-from-zero rounding, and 8115/8134 errors.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

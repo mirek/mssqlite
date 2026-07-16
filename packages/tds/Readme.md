@@ -59,7 +59,8 @@ packet size, collation, begin/commit/rollback transaction).
   datetimeoffset(n). Date/time values decode to MSSQL-style strings
   (`YYYY-MM-DD HH:MM:SS.fff…`), matching how the engine stores them in SQLite.
 - `Decimal` — exact decimal codec (sign byte + little-endian magnitude) with
-  string round-tripping and scale rounding.
+  string round-tripping, half-away-from-zero scale rounding, and precision
+  overflow checks before bytes are emitted.
 - `Guid` — mixed-endian GUID (Data1-3 LE, Data4 BE) to canonical string.
 - `Collation` — 5-byte collation codec; `Collation.default_` is
   `SQL_Latin1_General_CP1_CI_AS` (`09 04 D0 00 34`).

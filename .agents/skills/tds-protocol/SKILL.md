@@ -51,3 +51,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   little-endian int64 (see §14).
 - Time-only strings need parsing support in date/time codecs — `time(n)`
   values have no date part; MSSQL treats the implied date as 1900-01-01.
+- DECIMAL/NUMERIC values cross the engine/TDS boundary as canonical
+  fixed-scale strings. `decimal.ts` rounds to the TYPE_INFO scale, validates
+  the declared precision before encoding, then emits the sign byte followed
+  by little-endian unsigned magnitude; decode returns a string, never Number.

@@ -25,8 +25,8 @@ test('select constants with metadata', () => {
   expect(result.columns.map(column => column.name)).toEqual([ 'n', 't', 'f', 'z' ])
   expect(result.columns[0]?.typeInfo.type).toBe(DataType.DataType.intN)
   expect(result.columns[1]?.typeInfo.type).toBe(DataType.DataType.nvarchar)
-  expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.floatN)
-  expect(result.rows).toEqual([ [ 1, 'x', 1.5, null ] ])
+  expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.decimalN)
+  expect(result.rows).toEqual([ [ 1, 'x', '1.5', null ] ])
 })
 
 test('create, insert, select round trip with catalog metadata', () => {
@@ -490,6 +490,69 @@ test('SUM checks int width and explicit bigint widens the accumulator', () => {
   expect(rowsOf(executeBatch(s, `
     SELECT SUM(CAST(n AS BIGINT)) AS total FROM sum_values
   `)).rows).toEqual([ [ 2147483648 ] ])
+})
+
+test('decimal casts and arithmetic stay exact with SQL precision and scale metadata', () => {
+  const s = open()
+  const result = rowsOf(executeBatch(s, `
+    SELECT
+      CAST('9999999999999999.99' AS DECIMAL(18,2)) AS boundary,
+      CAST(0.10 AS DECIMAL(10,2)) + CAST(0.20 AS DECIMAL(10,2)) AS added,
+      CAST(1 AS DECIMAL(10,2)) / CAST(8 AS DECIMAL(10,2)) AS divided,
+      CAST(1.005 AS DECIMAL(5,2)) AS rounded
+  `))
+  expect(result.rows).toEqual([ [
+    '9999999999999999.99', '0.30', '0.1250000000000', '1.01'
+  ] ])
+  expect(result.columns.map(column => [ column.typeInfo.precision, column.typeInfo.scale ])).toEqual([
+    [ 18, 2 ], [ 11, 2 ], [ 23, 13 ], [ 5, 2 ]
+  ])
+  expect(() => executeBatch(s, 'SELECT CAST(\'1000\' AS DECIMAL(3,0)) AS n'))
+    .toThrowError(expect.objectContaining({ number: 8115 }) as Error)
+})
+
+test('decimal storage, parameters, comparison, ordering and aggregates remain exact', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE exact_values (amount DECIMAL(20,2))')
+  executeSql(s, 'INSERT INTO exact_values VALUES (@amount)', [
+    { name: '@amount', value: '9999999999999999.99' }
+  ])
+  executeBatch(s, `
+    INSERT INTO exact_values VALUES (2), (-3), (10), (0.10), (0.20)
+    UPDATE exact_values SET amount += 0.01 WHERE amount = 0.20
+  `)
+  const ordered = rowsOf(executeBatch(s, `
+    SELECT amount FROM exact_values WHERE amount > -4 ORDER BY amount
+  `))
+  expect(ordered.rows).toEqual([ [ '-3.00' ], [ '0.10' ], [ '0.21' ], [ '2.00' ], [ '10.00' ],
+    [ '9999999999999999.99' ] ])
+  const aggregate = rowsOf(executeBatch(s, `
+    SELECT SUM(amount) AS total, AVG(amount) AS average,
+      MIN(amount) AS minimum, MAX(amount) AS maximum
+    FROM exact_values
+  `))
+  expect(aggregate.rows).toEqual([ [
+    '10000000000000009.30', '1666666666666668.216667', '-3.00', '9999999999999999.99'
+  ] ])
+})
+
+test('decimal values and declared metadata survive a database restart', () => {
+  const path = join(tmpdir(), `mssqlite-decimal-${process.pid}-${Date.now()}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, `
+      CREATE TABLE persisted_decimal (
+        amount DECIMAL(38,10) DEFAULT 1234567890123456789012345678.1234567890
+      );
+      INSERT INTO persisted_decimal DEFAULT VALUES
+    `)
+    const second = session(server({ path }))
+    const result = rowsOf(executeBatch(second, 'SELECT amount FROM persisted_decimal'))
+    expect(result.rows).toEqual([ [ '1234567890123456789012345678.1234567890' ] ])
+    expect(result.columns[0]?.typeInfo).toMatchObject({ precision: 38, scale: 10 })
+  } finally {
+    rmSync(path, { force: true })
+  }
 })
 
 test('ARITHABORT and ANSI_WARNINGS OFF return NULL for arithmetic failures', () => {

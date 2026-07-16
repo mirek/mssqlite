@@ -151,7 +151,8 @@ definitions (exact declared types, nullability); computed columns fall back to v
 ## UDFs
 
 `registerFunctions` defines the `mssqlite_*` functions:
-`add` (dynamic +), `newid`, `rand`, `right`, `replicate`, `reverse`,
+`add` (dynamic +), checked integer and exact scaled-decimal arithmetic,
+decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `right`, `replicate`, `reverse`,
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), `translate`,
 `datalength`, `round` (negative digits, truncate flag), `isnumeric`,
 `isdate`, `name`, `dateadd`/`datediff`/`datepart`/`datename`/`eomonth`

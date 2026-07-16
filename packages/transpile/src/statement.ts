@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Decimal from './decimal.ts'
 import * as ForJson from './for-json.ts'
 import * as Grouping from './grouping.ts'
 import * as Output from './output.ts'
@@ -276,13 +277,25 @@ const selectItem =
   }
 
 const orderBy =
-  (ctx: Context.t, items: readonly Ast.OrderBy[]): string =>
-    `ORDER BY ${items
-      .map(item => `${expression(ctx, item.expression)}${item.descending ? ' DESC' : ''}`)
-      .join(', ')}`
+  (ctx: Context.t, items: readonly Ast.OrderBy[], select_?: Ast.Select): string =>
+    Context.withSourceTypes(ctx, select_?.from, () => `ORDER BY ${items
+      .map(item => {
+        const alias = item.expression.kind === 'column' && item.expression.name.length === 1 ?
+          item.expression.name[0]?.toLowerCase() : undefined
+        const value = alias === undefined ? undefined :
+          select_?.items.find(candidate => candidate.kind === 'expression' &&
+            candidate.alias?.toLowerCase() === alias)
+        const resolved = value?.kind === 'expression' ? value.expression : item.expression
+        const type = Decimal.typeOf(ctx, resolved)
+        const rendered = expression(ctx, item.expression)
+        const key = type === undefined ? rendered :
+          `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
+        return `${key}${item.descending ? ' DESC' : ''}`
+      })
+      .join(', ')}`)
 
 const selectCore =
-  (ctx: Context.t, select_: Ast.Select): string => {
+  (ctx: Context.t, select_: Ast.Select): string => Context.withSourceTypes(ctx, select_.from, () => {
     const applyAliases = (source: Ast.TableSource | undefined): string[] =>
       source?.kind !== 'join' ?
         [] :
@@ -321,7 +334,7 @@ const selectCore =
       parts.push(`HAVING ${expression(ctx, select_.having)}`)
     }
     return parts.join(' ')
-  }
+  })
 
 // ORDER BY keys with select-list aliases substituted by their expressions, so
 // the keys stay valid inside a derived subquery that replaces the select list.
@@ -451,7 +464,7 @@ const groupingSelect =
     const sets = Grouping.expand(select_.groupBy ?? [])
     const branches = sets.map(set => selectCore(ctx, Grouping.branch(branchBase, set)))
     const with_ = definitions.length === 0 ? '' : `WITH ${definitions.join(', ')} `
-    const order = select_.orderBy === undefined ? '' : ` ${orderBy(ctx, select_.orderBy)}`
+    const order = select_.orderBy === undefined ? '' : ` ${orderBy(ctx, select_.orderBy, select_)}`
     return `${with_}${branches.join(' UNION ALL ')}${order}`
   }
 
@@ -480,7 +493,7 @@ export const select =
       parts.push(keyword, setTerm(ctx, union.select))
     }
     if (select_.orderBy !== undefined) {
-      parts.push(orderBy(ctx, select_.orderBy))
+      parts.push(orderBy(ctx, select_.orderBy, select_))
     }
     if (select_.offset !== undefined) {
       const fetch = select_.fetch === undefined ? '-1' : expression(ctx, select_.fetch)
@@ -664,7 +677,13 @@ const columnDefinition =
       parts.push('UNIQUE')
     }
     if (column.default_ !== undefined) {
-      parts.push(`DEFAULT (${expression(ctx, column.default_)})`)
+      const default_ = column.default_
+      const signed = default_.kind === 'unary' && [ '+', '-' ].includes(default_.operator) &&
+        default_.operand.kind === 'number' ? `${default_.operator}${default_.operand.value}` : undefined
+      const rendered = Type.category(column.type) === 'decimal' && default_.kind === 'number' ?
+        Quote.string(default_.value) : Type.category(column.type) === 'decimal' && signed !== undefined ?
+          Quote.string(signed) : expression(ctx, default_)
+      parts.push(`DEFAULT (${rendered})`)
     }
     if (column.check !== undefined) {
       parts.push(`CHECK (${expression(ctx, column.check)})`)
@@ -806,7 +825,7 @@ export const statement =
     const columns = statement_.kind === 'select' ?
       ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
         TableTransform.selectHints(statement_) ??
-        Grouping.selectHints(statement_) :
+        Grouping.selectHints(statement_) ?? Decimal.selectHints(statement_) :
       undefined
     return {
       sql,

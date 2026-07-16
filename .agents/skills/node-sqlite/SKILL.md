@@ -76,3 +76,7 @@ callbacks keyed by their final SQL name. On the supported Node 22 runtime a
 callback can synchronously prepare/execute a nested statement on the same
 DatabaseSync connection; mssqlite relies on that reentrant behavior to run an
 isolated T-SQL function scope and supports recursive calls up to 32 levels.
+Exact DECIMAL/NUMERIC callbacks accept and return canonical TEXT values so
+node:sqlite never converts them through JavaScript `number`. `db.aggregate()`
+states serialize scaled BigInts as strings for SUM/AVG/MIN/MAX; scalar UDFs
+provide casts, arithmetic, comparisons, and sortable keys.
