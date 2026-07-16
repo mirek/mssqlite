@@ -82,5 +82,9 @@ export const of =
     if (message.includes('already exists')) {
       return new MssqlError(`There is already an object with that name. ${message}`, 2714, 16)
     }
+    if (message.includes('integer overflow')) {
+      return new MssqlError('Arithmetic overflow error converting expression to data type int.',
+        8115, 16, 1, { statementTerminating: true })
+    }
     return new MssqlError(message)
   }

@@ -36,6 +36,17 @@ const fixed =
         `${name}(*)` :
         `${name}(${args(call, render).join(', ')})`
 
+const sum =
+  (call: Call, render: Render): string => {
+    const value = call.args[0]
+    const name = value?.kind === 'cast' || value?.kind === 'convert' ?
+      value.type.name === 'bigint' ? 'mssqlite_sum_bigint' :
+        value.type.name === 'decimal' || value.type.name === 'numeric' ? 'sum' :
+          'mssqlite_sum' :
+      'mssqlite_sum'
+    return fixed(name)(call, render)
+  }
+
 const literalDatePart =
   (call: Call): string => {
     const part = call.args[0] === undefined ? undefined : datePart(call.args[0])
@@ -174,7 +185,7 @@ const handlers: Record<string, Handler> = {
   // Aggregates and windows — native names.
   count: fixed('count'),
   count_big: fixed('count'),
-  sum: fixed('sum'),
+  sum,
   avg: fixed('avg'),
   min: fixed('min'),
   max: fixed('max'),

@@ -116,6 +116,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   allocation state as catalog rows, advances a synchronous server-wide BigInt
   registry from a nondeterministic UDF, and flushes it only outside SQLite user
   transactions so SQL Server-style rollback-independent consumption survives.
+- SQLite returns NULL for division/modulo by zero and promotes overflowing
+  integer scalar arithmetic. mssqlite therefore renders checked arithmetic UDFs
+  that evaluate operands once and raise SQL Server 8134/8115 (or NULL only under
+  ARITHABORT OFF + ANSI_WARNINGS OFF). A custom SUM aggregate checks int/bigint
+  accumulator widths instead of waiting for SQLite's signed-64-bit overflow.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

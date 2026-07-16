@@ -124,6 +124,86 @@ const castInteger =
     }
   }
 
+const arithmeticReturnsNull =
+  (server: Server): boolean =>
+    server.current?.options.get('arithabort') === 'off' &&
+    server.current.options.get('ansi_warnings') === 'off'
+
+const arithmeticError =
+  (server: Server, error: MssqlError): null => {
+    if (arithmeticReturnsNull(server)) {
+      return null
+    }
+    throw error
+  }
+
+const checkedArithmetic =
+  (server: Server, operator: Argument, left: Argument, right: Argument, width: Argument): Argument => {
+    if (left === null || right === null) {
+      return null
+    }
+    const op = text(operator)
+    if ((op === '/' || op === '%') && Number(right) === 0) {
+      return arithmeticError(server,
+        new MssqlError('Divide by zero error encountered.', 8134, 16, 1, { statementTerminating: true }))
+    }
+    if ((typeof left === 'bigint' || Number.isInteger(left)) &&
+      (typeof right === 'bigint' || Number.isInteger(right))) {
+      const a = BigInt(left as number | bigint)
+      const b = BigInt(right as number | bigint)
+      const result = op === '+' ? a + b : op === '-' ? a - b : op === '*' ? a * b :
+        op === '/' ? a / b : a % b
+      const bits = Number(width)
+      const minimum = bits === 32 ? -2147483648n : bits === 64 ? -9223372036854775808n : undefined
+      const maximum = bits === 32 ? 2147483647n : bits === 64 ? 9223372036854775807n : undefined
+      if (minimum !== undefined && maximum !== undefined && (result < minimum || result > maximum)) {
+        return arithmeticError(server, new MssqlError(
+          'Arithmetic overflow error converting expression to data type int.',
+          8115, 16, 1, { statementTerminating: true }))
+      }
+      return result >= Number.MIN_SAFE_INTEGER && result <= Number.MAX_SAFE_INTEGER ? Number(result) : result
+    }
+    const a = Number(left)
+    const b = Number(right)
+    return op === '+' ? a + b : op === '-' ? a - b : op === '*' ? a * b :
+      op === '/' ? a / b : a % b
+  }
+
+const sumStep =
+  (state: string, value: Argument, bits: 32 | 64): string => {
+    if (state === 'overflow' || value === null) {
+      return state
+    }
+    if (!Number.isInteger(value) && typeof value !== 'bigint') {
+      const current = state === 'empty' ? 0 : Number(state.slice(2))
+      return `f:${current + Number(value)}`
+    }
+    if (state.startsWith('f:')) {
+      return `f:${Number(state.slice(2)) + Number(value)}`
+    }
+    const current = state === 'empty' ? 0n : BigInt(state.slice(2))
+    const sum = current + BigInt(value as number | bigint)
+    const minimum = bits === 32 ? -2147483648n : -9223372036854775808n
+    const maximum = bits === 32 ? 2147483647n : 9223372036854775807n
+    if (sum < minimum || sum > maximum) {
+      return 'overflow'
+    }
+    return `i:${sum}`
+  }
+
+const sumResult =
+  (server: Server, state: string): Argument => {
+    if (state === 'empty') {
+      return null
+    }
+    if (state === 'overflow') {
+      return arithmeticError(server, new MssqlError(
+        'Arithmetic overflow error converting expression to data type int.',
+        8115, 16, 1, { statementTerminating: true }))
+    }
+    return state.startsWith('f:') ? Number(state.slice(2)) : Number(BigInt(state.slice(2)))
+  }
+
 /**
  * Registers all `mssqlite_*` SQL functions the transpiler emits. Session
  * scoped functions read `server.current`, set by the engine per batch.
@@ -150,6 +230,20 @@ export const registerFunctions =
         return BigInt(a as number | bigint) + BigInt(b as number | bigint)
       }
       return (a as number) + (b as number)
+    })
+    define('mssqlite_arithmetic', (operator, left, right, width) =>
+      checkedArithmetic(server, operator, left, right, width), { deterministic: false })
+    db.aggregate('mssqlite_sum', {
+      start: 'empty' as string,
+      step: (state, value) => sumStep(String(state), value as Argument, 32),
+      result: state => sumResult(server, String(state)),
+      deterministic: false
+    })
+    db.aggregate('mssqlite_sum_bigint', {
+      start: 'empty' as string,
+      step: (state, value) => sumStep(String(state), value as Argument, 64),
+      result: state => sumResult(server, String(state)),
+      deterministic: false
     })
     define('mssqlite_cast_integer', castInteger)
     define('mssqlite_string_split', (value, separator) => {

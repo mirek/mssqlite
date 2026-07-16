@@ -443,6 +443,66 @@ test('conversion failures continue while TRY_CAST returns NULL', () => {
   expect(rows.map(item => item.rows)).toEqual([ [ [ 7 ] ], [ [ null ] ] ])
 })
 
+test('divide by zero is catchable, continues, and evaluates operands once', () => {
+  const s = open()
+  executeBatch(s, 'CREATE SEQUENCE arithmetic_seq AS INT START WITH 1')
+  let failure: BatchError | undefined
+  try {
+    executeBatch(s, `
+      SELECT NEXT VALUE FOR arithmetic_seq / 0 AS bad
+      SELECT 7 AS after_error
+    `)
+  } catch (error) {
+    failure = error as BatchError
+  }
+  expect(failure?.items.map(item => item.kind)).toEqual([ 'error', 'rows' ])
+  expect(failure?.items.find(item => item.kind === 'error')).toMatchObject({
+    error: { number: 8134 }
+  })
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR arithmetic_seq AS n')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, `
+    BEGIN TRY SELECT 1 / 0 AS bad END TRY
+    BEGIN CATCH SELECT ERROR_NUMBER() AS n END CATCH
+  `)).rows).toEqual([ [ 8134 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT NULL / 0 AS n')).rows).toEqual([ [ null ] ])
+})
+
+test('checked integer arithmetic raises overflow while bigint succeeds', () => {
+  const s = open()
+  for (const sql of [
+    'SELECT 2147483647 + 1 AS n',
+    'SELECT 50000 * 50000 AS n',
+    'SELECT CAST(-2147483648 AS INT) / -1 AS n'
+  ]) {
+    expect(() => executeBatch(s, sql))
+      .toThrowError(expect.objectContaining({ number: 8115 }) as Error)
+  }
+  expect(rowsOf(executeBatch(s, `
+    SELECT CAST(2147483647 AS BIGINT) + 1 AS n
+  `)).rows).toEqual([ [ 2147483648 ] ])
+})
+
+test('SUM checks int width and explicit bigint widens the accumulator', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE sum_values (n INT); INSERT INTO sum_values VALUES (2147483647), (1)')
+  expect(() => executeBatch(s, 'SELECT SUM(n) AS total FROM sum_values'))
+    .toThrowError(expect.objectContaining({ number: 8115 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT SUM(CAST(n AS BIGINT)) AS total FROM sum_values
+  `)).rows).toEqual([ [ 2147483648 ] ])
+})
+
+test('ARITHABORT and ANSI_WARNINGS OFF return NULL for arithmetic failures', () => {
+  const s = open()
+  executeBatch(s, 'SET ARITHABORT OFF; SET ANSI_WARNINGS OFF')
+  expect(rowsOf(executeBatch(s, `
+    SELECT 1 / 0 AS divided, 2147483647 + 1 AS overflowed
+  `)).rows).toEqual([ [ null, null ] ])
+  executeBatch(s, 'SET ANSI_WARNINGS ON')
+  expect(() => executeBatch(s, 'SELECT 1 / 0 AS divided'))
+    .toThrowError(expect.objectContaining({ number: 8134 }) as Error)
+})
+
 test('constraint errors leave XACT_ABORT OFF transactions committable', () => {
   const s = open()
   executeBatch(s, 'CREATE TABLE xact_continue (id INT PRIMARY KEY)')

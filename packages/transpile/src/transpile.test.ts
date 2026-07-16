@@ -186,7 +186,7 @@ test('variables become parameters', () => {
 })
 
 test('plus resolves to add, concat or dynamic dispatch', () => {
-  expect(scalarOf('1 + 2')).toBe('(1 + 2)')
+  expect(scalarOf('1 + 2')).toBe('mssqlite_arithmetic(\'+\', 1, 2, 32)')
   expect(scalarOf('\'a\' + \'b\'')).toBe('(\'a\' || \'b\')')
   // A column of unknown type + a string is dynamic — MSSQL concatenates two
   // strings but numerically adds a string/number mix, which mssqlite_add does.
@@ -194,7 +194,8 @@ test('plus resolves to add, concat or dynamic dispatch', () => {
   // A literal number + literal string is numeric addition in T-SQL, not concat.
   expect(scalarOf('3 + \'5\'')).toBe('mssqlite_add(3, \'5\')')
   expect(scalarOf('a + b')).toBe('mssqlite_add("a", "b")')
-  expect(scalarOf('LEN(a) + 1')).toBe('(length(rtrim("a")) + 1)')
+  expect(scalarOf('LEN(a) + 1')).toBe(
+    'mssqlite_arithmetic(\'+\', length(rtrim("a")), 1, 32)')
 })
 
 test('compound update operators reuse add/concat/xor rendering', () => {
@@ -202,7 +203,8 @@ test('compound update operators reuse add/concat/xor rendering', () => {
     .toBe('UPDATE "t" SET "name" = mssqlite_add("name", \'!\') WHERE ("id" = 1)')
   expect(sqlOf('UPDATE t SET flags ^= 4'))
     .toBe('UPDATE "t" SET "flags" = (("flags" | 4) - ("flags" & 4))')
-  expect(sqlOf('UPDATE t SET n -= 2')).toBe('UPDATE "t" SET "n" = ("n" - 2)')
+  expect(sqlOf('UPDATE t SET n -= 2')).toBe(
+    'UPDATE "t" SET "n" = mssqlite_arithmetic(\'-\', "n", 2, 32)')
 })
 
 test('!> and !< comparison operators', () => {

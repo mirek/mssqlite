@@ -213,6 +213,19 @@ test('statement errors and successful rows stay ordered over tedious', async () 
   expect(events).toEqual([ 'error:2627', 'row:1', 'error:2627', 'row:2' ])
 })
 
+test('arithmetic errors are catchable over tedious', async () => {
+  await expect(query('SELECT 1 / 0 AS bad')).rejects.toMatchObject({ number: 8134 })
+  const caught = await query(`
+    BEGIN TRY
+      SELECT 2147483647 + 1 AS bad
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS number
+    END CATCH
+  `)
+  expect(caught.rows).toEqual([ { number: 8115 } ])
+})
+
 test('transactions via tedious api', async () => {
   await new Promise<void>((resolve, reject) => {
     connection.beginTransaction(error => error ? reject(error) : resolve())

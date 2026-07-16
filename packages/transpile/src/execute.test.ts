@@ -5,8 +5,27 @@ import { statement } from './index.ts'
 
 /** Executes transpiled T-SQL against a real SQLite database. */
 const database =
-  (): DatabaseSync =>
-    new DatabaseSync(':memory:')
+  (): DatabaseSync => {
+    const db = new DatabaseSync(':memory:')
+    db.function('mssqlite_arithmetic', (operator, left, right, _width) => {
+      if (left === null || right === null) {
+        return null
+      }
+      const a = Number(left)
+      const b = Number(right)
+      return operator === '+' ? a + b : operator === '-' ? a - b : operator === '*' ? a * b :
+        operator === '/' ? a / b : a % b
+    })
+    db.aggregate<number>('mssqlite_sum', {
+      start: 0,
+      step: (sum, value) => sum + Number(value ?? 0)
+    })
+    db.aggregate<number>('mssqlite_sum_bigint', {
+      start: 0,
+      step: (sum, value) => sum + Number(value ?? 0)
+    })
+    return db
+  }
 
 const tableFunctionDatabase =
   (): DatabaseSync => {
