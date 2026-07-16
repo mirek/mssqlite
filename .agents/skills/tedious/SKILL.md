@@ -74,6 +74,9 @@ connection.execSql(request)
   `server.test.ts`).
 - Keep a table variable's declaration and all references in one SQL-batch
   request; a later `execSql` call is a new batch and must receive error 1087.
+- TVF result metadata is available even for NULL/empty inputs. Remember that
+  tedious surfaces STRING_SPLIT's bigint `ordinal` as a string, while
+  GENERATE_SERIES over int literals retains IntN(4) and surfaces numbers.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

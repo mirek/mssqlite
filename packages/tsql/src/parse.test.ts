@@ -457,6 +457,44 @@ test('table variable declarations and DML references', () => {
   expect(() => parseStatement('DECLARE @t TABLE (id INT), @x INT')).toThrow()
 })
 
+test('table-valued functions parse as aliased table sources', () => {
+  expect(parseStatement(`
+    SELECT s.token, s.position
+    FROM STRING_SPLIT('a,b', ',', 1) AS s (token, position)
+  `)).toMatchObject({
+    kind: 'select',
+    from: {
+      kind: 'function',
+      name: [ 'STRING_SPLIT' ],
+      args: [ { kind: 'string' }, { kind: 'string' }, { kind: 'number' } ],
+      alias: 's',
+      columns: [ 'token', 'position' ]
+    }
+  })
+  expect(parseStatement(`
+    SELECT j.id, j.details
+    FROM OPENJSON(@json, '$.items') WITH (
+      id INT '$.itemId',
+      details NVARCHAR(MAX) '$.details' AS JSON
+    ) j
+  `)).toMatchObject({
+    from: {
+      kind: 'function',
+      name: [ 'OPENJSON' ],
+      with: [
+        { name: 'id', type: { name: 'int' }, path: '$.itemId', asJson: false },
+        { name: 'details', type: { name: 'nvarchar', args: [ 'max' ] }, asJson: true }
+      ],
+      alias: 'j'
+    }
+  })
+  expect(parseStatement('SELECT value FROM GENERATE_SERIES(1, 5, 2)')).toMatchObject({
+    from: { kind: 'function', name: [ 'GENERATE_SERIES' ], args: [ {}, {}, {} ] }
+  })
+  expect(() => parseStatement('SELECT * FROM STRING_SPLIT()')).toThrow()
+  expect(() => parseStatement('SELECT * FROM OPENJSON(@j) WITH (id INT id)')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',

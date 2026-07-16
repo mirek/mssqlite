@@ -44,7 +44,9 @@ const connection = new Connection({
 - **SQL batch (0x01)** — full T-SQL batches through the engine;
   COLMETADATA + ROW streams, DONE with row counts, INFO for PRINT,
   ERROR tokens with MSSQL numbers/severity on failure. Table variables
-  remain scoped to the batch or stored procedure that declares them.
+  remain scoped to the batch or stored procedure that declares them;
+  `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` stream ordinary result
+  rows with predeclared metadata.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, OUTPUT parameters via RETURNVALUE,

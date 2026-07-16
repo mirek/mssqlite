@@ -97,6 +97,14 @@ export type SelectItem =
       readonly expression: Expression
     }
 
+/** Column projected by an explicit OPENJSON WITH schema. */
+export type TableFunctionColumn = {
+  readonly name: string,
+  readonly type: TypeName.t,
+  readonly path?: string,
+  readonly asJson: boolean
+}
+
 /** Table hint list is parsed and preserved but otherwise ignored. */
 export type TableSource =
   | {
@@ -104,6 +112,14 @@ export type TableSource =
       readonly name: QualifiedName,
       readonly alias?: string,
       readonly hints?: readonly string[]
+    }
+  | {
+      readonly kind: 'function',
+      readonly name: QualifiedName,
+      readonly args: readonly Expression[],
+      readonly with?: readonly TableFunctionColumn[],
+      readonly alias?: string,
+      readonly columns?: readonly string[]
     }
   | { readonly kind: 'derived', readonly select: Select, readonly alias: string }
   | {

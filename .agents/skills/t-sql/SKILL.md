@@ -101,11 +101,19 @@ The language pipeline lives in three packages:
   scopes it to the declaring batch or procedure; nested procedures and
   `sp_executesql` cannot see a caller's table variables. Backing tables are
   dropped on normal or exceptional scope exit.
+- FROM table sources recognize function calls with aliases and positional
+  column aliases. Implemented built-ins are `STRING_SPLIT(string, separator
+  [, enable_ordinal])`, default/explicit-schema `OPENJSON(json [, path])
+  [WITH (...)]`, and `GENERATE_SERIES(start, stop [, step])`. STRING_SPLIT
+  requires constant 0/1/NULL for `enable_ordinal`, returns no rows for NULL
+  or empty input, preserves empty interior tokens, and only promises source
+  position through its bigint `ordinal` column. OPENJSON supports lax paths;
+  strict path mode remains unsupported.
 
 ### Not yet implemented (raise clean errors)
 
 CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, APPLY, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
-table-valued functions in FROM (STRING_SPLIT, OPENJSON), FOR JSON/XML,
+FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.

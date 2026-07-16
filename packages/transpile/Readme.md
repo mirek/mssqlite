@@ -39,6 +39,11 @@ const { sql, variables } = statement(parseStatement(
   Every rendered statement reports the variables it binds.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.
+- **Table-valued functions** — `STRING_SPLIT` adapts a JSON-array UDF
+  through `json_each`, `OPENJSON` projects SQLite JSON1 rows to SQL Server's
+  default or explicit schema, and `GENERATE_SERIES` uses a recursive CTE
+  because Node's bundled SQLite omits the series extension. Rendered SELECTs
+  carry declared column hints so empty results retain exact TDS metadata.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

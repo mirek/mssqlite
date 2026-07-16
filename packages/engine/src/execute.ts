@@ -364,7 +364,7 @@ const executeStatement =
           return undefined
         }
         const rendered = Transpile.statement(statement)
-        items.push(query(session, rendered.sql, rendered.variables))
+        items.push(query(session, rendered.sql, rendered.variables, rendered.columns ?? []))
         return undefined
       }
       case 'insert': {

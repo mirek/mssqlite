@@ -3,15 +3,22 @@ import { bindable, bindings } from './bind.ts'
 import { columnsOf } from './metadata.ts'
 import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
+import type { ColumnHint } from '@mssqlite/transpile'
 import type { Item, Rows } from './execute.ts'
 import type { Session, Value } from './session.ts'
 
 /** @returns result rows of a rendered SELECT with TDS column metadata. */
 export const query =
-  (session: Session, sql: string, variables: readonly string[]): Rows => {
+  (
+    session: Session,
+    sql: string,
+    variables: readonly string[],
+    hints: readonly ColumnHint[] = []
+  ): Rows => {
     const statement = session.db.prepare(sql)
     const records = statement.all(bindings(session, variables)) as Record<string, Value>[]
-    const columns = columnsOf(session.db, statement, records, session.tableVariables.values())
+    const columns = columnsOf(
+      session.db, statement, records, session.tableVariables.values(), hints)
     const rows = records.map(record => columns.map(column => record[column.name] ?? null))
     session.rowCount = rows.length
     return { kind: 'rows', columns, rows, rowCount: rows.length }

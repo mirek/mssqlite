@@ -188,6 +188,35 @@ test('functions over the wire', async () => {
   ])
 })
 
+test('table-valued functions over the wire include empty inputs', async () => {
+  const split = await query(`
+    SELECT value, ordinal
+    FROM STRING_SPLIT(N'a,,b', N',', 1)
+    ORDER BY ordinal
+  `)
+  expect(split.rows).toEqual([
+    { value: 'a', ordinal: '1' },
+    { value: '', ordinal: '2' },
+    { value: 'b', ordinal: '3' }
+  ])
+  expect((await query('SELECT * FROM STRING_SPLIT(NULL, \',\')')).rows).toEqual([])
+  expect((await query('SELECT * FROM STRING_SPLIT(\'\', \',\')')).rows).toEqual([])
+
+  const json = await query(`
+    SELECT id, name
+    FROM OPENJSON('{"items":[{"id":1,"name":"a"},{"id":2,"name":"b"}]}', '$.items')
+    WITH (id INT, name NVARCHAR(20))
+    ORDER BY id
+  `)
+  expect(json.rows).toEqual([ { id: 1, name: 'a' }, { id: 2, name: 'b' } ])
+  expect((await query('SELECT * FROM OPENJSON(NULL)')).rows).toEqual([])
+  expect((await query('SELECT * FROM OPENJSON(\'[]\')')).rows).toEqual([])
+
+  const series = await query('SELECT value FROM GENERATE_SERIES(1, 5, 2)')
+  expect(series.rows).toEqual([ { value: 1 }, { value: 3 }, { value: 5 } ])
+  expect((await query('SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
+})
+
 test('update and delete counts', async () => {
   const update = await query('UPDATE users SET age = 31 WHERE name = N\'Alice\'')
   expect(update.rowCount).toBe(1)

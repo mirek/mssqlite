@@ -54,6 +54,31 @@ test('joins', () => {
     .toBe('SELECT * FROM "a" CROSS JOIN "b"')
 })
 
+test('table-valued functions render with declared result metadata', () => {
+  const split = statement(parseStatement(
+    'SELECT * FROM STRING_SPLIT(N\'a,b\', \',\', 1) AS s'))
+  expect(split.sql).toContain('json_each(mssqlite_string_split')
+  expect(split.columns).toEqual([
+    { name: 'value', type: { name: 'nvarchar', args: [ 3 ] }, nullable: false },
+    { name: 'ordinal', type: { name: 'bigint', args: [] }, nullable: false }
+  ])
+
+  const json = statement(parseStatement(
+    'SELECT id, label FROM OPENJSON(@j) WITH (id INT, label NVARCHAR(20)) AS j'))
+  expect(json.sql).toContain('FROM json_each(')
+  expect(json.columns).toEqual([
+    { name: 'id', type: { name: 'int', args: [] }, nullable: true },
+    { name: 'label', type: { name: 'nvarchar', args: [ 20 ] }, nullable: true }
+  ])
+
+  expect(sqlOf('SELECT value FROM GENERATE_SERIES(1, 3)')).toContain('WITH RECURSIVE')
+  expect(() => sqlOf('SELECT * FROM STRING_SPLIT(\'a,b\', \',\', @ordinal)'))
+    .toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT * FROM GENERATE_SERIES(1, 3, 0)'))
+    .toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT * FROM unknown_tvf(1)')).toThrow(UnsupportedError)
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')

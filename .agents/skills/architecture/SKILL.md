@@ -62,6 +62,13 @@ the engine:
   name, and drops all backing tables on scope exit. Procedure calls and
   `sp_executesql` swap in isolated table-variable maps, so callers' table
   variables are not visible to nested work.
+- **Built-in TVFs render as derived sources** — FROM-source function ASTs
+  dispatch `STRING_SPLIT` to a JSON-array scalar adapter plus `json_each`,
+  `OPENJSON` to JSON1 with SQL Server key/value/type or explicit WITH
+  projections, and `GENERATE_SERIES` to a recursive CTE (the Node SQLite
+  build has no series module). The transpiler attaches output type hints to
+  simple TVF SELECTs so the engine can emit exact metadata before stepping,
+  including for empty inputs.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an

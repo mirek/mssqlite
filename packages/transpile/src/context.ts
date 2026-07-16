@@ -5,6 +5,7 @@
 export type Context = {
   /** Lowercased variable tokens in order of first use, e.g. `@x`, `@@rowcount`. */
   readonly variables: string[]
+  nextSource: number
 }
 
 export type t =
@@ -13,7 +14,7 @@ export type t =
 /** @returns fresh render context. */
 export const of =
   (): Context =>
-    ({ variables: [] })
+    ({ variables: [], nextSource: 1 })
 
 /**
  * @returns SQLite parameter name of a T-SQL variable — `@x` stays `@x`,

@@ -45,6 +45,10 @@ const items = executeBatch(s, `
   OUTPUT INTO references resolve through that scope; nested procedures and
   dynamic batches get isolated scopes, and every backing table is dropped
   when its declaring scope exits, including on errors.
+- **Table-valued functions** — SELECT sources support `STRING_SPLIT`,
+  `OPENJSON` (default and explicit WITH schemas), and `GENERATE_SERIES`.
+  Small scalar adapters validate splitting/series arguments; SQLite
+  `json_each` and a streaming recursive CTE produce the rows.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
@@ -80,7 +84,8 @@ const items = executeBatch(s, `
 
 ## Column metadata
 
-Result columns get TDS `TYPE_INFO` two ways: `StatementSync.columns()`
+Result columns get TDS `TYPE_INFO` three ways: table-valued-function
+renderings provide declared hints before execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
 definitions (exact declared types, nullability); computed columns fall back to value-shape inference
 (int32/int64/float/nvarchar(max)/varbinary(max)/bit).
