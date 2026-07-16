@@ -46,7 +46,7 @@ const outputClause: Parser.t<Ast.Output | undefined> =
       C.maybe(C.map(
         C.seq(
           C.keyword('into'),
-          C.qualifiedName,
+          C.tableName,
           C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(','))))
         ),
         ([ , table, columns ]) => ({
@@ -67,7 +67,7 @@ export const insert: Parser.t<Ast.Statement> =
     C.seq(
       C.keyword('insert'),
       C.maybe(C.keyword('into')),
-      C.qualifiedName,
+      C.tableName,
       C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))),
       outputClause,
       C.first(
@@ -113,7 +113,7 @@ export const update: Parser.t<Ast.Statement> =
     C.seq(
       C.keyword('update'),
       topClause,
-      C.qualifiedName,
+      C.tableName,
       C.keyword('set'),
       C.sepBy1(assignment, C.punct(',')),
       outputClause,
@@ -138,7 +138,7 @@ export const delete_: Parser.t<Ast.Statement> =
       C.keyword('delete'),
       topClause,
       C.maybe(C.keyword('from')),
-      C.qualifiedName,
+      C.tableName,
       outputClause,
       C.maybe(C.map(C.seq(C.keyword('from'), tableSource), ([ , source ]) => source)),
       C.maybe(C.map(C.seq(C.keyword('where'), expression), ([ , value ]) => value))

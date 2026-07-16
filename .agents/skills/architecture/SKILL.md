@@ -55,6 +55,13 @@ the engine:
   supports `@`-parameters natively); each rendered statement carries its
   used-variable list so the engine binds exactly those. Globals map to
   `@__rowcount`-style parameters bound from session state.
+- **Table variables are scoped temp tables** — `DECLARE @t TABLE (...)`
+  allocates a collision-free `temp` table keyed by the active batch or
+  procedure scope. The engine resolves object-position `@t` references
+  before transpilation, keeps declared column metadata beside the backing
+  name, and drops all backing tables on scope exit. Procedure calls and
+  `sp_executesql` swap in isolated table-variable maps, so callers' table
+  variables are not visible to nested work.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -141,8 +148,10 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No CREATE FUNCTION/TRIGGER, PIVOT, APPLY, cursors, table variables,
-  sequences. MERGE OUTPUT may not reference source columns.
+- No CREATE FUNCTION/TRIGGER, PIVOT, APPLY, cursors, or sequences. MERGE
+  OUTPUT may not reference source columns. Unlike SQL Server, table
+  variable changes currently participate in the surrounding SQLite
+  transaction and therefore roll back with it.
 - Batch error semantics are all-or-nothing: any statement error aborts
   the rest of the batch (MSSQL continues past most statement-level
   errors); TRY/CATCH is the supported way to continue. Division by zero

@@ -225,3 +225,10 @@ export const variable: Parser.t<string> =
       Result.ok(reader, token.value, 1) :
       Result.fail(reader, 'Expected variable.')
   }
+
+/** @returns parser matching a regular object name or one-part table variable. */
+export const tableName: Parser.t<string[]> =
+  first(
+    map(variable, name => [ name ]),
+    qualifiedName
+  )

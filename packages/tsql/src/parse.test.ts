@@ -420,6 +420,43 @@ test('declare and set', () => {
   })
 })
 
+test('table variable declarations and DML references', () => {
+  expect(parseStatement(`
+    DECLARE @items TABLE (
+      id INT IDENTITY(1,1) PRIMARY KEY,
+      name NVARCHAR(50) NOT NULL,
+      qty INT DEFAULT 1,
+      UNIQUE (name),
+      CHECK (qty >= 0)
+    )
+  `)).toMatchObject({
+    kind: 'declare',
+    declarations: [ {
+      kind: 'table',
+      name: '@items',
+      columns: [
+        { name: 'id', identity: { seed: 1, increment: 1 }, primaryKey: true },
+        { name: 'name', type: { name: 'nvarchar', args: [ 50 ] }, nullable: false },
+        { name: 'qty', default_: { kind: 'number', value: '1' } }
+      ],
+      constraints: [ { kind: 'unique' }, { kind: 'check' } ]
+    } ]
+  })
+  const statements = parse(`
+    INSERT INTO @items (name) VALUES (N'a')
+    UPDATE @items SET qty = 2 WHERE name = N'a'
+    DELETE FROM @items WHERE qty = 0
+    SELECT * FROM @items AS i
+  `)
+  expect(statements).toMatchObject([
+    { kind: 'insert', table: [ '@items' ] },
+    { kind: 'update', target: [ '@items' ] },
+    { kind: 'delete', target: [ '@items' ] },
+    { kind: 'select', from: { kind: 'table', name: [ '@items' ], alias: 'i' } }
+  ])
+  expect(() => parseStatement('DECLARE @t TABLE (id INT), @x INT')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',

@@ -62,6 +62,77 @@ test('variables, set and select assignment', () => {
   expect(rowsOf(executeBatch(s, 'SELECT @m AS m')).rows).toEqual([ [ 7 ] ])
 })
 
+test('table variables support DML, constraints and declared metadata', () => {
+  const s = open()
+  const items = executeBatch(s, `
+    DECLARE @items TABLE (
+      id INT IDENTITY(1,1) PRIMARY KEY,
+      name NVARCHAR(20) NOT NULL,
+      qty INT DEFAULT 1,
+      UNIQUE (name)
+    )
+    INSERT INTO @items (name) VALUES (N'apple'), (N'pear')
+    UPDATE @items SET name = name + N'!', qty += 2 WHERE id = 1
+    DELETE FROM @items WHERE id = 2
+    SELECT id, name, qty FROM @items ORDER BY id
+  `)
+  const result = rowsOf(items)
+  expect(result.rows).toEqual([ [ 1, 'apple!', 3 ] ])
+  expect(result.columns[0]).toMatchObject({ nullable: false, typeInfo: { maxLength: 4 } })
+  expect(result.columns[1]).toMatchObject({ nullable: false, typeInfo: { maxLength: 40 } })
+  expect(s.lastIdentity).toBe(2)
+})
+
+test('table variable backing tables clean up at batch end', () => {
+  const s = open()
+  executeBatch(s, 'DECLARE @t TABLE (id INT); INSERT INTO @t VALUES (1)')
+  const remaining = s.db.prepare(
+    'SELECT COUNT(*) AS n FROM sqlite_temp_master WHERE name LIKE \'#__mssqlite_table_%\''
+  ).get() as { n: number }
+  expect(remaining.n).toBe(0)
+  expect(() => executeBatch(s, 'SELECT * FROM @t')).toThrowError(
+    expect.objectContaining({ number: 1087 }) as Error
+  )
+  expect(rowsOf(executeBatch(s, 'DECLARE @t TABLE (id INT); SELECT * FROM @t')).rows).toEqual([])
+})
+
+test('table variables are isolated across procedure and dynamic batch scopes', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE PROCEDURE dbo.local_table AS
+    BEGIN
+      DECLARE @t TABLE (id INT)
+      INSERT INTO @t VALUES (2)
+      SELECT id FROM @t
+    END
+  `)
+  const items = executeBatch(s, `
+    DECLARE @t TABLE (id INT)
+    INSERT INTO @t VALUES (1)
+    EXEC local_table
+    SELECT id FROM @t
+  `).filter((item): item is Rows => item.kind === 'rows')
+  expect(items.map(item => item.rows)).toEqual([ [ [ 2 ] ], [ [ 1 ] ] ])
+
+  executeBatch(s, 'CREATE PROCEDURE dbo.read_caller AS SELECT * FROM @caller')
+  expect(() => executeBatch(s, 'DECLARE @caller TABLE (id INT); EXEC read_caller')).toThrowError(
+    expect.objectContaining({ number: 1087 }) as Error
+  )
+
+  const dynamic = executeBatch(s, `
+    DECLARE @outer TABLE (id INT)
+    INSERT INTO @outer VALUES (7)
+    BEGIN TRY
+      EXEC sp_executesql N'SELECT * FROM @outer'
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS error_number
+    END CATCH
+    SELECT id FROM @outer
+  `).filter((item): item is Rows => item.kind === 'rows')
+  expect(dynamic.map(item => item.rows)).toEqual([ [ [ 1087 ] ], [ [ 7 ] ] ])
+})
+
 test('globals', () => {
   const s = open()
   executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, v INT)')

@@ -4,6 +4,12 @@ import { parse } from '@mssqlite/tsql'
 import { bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { executeMerge } from './merge.ts'
+import {
+  declareTableVariable,
+  resolveTableVariableExpression,
+  resolveTableVariables,
+  withTableVariableScope
+} from './table-variable.ts'
 import { MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import type { Ast } from '@mssqlite/tsql'
@@ -42,7 +48,7 @@ type Signal =
 /** @returns scalar value of a T-SQL expression evaluated in session context. */
 export const evaluate =
   (session: Session, expression: Ast.Expression): Value => {
-    const rendered = Transpile.scalar(expression)
+    const rendered = Transpile.scalar(resolveTableVariableExpression(session, expression))
     const statement = session.db.prepare(`SELECT (${rendered.sql}) AS value`)
     const row = statement.get(bindings(session, rendered.variables)) as { value: Value } | undefined
     return row?.value ?? null
@@ -50,7 +56,7 @@ export const evaluate =
 
 const truthy =
   (session: Session, condition: Ast.Expression): boolean => {
-    const rendered = Transpile.scalar(condition)
+    const rendered = Transpile.scalar(resolveTableVariableExpression(session, condition))
     const statement = session.db.prepare(`SELECT (CASE WHEN ${rendered.sql} THEN 1 ELSE 0 END) AS value`)
     const row = statement.get(bindings(session, rendered.variables)) as { value: Value } | undefined
     return row?.value === 1
@@ -82,6 +88,12 @@ const raiserrorFormat =
 
 const hasIdentity =
   (session: Session, table: Ast.QualifiedName): boolean => {
+    const backing = table[table.length - 1]?.toLowerCase()
+    const tableVariable = [ ...session.tableVariables.values() ].find(variable =>
+      variable.table[variable.table.length - 1]?.toLowerCase() === backing)
+    if (tableVariable !== undefined) {
+      return tableVariable.columns.some(column => column.identity !== undefined)
+    }
     const objectId = Catalog.objectIdOf(session.db, table)
     return objectId !== undefined &&
       Catalog.tableColumns(session.db, objectId).some(column => column.is_identity === 1)
@@ -101,7 +113,7 @@ const runWithOutput =
     const rendered = Transpile.statement(statement)
     const prepared = session.db.prepare(rendered.sql)
     const records = prepared.all(bindings(session, rendered.variables)) as Record<string, Value>[]
-    const columns = columnsOf(session.db, prepared, records)
+    const columns = columnsOf(session.db, prepared, records, session.tableVariables.values())
     const rows = records.map(record => columns.map(column => record[column.name] ?? null))
     session.rowCount = rows.length
     if (statement.kind === 'insert' && rows.length > 0 && hasIdentity(session, statement.table)) {
@@ -339,7 +351,8 @@ const executeTransaction =
   }
 
 const executeStatement =
-  (session: Session, statement: Ast.Statement, items: Item[]): Signal => {
+  (session: Session, statement_: Ast.Statement, items: Item[]): Signal => {
+    const statement = resolveTableVariables(session, statement_)
     switch (statement.kind) {
       case 'select': {
         if (statement.into !== undefined) {
@@ -443,6 +456,15 @@ const executeStatement =
         return undefined
       case 'declare':
         for (const declaration of statement.declarations) {
+          if (declaration.kind === 'table') {
+            declareTableVariable(session, declaration)
+            continue
+          }
+          if (session.tableVariables.has(declaration.name.toLowerCase())) {
+            throw new MssqlError(
+              `The variable name '${declaration.name}' has already been declared. Variable names must be unique within a query batch or stored procedure.`,
+              134, 15)
+          }
           const value = declaration.initial === undefined ?
             null :
             evaluate(session, declaration.initial)
@@ -714,12 +736,14 @@ const callUserProcedure =
     const outputs = new Map<string, Value>()
     let status: Value = null
     try {
-      for (const inner of procedure.body) {
-        const signal = executeStatement(session, inner, items)
-        if (signal === 'return') {
-          break
+      withTableVariableScope(session, () => {
+        for (const inner of procedure.body) {
+          const signal = executeStatement(session, inner, items)
+          if (signal === 'return') {
+            break
+          }
         }
-      }
+      })
       status = session.returnValue
       for (const key of outputTargets.keys()) {
         outputs.set(key, session.variables.get(key)?.value ?? null)
@@ -845,15 +869,17 @@ export const executeBatch =
     session.server.current = session
     const items: Item[] = []
     try {
-      const statements = parse(sql)
-      for (const statement of statements) {
-        const signal = executeStatement(session, statement, items)
-        if (signal === 'return') {
-          break
+      return withTableVariableScope(session, () => {
+        const statements = parse(sql)
+        for (const statement of statements) {
+          const signal = executeStatement(session, statement, items)
+          if (signal === 'return') {
+            break
+          }
         }
-      }
-      session.lastError = 0
-      return items
+        session.lastError = 0
+        return items
+      })
     } catch (error) {
       const mapped = errorOf(error)
       session.lastError = mapped.number

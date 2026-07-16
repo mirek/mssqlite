@@ -2,7 +2,16 @@ import * as C from './combinators.ts'
 import * as Reader from './reader.ts'
 import * as Result from './result.ts'
 import typeName from './type-name.ts'
-import { alterTable, createIndex, createTable, createView, drop, dropIndex } from './ddl.ts'
+import {
+  alterTable,
+  columnDefinition,
+  createIndex,
+  createTable,
+  createView,
+  drop,
+  dropIndex,
+  tableConstraint
+} from './ddl.ts'
 import { delete_, insert, merge, truncate, update } from './dml.ts'
 import { expression } from './expression.ts'
 import { select } from './select.ts'
@@ -12,26 +21,52 @@ import type * as Parser from './parser.ts'
 const statementRef: Parser.t<Ast.Statement> =
   reader => statement(reader)
 
-/** DECLARE statement parser. */
+const scalarDeclaration: Parser.t<Ast.Declaration & { kind: 'scalar' }> =
+  C.map(
+    C.seq(
+      C.variable,
+      C.maybe(C.keyword('as')),
+      typeName,
+      C.maybe(C.map(C.seq(C.punct('='), expression), ([ , value ]) => value))
+    ),
+    ([ name, , type, initial ]) => ({
+      kind: 'scalar' as const,
+      name,
+      type,
+      ...initial === undefined ? {} : { initial }
+    })
+  )
+
+const tableDeclaration: Parser.t<Ast.Declaration & { kind: 'table' }> =
+  C.map(
+    C.seq(
+      C.variable,
+      C.maybe(C.keyword('as')),
+      C.keyword('table'),
+      C.parens(C.sepBy1(
+        C.first<(Parser.t<Ast.TableConstraint | Ast.ColumnDefinition>)[]>(
+          tableConstraint,
+        columnDefinition
+        ),
+        C.punct(',')
+      ))
+    ),
+    ([ name, , , members ]) => ({
+      kind: 'table' as const,
+      name,
+      columns: members.filter((member): member is Ast.ColumnDefinition => !('kind' in member)),
+      constraints: members.filter((member): member is Ast.TableConstraint => 'kind' in member)
+    })
+  )
+
+/** DECLARE statement parser. A table variable must be the only declaration. */
 const declare: Parser.t<Ast.Statement> =
   C.map(
     C.seq(
       C.keyword('declare'),
-      C.sepBy1(
-        C.map(
-          C.seq(
-            C.variable,
-            C.maybe(C.keyword('as')),
-            typeName,
-            C.maybe(C.map(C.seq(C.punct('='), expression), ([ , value ]) => value))
-          ),
-          ([ name, , type, initial ]) => ({
-            name,
-            type,
-            ...initial === undefined ? {} : { initial }
-          })
-        ),
-        C.punct(',')
+      C.first(
+        C.map(tableDeclaration, declaration => [ declaration ]),
+        C.sepBy1(scalarDeclaration, C.punct(','))
       )
     ),
     ([ , declarations ]) => ({ kind: 'declare' as const, declarations })

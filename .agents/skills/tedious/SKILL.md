@@ -72,6 +72,8 @@ connection.execSql(request)
   connection inside a test to check session isolation.
 - Wrap Request in a promise helper collecting rows + rowCount (see
   `server.test.ts`).
+- Keep a table variable's declaration and all references in one SQL-batch
+  request; a later `execSql` call is a new batch and must receive error 1087.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

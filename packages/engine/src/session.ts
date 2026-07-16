@@ -14,6 +14,13 @@ export type Variable = {
   value: Value
 }
 
+/** Active table variable and its collision-free SQLite backing table. */
+export type TableVariable = {
+  readonly table: Ast.QualifiedName,
+  readonly columns: readonly Ast.ColumnDefinition[],
+  readonly constraints: readonly Ast.TableConstraint[]
+}
+
 /** Error captured by the innermost active CATCH block, read by ERROR_*. */
 export type CaughtError = {
   readonly number: number,
@@ -58,6 +65,9 @@ export type Session = {
   hostName: string,
   /** Declared variables keyed by lowercased `@name`. */
   readonly variables: Map<string, Variable>,
+  /** Table variables in the active batch or procedure scope. */
+  readonly tableVariables: Map<string, TableVariable>,
+  nextTableVariable: number,
   /** Session options set via SET, lowercased. */
   readonly options: Map<string, string>,
   rowCount: number,
@@ -146,6 +156,8 @@ export const session =
       applicationName: '',
       hostName: '',
       variables: new Map(),
+      tableVariables: new Map(),
+      nextTableVariable: 1,
       options: new Map(),
       rowCount: 0,
       lastIdentity: null,
