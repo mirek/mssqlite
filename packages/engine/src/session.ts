@@ -3,6 +3,7 @@ import { parse } from '@mssqlite/tsql'
 import { registerFunctions } from './udf.ts'
 import { DatabaseSync } from 'node:sqlite'
 import type { Ast, TypeName } from '@mssqlite/tsql'
+import type { Column } from './metadata.ts'
 
 /** Runtime value of a variable or column. */
 export type Value =
@@ -58,6 +59,19 @@ export type Trigger = {
   readonly definition: string
 }
 
+/** Materialized engine cursor owned by one session. */
+export type Cursor = {
+  readonly name: string,
+  readonly scope: 'local' | 'global',
+  readonly options: readonly string[],
+  readonly select: Ast.Select,
+  readonly updateColumns?: readonly string[],
+  state: 'declared' | 'open' | 'closed',
+  columns: readonly Column[],
+  rows: readonly (readonly Value[])[],
+  position: number
+}
+
 /** Server-wide state shared by sessions. */
 export type Server = {
   readonly db: DatabaseSync,
@@ -92,6 +106,10 @@ export type Session = {
   readonly variables: Map<string, Variable>,
   /** Table variables in the active batch or procedure scope. */
   readonly tableVariables: Map<string, TableVariable>,
+  /** Declared cursors keyed case-insensitively by name. */
+  readonly cursors: Map<string, Cursor>,
+  /** Last FETCH status: 0 success, -1 outside rowset, -9 no fetch yet. */
+  fetchStatus: number,
   nextTableVariable: number,
   /** Session options set via SET, lowercased. */
   readonly options: Map<string, string>,
@@ -251,6 +269,8 @@ export const session =
       hostName: '',
       variables: new Map(),
       tableVariables: new Map(),
+      cursors: new Map(),
+      fetchStatus: -9,
       transitionTables: new Map(),
       nextTableVariable: 1,
       nextTransitionTable: 1,
@@ -266,3 +286,18 @@ export const session =
       lastReturnStatus: 0,
       nestLevel: 0
     })
+
+/** Removes LOCAL cursors declared while `run` owns the active batch/procedure scope. */
+export const withCursorScope =
+  <T>(session_: Session, run: () => T): T => {
+    const existing = new Set(session_.cursors.keys())
+    try {
+      return run()
+    } finally {
+      for (const [ name, cursor ] of session_.cursors) {
+        if (cursor.scope === 'local' && !existing.has(name)) {
+          session_.cursors.delete(name)
+        }
+      }
+    }
+  }

@@ -72,6 +72,97 @@ const declare: Parser.t<Ast.Statement> =
     ([ , declarations ]) => ({ kind: 'declare' as const, declarations })
   )
 
+const cursorOption: Parser.t<string> =
+  C.first(
+    C.keyword('local'), C.keyword('global'), C.keyword('forward_only'),
+    C.keyword('scroll'), C.keyword('static'), C.keyword('keyset'),
+    C.keyword('dynamic'), C.keyword('fast_forward'), C.keyword('read_only'),
+    C.keyword('scroll_locks'), C.keyword('optimistic'), C.keyword('type_warning'),
+    C.keyword('insensitive')
+  )
+
+const declareCursor: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('declare'),
+      C.anyIdentifier,
+      C.many0(cursorOption),
+      C.keyword('cursor'),
+      C.many0(cursorOption),
+      C.keyword('for'),
+      select,
+      C.maybe(C.map(
+        C.seq(
+          C.keyword('for'), C.keyword('update'),
+          C.maybe(C.map(
+            C.seq(C.keyword('of'), C.sepBy1(C.anyIdentifier, C.punct(','))),
+            ([ , columns ]) => columns
+          ))
+        ),
+        ([ , , columns ]) => columns ?? []
+      ))
+    ),
+    ([ , name, before, , after, , select_, updateColumns ]) => {
+      const options = [ ...before, ...after ]
+      const scope = options.includes('global') ? 'global' as const :
+        options.includes('local') ? 'local' as const :
+          'global' as const
+      return {
+        kind: 'declareCursor' as const,
+        name,
+        scope,
+        options: options.filter(option => option !== 'local' && option !== 'global'),
+        select: select_,
+        ...updateColumns === undefined ? {} : { updateColumns }
+      }
+    }
+  )
+
+const cursorNameStatement =
+  (keyword: 'open' | 'close' | 'deallocate', kind: 'openCursor' | 'closeCursor' | 'deallocateCursor'): Parser.t<Ast.Statement> =>
+    C.map(
+      C.seq(
+        C.keyword(keyword), C.maybe(C.keyword('cursor')),
+        C.maybe(C.keyword('global')), C.anyIdentifier
+      ),
+      ([ , , , name ]) => ({ kind, name })
+    ) as Parser.t<Ast.Statement>
+
+const fetchOrientation: Parser.t<Ast.FetchOrientation> =
+  C.first(
+    ...([ 'next', 'prior', 'first', 'last' ] as const).map(kind =>
+      C.map(C.keyword(kind), () => ({ kind }))),
+    C.map(
+      C.seq(C.keyword('absolute'), expression),
+      ([ , offset ]) => ({ kind: 'absolute' as const, offset })
+    ),
+    C.map(
+      C.seq(C.keyword('relative'), expression),
+      ([ , offset ]) => ({ kind: 'relative' as const, offset })
+    )
+  )
+
+const fetchCursor: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('fetch'),
+      C.maybe(fetchOrientation),
+      C.maybe(C.keyword('from')),
+      C.maybe(C.keyword('global')),
+      C.anyIdentifier,
+      C.maybe(C.map(
+        C.seq(C.keyword('into'), C.sepBy1(C.variable, C.punct(','))),
+        ([ , variables ]) => variables
+      ))
+    ),
+    ([ , orientation, , , name, into ]) => ({
+      kind: 'fetchCursor' as const,
+      name,
+      orientation: orientation ?? { kind: 'next' },
+      into: into ?? []
+    })
+  )
+
 const onOff: Parser.t<string> =
   C.first(C.keyword('on'), C.keyword('off'))
 
@@ -578,6 +669,7 @@ export const statement: Parser.t<Ast.Statement> =
     dropIndex,
     drop,
     truncate,
+    declareCursor,
     declare,
     set,
     beginBlockOrTransaction,
@@ -585,6 +677,10 @@ export const statement: Parser.t<Ast.Statement> =
     ifStatement,
     whileStatement,
     execute,
+    cursorNameStatement('open', 'openCursor'),
+    fetchCursor,
+    cursorNameStatement('close', 'closeCursor'),
+    cursorNameStatement('deallocate', 'deallocateCursor'),
     use,
     print,
     returnStatement,

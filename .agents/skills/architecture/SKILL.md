@@ -114,6 +114,13 @@ the engine:
   other nested triggers share the 32-level module limit, and an unhandled
   trigger error rolls back an enclosing user transaction. Trigger-body count
   items are suppressed and the originating statement restores `@@ROWCOUNT`.
+- **Cursors are session-owned materialized results** — DECLARE stores a SELECT
+  AST and lifecycle state in `session.cursors`; OPEN resolves the active scope,
+  executes the query once, and retains rows plus TDS column metadata. FETCH
+  changes a bounded position, copies into variables or emits a one-row result,
+  and sets connection-global `@@FETCH_STATUS`. LOCAL cursors declared in a
+  batch, procedure, or trigger are removed on that scope's normal or exceptional
+  exit; GLOBAL cursors survive batches until DEALLOCATE or session disposal.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -200,7 +207,8 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No cursors or sequences. Triggered DML does not yet support OUTPUT or
+- No sequences. Cursor variables, positioned updates, and live KEYSET/DYNAMIC
+  visibility are unsupported. Triggered DML does not yet support OUTPUT or
   UPDATE FROM, and MERGE does not yet fire DML triggers. MERGE OUTPUT may not
   reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite

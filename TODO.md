@@ -6,7 +6,6 @@ work is complete.
 
 ## Query and DML surface
 
-- [Cursors](todo/cursors.md) — Interpret the cursor lifecycle and maintain `@@FETCH_STATUS`.
 - [Sequences](todo/sequences.md) — Back `CREATE SEQUENCE` and `NEXT VALUE FOR` with cataloged counters.
 
 ## Semantics and type fidelity

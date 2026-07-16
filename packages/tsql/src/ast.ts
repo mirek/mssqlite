@@ -276,6 +276,11 @@ export type FunctionParameter = {
 export type TriggerEvent =
   'insert' | 'update' | 'delete'
 
+/** Supported cursor movement. */
+export type FetchOrientation =
+  | { readonly kind: 'next' | 'prior' | 'first' | 'last' }
+  | { readonly kind: 'absolute' | 'relative', readonly offset: Expression }
+
 /** Scalar or table-shaped local variable declaration. */
 export type Declaration =
   | {
@@ -405,6 +410,23 @@ export type Statement =
       readonly kind: 'declare',
       readonly declarations: readonly Declaration[]
     }
+  | {
+      readonly kind: 'declareCursor',
+      readonly name: string,
+      readonly scope: 'local' | 'global',
+      readonly options: readonly string[],
+      readonly select: Select,
+      readonly updateColumns?: readonly string[]
+    }
+  | { readonly kind: 'openCursor', readonly name: string }
+  | {
+      readonly kind: 'fetchCursor',
+      readonly name: string,
+      readonly orientation: FetchOrientation,
+      readonly into: readonly string[]
+    }
+  | { readonly kind: 'closeCursor', readonly name: string }
+  | { readonly kind: 'deallocateCursor', readonly name: string }
   | {
       readonly kind: 'setVariable',
       readonly name: string,

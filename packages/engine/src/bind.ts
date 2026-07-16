@@ -35,7 +35,7 @@ export const globalOf =
       case '@@nestlevel':
         return session.nestLevel
       case '@@fetch_status':
-        return -1
+        return session.fetchStatus
       case '@@datefirst':
         return 7
       default:

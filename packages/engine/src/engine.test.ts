@@ -83,6 +83,111 @@ test('table variables support DML, constraints and declared metadata', () => {
   expect(s.lastIdentity).toBe(2)
 })
 
+test('cursor lifecycle materializes rows and fetches into variables', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE cursor_items (id INT PRIMARY KEY, name NVARCHAR(20));
+    INSERT INTO cursor_items VALUES (1, N'a'), (2, N'b'), (3, N'c');
+  `)
+  const items = executeBatch(s, `
+    DECLARE @id INT, @name NVARCHAR(20)
+    DECLARE item_cursor LOCAL SCROLL CURSOR STATIC READ_ONLY FOR
+      SELECT id, name FROM cursor_items ORDER BY id
+    OPEN item_cursor
+    FETCH FIRST FROM item_cursor INTO @id, @name
+    SELECT @id AS id, @name AS name, @@FETCH_STATUS AS status
+    FETCH LAST FROM item_cursor INTO @id, @name
+    SELECT @id AS id, @name AS name, @@FETCH_STATUS AS status
+    FETCH PRIOR FROM item_cursor INTO @id, @name
+    SELECT @id AS id, @name AS name, @@FETCH_STATUS AS status
+    CLOSE item_cursor
+    DEALLOCATE item_cursor
+  `)
+  expect(items.filter((item): item is Rows => item.kind === 'rows').map(item => item.rows)).toEqual([
+    [ [ 1, 'a', 0 ] ],
+    [ [ 3, 'c', 0 ] ],
+    [ [ 2, 'b', 0 ] ]
+  ])
+})
+
+test('cursor fetch returns rows, handles bounds, and preserves failed INTO targets', () => {
+  const s = open()
+  executeBatch(s, 'CREATE TABLE cursor_values (n INT); INSERT INTO cursor_values VALUES (10), (20)')
+  const items = executeBatch(s, `
+    DECLARE @n INT = 99
+    DECLARE values_cursor SCROLL CURSOR FOR SELECT n FROM cursor_values ORDER BY n
+    OPEN values_cursor
+    FETCH ABSOLUTE -1 FROM values_cursor
+    FETCH NEXT FROM values_cursor INTO @n
+    SELECT @n AS n, @@FETCH_STATUS AS status, @@ROWCOUNT AS rc
+    CLOSE values_cursor
+    DEALLOCATE values_cursor
+  `)
+  const rows = items.filter((item): item is Rows => item.kind === 'rows')
+  expect(rows[0]?.rows).toEqual([ [ 20 ] ])
+  expect(rows[1]?.rows).toEqual([ [ 99, -1, 0 ] ])
+})
+
+test('cursor state errors and LOCAL/GLOBAL cleanup follow scope', () => {
+  const s = open()
+  expect(() => executeBatch(s, 'OPEN missing_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16916 }) as Error)
+  executeBatch(s, 'DECLARE local_cursor LOCAL CURSOR FOR SELECT 1 AS n')
+  expect(() => executeBatch(s, 'OPEN local_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16916 }) as Error)
+
+  executeBatch(s, 'DECLARE global_cursor GLOBAL CURSOR FOR SELECT 1 AS n')
+  expect(() => executeBatch(s, 'DECLARE global_cursor GLOBAL CURSOR FOR SELECT 2 AS n'))
+    .toThrowError(expect.objectContaining({ number: 16915 }) as Error)
+  executeBatch(s, 'OPEN global_cursor')
+  expect(() => executeBatch(s, 'OPEN global_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16905 }) as Error)
+  expect(() => executeBatch(s, 'FETCH PRIOR FROM global_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16911 }) as Error)
+  executeBatch(s, 'CLOSE global_cursor')
+  expect(() => executeBatch(s, 'FETCH NEXT FROM global_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16917 }) as Error)
+  executeBatch(s, 'DEALLOCATE global_cursor')
+  expect(() => executeBatch(s, 'DEALLOCATE global_cursor'))
+    .toThrowError(expect.objectContaining({ number: 16916 }) as Error)
+})
+
+test('empty cursors set failed fetch status and validate INTO width', () => {
+  const s = open()
+  const result = executeBatch(s, `
+    DECLARE @a INT = 7, @b INT = 8
+    DECLARE empty_cursor LOCAL STATIC CURSOR FOR SELECT 1 AS n WHERE 1 = 0
+    OPEN empty_cursor
+    FETCH NEXT FROM empty_cursor INTO @a
+    SELECT @a AS a, @@FETCH_STATUS AS status
+    CLOSE empty_cursor
+    DEALLOCATE empty_cursor
+  `)
+  expect(rowsOf(result).rows).toEqual([ [ 7, -1 ] ])
+  expect(() => executeBatch(s, `
+    DECLARE @a INT, @b INT
+    DECLARE width_cursor LOCAL CURSOR FOR SELECT 1 AS n
+    OPEN width_cursor
+    FETCH NEXT FROM width_cursor INTO @a, @b
+  `)).toThrowError(expect.objectContaining({ number: 16924 }) as Error)
+})
+
+test('OPEN snapshots cursor rows and reopening refreshes the snapshot', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE cursor_snapshot (n INT);
+    INSERT INTO cursor_snapshot VALUES (1);
+    DECLARE snapshot_cursor GLOBAL CURSOR STATIC FOR SELECT n FROM cursor_snapshot ORDER BY n;
+    OPEN snapshot_cursor;
+  `)
+  executeBatch(s, 'INSERT INTO cursor_snapshot VALUES (2)')
+  expect(rowsOf(executeBatch(s, 'FETCH NEXT FROM snapshot_cursor')).rows).toEqual([ [ 1 ] ])
+  expect(rowsOf(executeBatch(s, 'FETCH NEXT FROM snapshot_cursor')).rows).toEqual([])
+  executeBatch(s, 'CLOSE snapshot_cursor; OPEN snapshot_cursor')
+  expect(rowsOf(executeBatch(s, 'FETCH LAST FROM snapshot_cursor')).rows).toEqual([ [ 2 ] ])
+  executeBatch(s, 'DEALLOCATE snapshot_cursor')
+})
+
 test('table variable backing tables clean up at batch end', () => {
   const s = open()
   executeBatch(s, 'DECLARE @t TABLE (id INT); INSERT INTO @t VALUES (1)')
@@ -137,10 +242,14 @@ test('globals', () => {
   const s = open()
   executeBatch(s, 'CREATE TABLE t (id INT IDENTITY(1,1) PRIMARY KEY, v INT)')
   executeBatch(s, 'INSERT INTO t (v) VALUES (1), (2), (3)')
-  const result = rowsOf(executeBatch(s, 'SELECT @@ROWCOUNT AS rc, @@IDENTITY AS id, @@TRANCOUNT AS tc, @@SPID AS spid'))
+  const result = rowsOf(executeBatch(s, `
+    SELECT @@ROWCOUNT AS rc, @@IDENTITY AS id, @@TRANCOUNT AS tc,
+      @@SPID AS spid, @@FETCH_STATUS AS fs
+  `))
   expect(result.rows[0]?.[0]).toBe(3)
   expect(result.rows[0]?.[1]).toBe(3)
   expect(result.rows[0]?.[2]).toBe(0)
+  expect(result.rows[0]?.[4]).toBe(-9)
   expect(rowsOf(executeBatch(s, 'SELECT SCOPE_IDENTITY() AS i')).rows).toEqual([ [ 3 ] ])
 })
 

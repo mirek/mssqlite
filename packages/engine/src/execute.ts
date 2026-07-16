@@ -17,6 +17,8 @@ import {
   functionKey,
   procedureKey,
   triggerKey,
+  withCursorScope,
+  type Cursor,
   type Procedure,
   type Server,
   type Session,
@@ -260,7 +262,7 @@ const runTrigger =
     session.activeTriggers.add(key)
     session.nestLevel++
     try {
-      withTableVariableScope(session, () => {
+      withCursorScope(session, () => withTableVariableScope(session, () => {
         const triggerItems: Item[] = []
         for (const inner of trigger.body) {
           const signal = executeStatement(session, inner, triggerItems)
@@ -269,7 +271,7 @@ const runTrigger =
           }
         }
         items.push(...triggerItems.filter(item => item.kind !== 'count'))
-      })
+      }))
     } finally {
       session.nestLevel--
       session.activeTriggers.delete(key)
@@ -517,6 +519,146 @@ const selectInto =
     items.push({ kind: 'count', rowCount: count.n })
   }
 
+const cursorOf =
+  (session: Session, name: string): Cursor => {
+    const cursor = session.cursors.get(name.toLowerCase())
+    if (cursor === undefined) {
+      throw new MssqlError(`A cursor with the name '${name}' does not exist.`, 16916, 16)
+    }
+    return cursor
+  }
+
+const declareCursor =
+  (session: Session, statement: Ast.Statement & { kind: 'declareCursor' }): void => {
+    const key = statement.name.toLowerCase()
+    if (session.cursors.has(key)) {
+      throw new MssqlError(`A cursor with the name '${statement.name}' already exists.`, 16915, 16)
+    }
+    if (statement.select.into !== undefined ||
+      statement.select.items.some(item => item.kind === 'assign')) {
+      throw new MssqlError('Cursor SELECT statements cannot assign variables or use INTO.', 16907, 16)
+    }
+    session.cursors.set(key, {
+      name: statement.name,
+      scope: statement.scope,
+      options: statement.options,
+      select: statement.select,
+      ...statement.updateColumns === undefined ? {} : { updateColumns: statement.updateColumns },
+      state: 'declared',
+      columns: [],
+      rows: [],
+      position: -1
+    })
+  }
+
+const openCursor =
+  (session: Session, name: string): void => {
+    const cursor = cursorOf(session, name)
+    if (cursor.state === 'open') {
+      throw new MssqlError('The cursor is already open.', 16905, 16)
+    }
+    const resolved = resolveTableVariables(session, cursor.select)
+    if (resolved.kind !== 'select') {
+      throw new MssqlError('Cursor query is not a SELECT statement.', 16907, 16)
+    }
+    const rendered = Transpile.statement(resolved)
+    const hints = rendered.columns ?? userFunctionHints(session, resolved) ?? []
+    const result = query(session, rendered.sql, rendered.variables, hints)
+    cursor.columns = result.columns
+    cursor.rows = result.rows
+    cursor.position = -1
+    cursor.state = 'open'
+    session.rowCount = result.rowCount
+  }
+
+const fetchPosition =
+  (session: Session, cursor: Cursor, orientation: Ast.FetchOrientation): number => {
+    switch (orientation.kind) {
+      case 'next':
+        return cursor.position + 1
+      case 'prior':
+        return cursor.position - 1
+      case 'first':
+        return 0
+      case 'last':
+        return cursor.rows.length - 1
+      case 'absolute': {
+        const offset = Math.trunc(Number(evaluate(session, orientation.offset)))
+        return offset > 0 ? offset - 1 : offset < 0 ? cursor.rows.length + offset : -1
+      }
+      case 'relative':
+        return cursor.position + Math.trunc(Number(evaluate(session, orientation.offset)))
+      default:
+        throw new MssqlError('Unsupported cursor fetch orientation.', 16907, 16)
+    }
+  }
+
+const assertFetchOrientation =
+  (cursor: Cursor, orientation: Ast.FetchOrientation): void => {
+    const forwardOnly = cursor.options.includes('forward_only') ||
+      cursor.options.includes('fast_forward') ||
+      !cursor.options.some(option =>
+        option === 'scroll' || option === 'static' || option === 'keyset' || option === 'dynamic')
+    if (forwardOnly && orientation.kind !== 'next') {
+      throw new MssqlError(
+        `FETCH: The fetch type ${orientation.kind.toUpperCase()} cannot be used with forward only cursors.`,
+        16911, 16)
+    }
+    if (cursor.options.includes('dynamic') && orientation.kind === 'absolute') {
+      throw new MssqlError(
+        'The fetch type ABSOLUTE cannot be used with dynamic cursors.', 16925, 16)
+    }
+  }
+
+const fetchCursor =
+  (session: Session, statement: Ast.Statement & { kind: 'fetchCursor' }, items: Item[]): void => {
+    const cursor = cursorOf(session, statement.name)
+    if (cursor.state !== 'open') {
+      throw new MssqlError('Cursor is not open.', 16917, 16)
+    }
+    assertFetchOrientation(cursor, statement.orientation)
+    if (statement.into.length > 0 && statement.into.length !== cursor.columns.length) {
+      throw new MssqlError(
+        'Cursorfetch: The number of variables declared in the INTO list must match that of selected columns.',
+        16924, 16)
+    }
+    for (const name of statement.into) {
+      if (!session.variables.has(name.toLowerCase())) {
+        throw new MssqlError(`Must declare the scalar variable "${name}".`, 137, 15)
+      }
+    }
+    const position = fetchPosition(session, cursor, statement.orientation)
+    const row = cursor.rows[position]
+    cursor.position = position < 0 ? -1 : position >= cursor.rows.length ? cursor.rows.length : position
+    if (row === undefined) {
+      session.fetchStatus = -1
+      session.rowCount = 0
+      if (statement.into.length === 0) {
+        items.push({ kind: 'rows', columns: cursor.columns, rows: [], rowCount: 0 })
+      }
+      return
+    }
+    session.fetchStatus = 0
+    session.rowCount = 1
+    if (statement.into.length === 0) {
+      items.push({ kind: 'rows', columns: cursor.columns, rows: [ row ], rowCount: 1 })
+      return
+    }
+    statement.into.forEach((name, index) => applyAssign(session, name, '=', row[index] ?? null))
+  }
+
+const closeCursor =
+  (session: Session, name: string): void => {
+    const cursor = cursorOf(session, name)
+    if (cursor.state !== 'open') {
+      throw new MssqlError('Cursor is not open.', 16917, 16)
+    }
+    cursor.state = 'closed'
+    cursor.columns = []
+    cursor.rows = []
+    cursor.position = -1
+  }
+
 type TransactionStatement =
   Ast.Statement & {
     kind: 'beginTransaction' | 'commitTransaction' | 'rollbackTransaction' | 'saveTransaction'
@@ -626,6 +768,27 @@ const executeStatement =
         Catalog.dropTrigger(session.db, name)
         session.server.triggers.delete(key)
       }
+      return undefined
+    }
+    if (statement.kind === 'declareCursor') {
+      declareCursor(session, statement)
+      return undefined
+    }
+    if (statement.kind === 'openCursor') {
+      openCursor(session, statement.name)
+      return undefined
+    }
+    if (statement.kind === 'fetchCursor') {
+      fetchCursor(session, statement, items)
+      return undefined
+    }
+    if (statement.kind === 'closeCursor') {
+      closeCursor(session, statement.name)
+      return undefined
+    }
+    if (statement.kind === 'deallocateCursor') {
+      const cursor = cursorOf(session, statement.name)
+      session.cursors.delete(cursor.name.toLowerCase())
       return undefined
     }
     switch (statement.kind) {
@@ -1238,14 +1401,14 @@ const callUserProcedure =
     const outputs = new Map<string, Value>()
     let status: Value = null
     try {
-      withTableVariableScope(session, () => {
+      withCursorScope(session, () => withTableVariableScope(session, () => {
         for (const inner of procedure.body) {
           const signal = executeStatement(session, inner, items)
           if (signal === 'return') {
             break
           }
         }
-      })
+      }))
       status = session.returnValue
       for (const key of outputTargets.keys()) {
         outputs.set(key, session.variables.get(key)?.value ?? null)
@@ -1374,7 +1537,7 @@ export const executeBatch =
     }
     const items: Item[] = []
     try {
-      return withTableVariableScope(session, () => {
+      return withCursorScope(session, () => withTableVariableScope(session, () => {
         const statements = parse(sql)
         for (const statement of statements) {
           const signal = executeStatement(session, statement, items)
@@ -1384,7 +1547,7 @@ export const executeBatch =
         }
         session.lastError = 0
         return items
-      })
+      }))
     } catch (error) {
       const mapped = errorOf(error)
       session.lastError = mapped.number

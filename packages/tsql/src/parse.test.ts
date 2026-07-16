@@ -493,6 +493,38 @@ test('declare and set', () => {
   })
 })
 
+test('cursor lifecycle and fetch orientations parse', () => {
+  expect(parseStatement(`
+    DECLARE items LOCAL SCROLL CURSOR STATIC READ_ONLY FOR
+      SELECT id, name FROM products ORDER BY id
+      FOR UPDATE OF name
+  `)).toMatchObject({
+    kind: 'declareCursor',
+    name: 'items',
+    scope: 'local',
+    options: [ 'scroll', 'static', 'read_only' ],
+    select: { kind: 'select' },
+    updateColumns: [ 'name' ]
+  })
+  expect(parseStatement('OPEN CURSOR GLOBAL items')).toEqual({ kind: 'openCursor', name: 'items' })
+  expect(parseStatement('FETCH FROM items')).toMatchObject({
+    kind: 'fetchCursor',
+    orientation: { kind: 'next' },
+    into: []
+  })
+  expect(parseStatement('FETCH ABSOLUTE -2 FROM items INTO @id, @name')).toMatchObject({
+    kind: 'fetchCursor',
+    orientation: { kind: 'absolute', offset: { kind: 'unary', operator: '-' } },
+    into: [ '@id', '@name' ]
+  })
+  expect(parseStatement('FETCH RELATIVE 3 FROM items')).toMatchObject({
+    orientation: { kind: 'relative' }
+  })
+  expect(parseStatement('FETCH NEXT FROM GLOBAL items')).toMatchObject({ name: 'items' })
+  expect(parseStatement('CLOSE items')).toEqual({ kind: 'closeCursor', name: 'items' })
+  expect(parseStatement('DEALLOCATE CURSOR items')).toEqual({ kind: 'deallocateCursor', name: 'items' })
+})
+
 test('table variable declarations and DML references', () => {
   expect(parseStatement(`
     DECLARE @items TABLE (

@@ -514,6 +514,29 @@ test('statement-level triggers execute over tedious', async () => {
   ])
 })
 
+test('cursor loop executes over tedious', async () => {
+  await query(`
+    CREATE TABLE wire_cursor_values (n INT);
+    INSERT INTO wire_cursor_values VALUES (2), (3), (5);
+  `)
+  const result = await query(`
+    DECLARE @n INT, @sum INT = 0
+    DECLARE wire_cursor LOCAL FAST_FORWARD CURSOR FOR
+      SELECT n FROM wire_cursor_values ORDER BY n
+    OPEN wire_cursor
+    FETCH NEXT FROM wire_cursor INTO @n
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+      SET @sum += @n
+      FETCH NEXT FROM wire_cursor INTO @n
+    END
+    CLOSE wire_cursor
+    DEALLOCATE wire_cursor
+    SELECT @sum AS total, @@FETCH_STATUS AS status
+  `)
+  expect(result.rows).toEqual([ { total: 10, status: -1 } ])
+})
+
 test('merge over the wire reports the combined row count', async () => {
   await query(`
     CREATE TABLE stock (sku NVARCHAR(20) PRIMARY KEY, qty INT);
