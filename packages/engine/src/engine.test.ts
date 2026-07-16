@@ -29,6 +29,48 @@ test('select constants with metadata', () => {
   expect(result.rows).toEqual([ [ 1, 'x', '1.5', null ] ])
 })
 
+test('duplicate result labels preserve positional values and origin metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE duplicate_left (id INT NOT NULL, value INT)
+    CREATE TABLE duplicate_right (id BIGINT NOT NULL, value NVARCHAR(20))
+    INSERT INTO duplicate_left VALUES (1, 10)
+    INSERT INTO duplicate_right VALUES (1, N'right')
+  `)
+
+  const star = rowsOf(executeBatch(s, `
+    SELECT * FROM duplicate_left AS l JOIN duplicate_right AS r ON r.id = l.id
+  `))
+  expect(star.columns.map(column => column.name)).toEqual([ 'id', 'value', 'id', 'value' ])
+  expect(star.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ])).toEqual([
+    [ DataType.DataType.intN, 4 ],
+    [ DataType.DataType.intN, 4 ],
+    [ DataType.DataType.intN, 8 ],
+    [ DataType.DataType.nvarchar, 40 ]
+  ])
+  expect(star.rows).toEqual([ [ 1, 10, 1, 'right' ] ])
+
+  const aliases = rowsOf(executeBatch(s, `
+    SELECT l.id AS duplicate, r.value AS duplicate, l.value + 1 AS duplicate
+    FROM duplicate_left AS l JOIN duplicate_right AS r ON r.id = l.id
+  `))
+  expect(aliases.columns.map(column => column.name)).toEqual([
+    'duplicate', 'duplicate', 'duplicate'
+  ])
+  expect(aliases.rows).toEqual([ [ 1, 'right', 11 ] ])
+
+  const empty = rowsOf(executeBatch(s, `
+    SELECT l.id AS duplicate, r.value AS duplicate
+    FROM duplicate_left AS l JOIN duplicate_right AS r ON r.id = l.id
+    WHERE 1 = 0
+  `))
+  expect(empty.rows).toEqual([])
+  expect(empty.columns.map(column => [ column.name, column.typeInfo.type ])).toEqual([
+    [ 'duplicate', DataType.DataType.intN ],
+    [ 'duplicate', DataType.DataType.nvarchar ]
+  ])
+})
+
 test('create, insert, select round trip with catalog metadata', () => {
   const s = open()
   executeBatch(s, `

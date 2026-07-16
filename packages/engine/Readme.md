@@ -170,6 +170,10 @@ to SQL Server errors 271 and 4936.
 Exact decimal and datetimeoffset projections also provide expression-derived
 hints. Typed RPC datetimeoffset parameters retain their scale through direct
 SELECTs instead of falling back to inferred text metadata.
+Client-facing statements enable node:sqlite positional rows, pairing each
+value with `StatementSync.columns()` by index. Duplicate aliases and repeated
+names from `SELECT *` joins therefore retain every value and origin type;
+engine consumers still receive the existing `Rows.rows` array shape.
 
 ## UDFs
 

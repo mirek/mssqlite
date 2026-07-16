@@ -21,6 +21,7 @@ import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
+import positionalRows from './positional-rows.ts'
 import {
   flushRowversion,
   installRowversionTriggers,
@@ -606,9 +607,8 @@ const runWithOutput =
   (session: Session, statement: Ast.Statement & { kind: 'insert' | 'update' | 'delete' }, output: Ast.Output, items: Item[]): void => {
     const rendered = Transpile.statement(statement)
     const prepared = session.db.prepare(rendered.sql)
-    const records = prepared.all(bindings(session, rendered.variables)) as Record<string, Value>[]
-    const columns = columnsOf(session.db, prepared, records, session.tableVariables.values())
-    const rows = records.map(record => columns.map(column => record[column.name] ?? null))
+    const rows = positionalRows(prepared, bindings(session, rendered.variables))
+    const columns = columnsOf(session.db, prepared, rows, session.tableVariables.values())
     session.rowCount = rows.length
     if (statement.kind === 'insert' && rows.length > 0 && hasIdentity(session, statement.table)) {
       const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }

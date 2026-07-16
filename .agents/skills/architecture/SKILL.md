@@ -150,6 +150,12 @@ the engine:
   pack/representation casts, while result metadata comes from the catalog.
   Unsupported operators/methods stop in the transpiler rather than acquiring
   accidental SQLite text/blob semantics.
+- **Client result rows are positional** — every SELECT/OUTPUT statement calls
+  `StatementSync.setReturnArrays(true)` before extraction. `columns()` and each
+  row therefore share one stable index, preserving duplicate labels while
+  origin-based catalog metadata remains ordered. Internal table snapshots and
+  keyed DML bookkeeping continue using object rows where column names are
+  unique.
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
   `mssqlite_*` function registered once per server (`engine/udf.ts`).
   Session-dependent UDFs (`db_name`, `scope_identity`, …) read

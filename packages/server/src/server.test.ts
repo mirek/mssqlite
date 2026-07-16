@@ -15,7 +15,7 @@ type WireColumn = {
 }
 
 const connect =
-  (port: number): Promise<Connection> =>
+  (port: number, useColumnNames = true): Promise<Connection> =>
     new Promise((resolve, reject) => {
       const connection_ = new Connection({
         server: '127.0.0.1',
@@ -29,7 +29,7 @@ const connect =
           encrypt: false,
           trustServerCertificate: true,
           rowCollectionOnRequestCompletion: false,
-          useColumnNames: true,
+          useColumnNames,
           connectTimeout: 5000,
           requestTimeout: 5000
         }
@@ -41,6 +41,29 @@ const connect =
           resolve(connection_)
         }
       })
+    })
+
+const queryArrays =
+  (connection_: Connection, sql: string): Promise<{ rows: unknown[][], columns: WireColumn[] }> =>
+    new Promise((resolve, reject) => {
+      const rows: unknown[][] = []
+      let columns: WireColumn[] = []
+      const request = new Request(sql, error => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve({ rows, columns })
+        }
+      })
+      request.on('row', row => rows.push(row.map((column: { value: unknown }) => column.value)))
+      request.on('columnMetadata', metadata => {
+        columns = Object.values(metadata).map(column => ({
+          name: column.colName,
+          type: column.type.name,
+          length: column.dataLength
+        }))
+      })
+      connection_.execSql(request)
     })
 
 const query =
@@ -103,6 +126,35 @@ test('select constants', async () => {
   const result = await query('SELECT 1 AS n, N\'héllo\' AS s, 1.5 AS f, NULL AS z')
   expect(result.rows).toEqual([ { n: 1, s: 'héllo', f: 1.5, z: null } ])
   expect(result.rowCount).toBe(1)
+})
+
+test('duplicate result labels retain every value for tedious column arrays', async () => {
+  await query(`
+    CREATE TABLE wire_duplicate_left (id INT, value INT)
+    CREATE TABLE wire_duplicate_right (id BIGINT, value NVARCHAR(20))
+    INSERT INTO wire_duplicate_left VALUES (1, 10)
+    INSERT INTO wire_duplicate_right VALUES (1, N'right')
+  `)
+  const positional = await connect(listening.port, false)
+  try {
+    const result = await queryArrays(positional, `
+      SELECT * FROM wire_duplicate_left AS l
+      JOIN wire_duplicate_right AS r ON r.id = l.id
+    `)
+    expect(result.columns.map(column => [ column.name, column.type ])).toEqual([
+      [ 'id', 'IntN' ], [ 'value', 'IntN' ], [ 'id', 'IntN' ], [ 'value', 'NVarChar' ]
+    ])
+    expect(result.rows).toEqual([ [ 1, 10, '1', 'right' ] ])
+
+    const aliases = await queryArrays(positional,
+      'SELECT 1 AS duplicate, N\'two\' AS duplicate, 3 AS duplicate')
+    expect(aliases.columns.map(column => column.name)).toEqual([
+      'duplicate', 'duplicate', 'duplicate'
+    ])
+    expect(aliases.rows).toEqual([ [ 1, 'two', 3 ] ])
+  } finally {
+    positional.close()
+  }
 })
 
 test('create, insert, select round trip', async () => {
