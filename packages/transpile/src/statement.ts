@@ -1,6 +1,7 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
 import * as Decimal from './decimal.ts'
+import * as DateTimeOffset from './datetimeoffset.ts'
 import * as ForJson from './for-json.ts'
 import * as Grouping from './grouping.ts'
 import * as Output from './output.ts'
@@ -288,10 +289,12 @@ const orderBy =
             candidate.alias?.toLowerCase() === alias)
         const resolved = value?.kind === 'expression' ? value.expression : item.expression
         const type = Decimal.typeOf(ctx, resolved)
+        const offset = DateTimeOffset.scaleOf(ctx, resolved)
         const rendered = expression(ctx, item.expression)
         const collation = Collation.ofExpression(ctx, resolved)
         const key = collation !== undefined ? Collation.expressionKey(rendered, collation) :
-          type === undefined ? rendered : `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
+          offset !== undefined ? DateTimeOffset.key(rendered) :
+            type === undefined ? rendered : `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
         return `${key}${item.descending ? ' DESC' : ''}`
       })
       .join(', ')}`)
@@ -703,9 +706,11 @@ const columnDefinition =
       const default_ = column.default_
       const signed = default_.kind === 'unary' && [ '+', '-' ].includes(default_.operator) &&
         default_.operand.kind === 'number' ? `${default_.operator}${default_.operand.value}` : undefined
-      const rendered = Type.category(column.type) === 'decimal' && default_.kind === 'number' ?
-        Quote.string(default_.value) : Type.category(column.type) === 'decimal' && signed !== undefined ?
-          Quote.string(signed) : expression(ctx, default_)
+      const rendered = column.type.name === 'datetimeoffset' ?
+        expression(ctx, { kind: 'cast', expression: default_, type: column.type, try_: false }) :
+        Type.category(column.type) === 'decimal' && default_.kind === 'number' ?
+          Quote.string(default_.value) : Type.category(column.type) === 'decimal' && signed !== undefined ?
+            Quote.string(signed) : expression(ctx, default_)
       parts.push(`DEFAULT (${rendered})`)
     }
     if (column.check !== undefined) {
@@ -783,15 +788,17 @@ const createTable =
           constraint.columns : [])
     ]
     const indexes = uniqueColumns.flatMap((columns, index) => {
-      const collated = columns.map(column => byName.get(column.name.toLowerCase()))
-      if (!collated.some(column => column?.collate !== undefined)) {
+      const definitions = columns.map(column => byName.get(column.name.toLowerCase()))
+      if (!definitions.some(column =>
+        column?.collate !== undefined || column?.type.name === 'datetimeoffset')) {
         return []
       }
       const keys = columns.map(column => {
         const definition = byName.get(column.name.toLowerCase())
         const rendered = Quote.identifier(column.name)
-        return definition?.collate === undefined ? rendered :
-          Collation.expressionKey(rendered, definition.collate)
+        return definition?.collate !== undefined ?
+          Collation.expressionKey(rendered, definition.collate) :
+          definition?.type.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
       })
       const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
       const indexName = Quote.identifier(`__mssqlite_${tableName}_collation_${index}`)
@@ -806,8 +813,9 @@ const createIndex =
     const columns = statement_.columns
       .map(column => {
         const value = Quote.identifier(column.name)
-        const key = column.collation === undefined ? value :
-          Collation.expressionKey(value, column.collation)
+        const key = column.collation !== undefined ?
+          Collation.expressionKey(value, column.collation) :
+          column.type?.name === 'datetimeoffset' ? DateTimeOffset.key(value) : value
         return `${key}${column.descending ? ' DESC' : ''}`
       })
       .join(', ')
@@ -887,7 +895,8 @@ export const statement =
     const columns = statement_.kind === 'select' ?
       ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
         TableTransform.selectHints(statement_) ??
-        Grouping.selectHints(statement_) ?? Decimal.selectHints(statement_) :
+        Grouping.selectHints(statement_) ?? DateTimeOffset.selectHints(statement_) ??
+        Decimal.selectHints(statement_) :
       undefined
     return {
       sql,

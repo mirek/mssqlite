@@ -19,66 +19,114 @@ const clampDay =
   }
 
 const format =
-  (parts: Parts): string =>
-    `${DateTime.formatDate(parts)} ${DateTime.formatTime(parts, 3)}`
+  (parts: Parts, scale = 3): string => {
+    if (parts.year < 1 || parts.year > 9999) {
+      throw new Error('Adding a value to a date caused an overflow.')
+    }
+    if (parts.offsetMinutes !== undefined) {
+      const utc = DateTime.shifted(parts, -parts.offsetMinutes)
+      if (utc.year < 1 || utc.year > 9999) {
+        throw new Error('Adding a value to a datetimeoffset caused a UTC overflow.')
+      }
+    }
+    const value = `${DateTime.formatDate(parts)} ${DateTime.formatTime(parts, scale)}`
+    if (parts.offsetMinutes === undefined) {
+      return value
+    }
+    const sign = parts.offsetMinutes < 0 ? '-' : '+'
+    const offset = Math.abs(parts.offsetMinutes)
+    return `${value} ${sign}${String(Math.floor(offset / 60)).padStart(2, '0')}:` +
+      `${String(offset % 60).padStart(2, '0')}`
+  }
+
+const scaleOf =
+  (value: string): number =>
+    /\.(\d{1,7})/.exec(value)?.[1]?.length ?? 0
 
 const days =
   (parts: Parts): number =>
     DateTime.daysFromCivil(parts.year, parts.month, parts.day)
 
-const dayTicks =
-  (parts: Parts): number =>
-    (((((parts.hours * 60) + parts.minutes) * 60) + parts.seconds) * 1000) + Math.round(parts.ticks / 10000)
+const ticksPerDay = 864000000000n
+
+const exactDayTicks =
+  (parts: Parts): bigint =>
+    (BigInt((((parts.hours * 60) + parts.minutes) * 60) + parts.seconds) * 10000000n) +
+    BigInt(parts.ticks)
+
+const exactParts =
+  (parts: Parts, delta: bigint): Parts => {
+    const total = exactDayTicks(parts) + delta
+    const carry = total >= 0n ? total / ticksPerDay : ((total + 1n) / ticksPerDay) - 1n
+    const rest = total - (carry * ticksPerDay)
+    const civil = DateTime.civilFromDays(days(parts) + Number(carry))
+    if (civil.year < 1 || civil.year > 9999) {
+      throw new Error('Adding a value to a date caused an overflow.')
+    }
+    const seconds = rest / 10000000n
+    return {
+      ...civil,
+      hours: Number(seconds / 3600n),
+      minutes: Number((seconds / 60n) % 60n),
+      seconds: Number(seconds % 60n),
+      ticks: Number(rest % 10000000n),
+      ...parts.offsetMinutes === undefined ? {} : { offsetMinutes: parts.offsetMinutes }
+    }
+  }
+
+const nanosecondTicks =
+  (value: number): bigint =>
+    BigInt(value >= 0 ? Math.floor((Math.trunc(value) + 50) / 100) :
+      Math.ceil((Math.trunc(value) - 50) / 100))
 
 /** @returns date shifted by `n` of `part`, formatted as an MSSQL datetime string. */
 export const dateadd =
   (part: string, n: number, value: string): string => {
     const parts = DateTime.partsOf(value)
+    const scale = parts.offsetMinutes === undefined ? 3 : scaleOf(value)
+    const amount = Math.trunc(n)
     switch (part) {
       case 'year': {
-        const year = parts.year + n
-        return format({ ...parts, year, day: clampDay(year, parts.month, parts.day) })
+        const year = parts.year + amount
+        return format({ ...parts, year, day: clampDay(year, parts.month, parts.day) }, scale)
       }
       case 'quarter':
       case 'month': {
-        const months = (parts.year * 12) + (parts.month - 1) + (part === 'quarter' ? n * 3 : n)
+        const months = (parts.year * 12) + (parts.month - 1) +
+          (part === 'quarter' ? amount * 3 : amount)
         const year = Math.floor(months / 12)
         const month = (months - (year * 12)) + 1
-        return format({ ...parts, year, month, day: clampDay(year, month, parts.day) })
+        return format({ ...parts, year, month, day: clampDay(year, month, parts.day) }, scale)
       }
       case 'day':
       case 'dayofyear':
       case 'weekday':
       case 'week': {
-        const shift = part === 'week' ? n * 7 : n
+        const shift = part === 'week' ? amount * 7 : amount
         return format({
+          ...parts,
           ...DateTime.civilFromDays(days(parts) + shift),
           hours: parts.hours,
           minutes: parts.minutes,
           seconds: parts.seconds,
           ticks: parts.ticks
-        })
+        }, scale)
       }
       default: {
-        const unit = { hour: 3600000, minute: 60000, second: 1000, millisecond: 1 }[part]
-        if (unit === undefined) {
-          throw new Error(`Unsupported datepart ${part}.`)
+        const exactUnit = {
+          hour: 36000000000n,
+          minute: 600000000n,
+          second: 10000000n,
+          millisecond: 10000n,
+          microsecond: 10n
+        }[part]
+        if (exactUnit !== undefined) {
+          return format(exactParts(parts, BigInt(amount) * exactUnit), scale)
         }
-        const total = (days(parts) * 86400000) + dayTicks(parts) + (n * unit)
-        const day = Math.floor(total / 86400000)
-        let rest = total - (day * 86400000)
-        const hours = Math.floor(rest / 3600000)
-        rest -= hours * 3600000
-        const minutes = Math.floor(rest / 60000)
-        rest -= minutes * 60000
-        const seconds = Math.floor(rest / 1000)
-        return format({
-          ...DateTime.civilFromDays(day),
-          hours,
-          minutes,
-          seconds,
-          ticks: (rest - (seconds * 1000)) * 10000
-        })
+        if (part === 'nanosecond') {
+          return format(exactParts(parts, nanosecondTicks(amount)), scale)
+        }
+        throw new Error(`Unsupported datepart ${part}.`)
       }
     }
   }
@@ -86,8 +134,12 @@ export const dateadd =
 /** @returns count of `part` boundaries crossed between two dates, per MSSQL semantics. */
 export const datediff =
   (part: string, from: string, to: string): number => {
-    const a = DateTime.partsOf(from)
-    const b = DateTime.partsOf(to)
+    const parsedA = DateTime.partsOf(from)
+    const parsedB = DateTime.partsOf(to)
+    const a = parsedA.offsetMinutes === undefined ? parsedA :
+      DateTime.shifted(parsedA, -parsedA.offsetMinutes)
+    const b = parsedB.offsetMinutes === undefined ? parsedB :
+      DateTime.shifted(parsedB, -parsedB.offsetMinutes)
     switch (part) {
       case 'year':
         return b.year - a.year
@@ -102,15 +154,21 @@ export const datediff =
         // Boundary is Sunday with the default DATEFIRST 7; 1970-01-01 was a Thursday.
         return Math.floor((days(b) + 4) / 7) - Math.floor((days(a) + 4) / 7)
       default: {
-        const unit = { hour: 3600000, minute: 60000, second: 1000, millisecond: 1 }[part]
+        const unit = {
+          hour: 36000000000n,
+          minute: 600000000n,
+          second: 10000000n,
+          millisecond: 10000n,
+          microsecond: 10n,
+          nanosecond: 1n
+        }[part]
         if (unit === undefined) {
           throw new Error(`Unsupported datepart ${part}.`)
         }
-        const truncate = (parts: Parts): number => {
-          const ticks = dayTicks(parts)
-          return ((days(parts) * 86400000) + ticks) - (ticks % unit) - ((days(parts) * 86400000) % unit)
-        }
-        return Math.round((truncate(b) - truncate(a)) / unit)
+        const boundary = (parts: Parts): bigint =>
+          ((BigInt(days(parts) + DateTime.epochDays0001) * ticksPerDay) + exactDayTicks(parts)) / unit
+        const difference = boundary(b) - boundary(a)
+        return Number(part === 'nanosecond' ? difference * 100n : difference)
       }
     }
   }
@@ -143,11 +201,13 @@ export const datepart =
       case 'second':
         return parts.seconds
       case 'millisecond':
-        return Math.round(parts.ticks / 10000)
+        return Math.floor(parts.ticks / 10000)
       case 'microsecond':
-        return Math.round(parts.ticks / 10)
+        return Math.floor(parts.ticks / 10)
       case 'nanosecond':
         return parts.ticks * 100
+      case 'tzoffset':
+        return parts.offsetMinutes ?? 0
       default:
         throw new Error(`Unsupported datepart ${part}.`)
     }
@@ -162,6 +222,12 @@ export const datename =
         return monthNames[parts.month - 1] ?? ''
       case 'weekday':
         return weekdayNames[((days(parts) % 7) + 10) % 7] ?? ''
+      case 'tzoffset': {
+        const offset = parts.offsetMinutes ?? 0
+        const sign = offset < 0 ? '-' : '+'
+        return `${sign}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')}:` +
+          `${String(Math.abs(offset) % 60).padStart(2, '0')}`
+      }
       default:
         return String(datepart(part, value))
     }

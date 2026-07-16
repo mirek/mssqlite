@@ -9,7 +9,6 @@ work is complete.
 
 ## Semantics and type fidelity
 
-- [datetimeoffset semantics](todo/datetimeoffset-semantics.md) — Preserve offsets in comparison, date functions, and wire values.
 - [rowversion](todo/rowversion.md) — Generate database-wide monotonic binary row versions.
 - [Opaque special types](todo/opaque-special-types.md) — Accept and round-trip initially opaque SQL Server special types.
 - [Duplicate result column names](todo/duplicate-result-column-names.md) — Preserve every value when result-set labels collide.

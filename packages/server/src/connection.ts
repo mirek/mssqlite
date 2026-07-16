@@ -1,10 +1,10 @@
 import { Encode } from '@mssqlite/bytes'
 import {
-  Collation, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
+  Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
 import {
   BatchError, errorOf, executeBatch, executeSql, session,
-  type Server, type Session, type Value
+  type Parameter, type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
 import type { Socket } from 'node:net'
@@ -107,11 +107,14 @@ const onSqlBatch =
   }
 
 const parameterValues =
-  (parameters: readonly Rpc.Parameter[]): { name: string, value: Value, output: boolean }[] =>
+  (parameters: readonly Rpc.Parameter[]): Parameter[] =>
     parameters.map((parameter, index) => ({
       name: parameter.name === '' ? `@p${index + 1}` : parameter.name,
       value: parameter.value as Value,
-      output: (parameter.status & Rpc.ParameterStatus.byRefValue) !== 0
+      output: (parameter.status & Rpc.ParameterStatus.byRefValue) !== 0,
+      ...parameter.typeInfo.type === DataType.DataType.datetimeOffsetN ? {
+        type: { name: 'datetimeoffset', args: [ parameter.typeInfo.scale ?? 7 ] }
+      } : {}
     }))
 
 const onRpc =

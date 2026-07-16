@@ -196,6 +196,37 @@ test('datetime column values come back as dates', async () => {
   expect(result.rows[0]?.['created']).toBeInstanceOf(Date)
 })
 
+test('datetimeoffset values and parameters round trip through tedious', async () => {
+  await query('CREATE TABLE wire_offsets (happened_at DATETIMEOFFSET(7))')
+  const instant = new Date(Date.UTC(2026, 6, 1, 8, 30, 15, 123))
+  await query('INSERT INTO wire_offsets VALUES (@happened_at)', [ {
+    name: 'happened_at',
+    type: TYPES.DateTimeOffset,
+    value: instant,
+    options: { scale: 7 }
+  } ])
+  const parameter = await query('SELECT @happened_at AS happened_at', [ {
+    name: 'happened_at',
+    type: TYPES.DateTimeOffset,
+    value: instant,
+    options: { scale: 7 }
+  } ])
+  expect(parameter.columns.map(column => column.type)).toEqual([ 'DateTimeOffset' ])
+  expect(parameter.rows[0]?.['happened_at']).toBeInstanceOf(Date)
+  expect((parameter.rows[0]?.['happened_at'] as Date).toISOString()).toBe(instant.toISOString())
+
+  const values = await query(`
+    SELECT happened_at,
+      CASE WHEN CAST('2026-07-01 10:30:15.1230000 +02:00' AS DATETIMEOFFSET) =
+        CAST('2026-07-01 08:30:15.1230000 +00:00' AS DATETIMEOFFSET)
+        THEN 1 ELSE 0 END AS equal_instants
+    FROM wire_offsets
+  `)
+  expect(values.columns[0]?.type).toBe('DateTimeOffset')
+  expect((values.rows[0]?.['happened_at'] as Date).toISOString()).toBe(instant.toISOString())
+  expect(values.rows[0]?.['equal_instants']).toBe(1)
+})
+
 test('variables and batches', async () => {
   const result = await query(`
     DECLARE @x INT = 40

@@ -204,9 +204,15 @@ the engine:
   `sys.computed_columns_extra` retains normalized definition text and the
   persistence bit behind the derived catalog view.
 - **Date/time as TEXT** — MSSQL-format strings
-  (`YYYY-MM-DD HH:MM:SS.fff…`); TDS codecs parse/format via proleptic
-  civil-date math (no JS `Date` range limits); date UDFs implement MSSQL
-  boundary-counting semantics.
+  (`YYYY-MM-DD HH:MM:SS.fff…`). `datetimeoffset(n)` is a canonical fixed-scale
+  string with its original signed offset; casts round through the exact TDS
+  codec, DML/default/variable/RPC paths coerce at the declared scale, and
+  result hints retain DATETIMEOFFSETN metadata. Predicates, IN/BETWEEN,
+  ordering, uniqueness, and expression indexes use a deterministic UTC
+  day+100ns key while stored/displayed values keep their local civil fields.
+  DATEADD changes the local fields without timezone/DST lookup, DATEDIFF
+  counts boundaries after UTC normalization, and TZOFFSET reads the retained
+  offset. All TDS codecs use proleptic civil-date math rather than JS `Date`.
 - **Collations use deterministic normalization keys** — parser ASTs retain
   column and expression COLLATE names; source metadata carries declarations
   into predicate and ORDER BY rendering. BINARY/NOCASE provide a baseline,
@@ -271,6 +277,10 @@ toward broader SQL Server compatibility.
   storage. The transpiler derives SQL Server precision/scale, routes casts,
   arithmetic, comparison, ordering, and aggregates through scaled-BigInt UDFs,
   and supplies decimal result hints; TDS encodes those strings directly.
+- DATETIMEOFFSET values likewise use canonical TEXT rather than SQLite date
+  functions. The local and UTC representations must both stay within years
+  0001-9999; offsets are limited to ±14:00. Raw lexical comparison is never
+  sufficient because different local strings can denote the same instant.
 - `@@ROWCOUNT` after SELECT reflects rows returned; unsupported globals
   raise error 137. `ERROR_LINE()` is always 1 (no statement positions in
   the AST).

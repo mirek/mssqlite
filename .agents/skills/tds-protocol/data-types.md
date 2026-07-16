@@ -183,7 +183,14 @@ Wire format: `sign(1B) + value(LE integer)`. Sign: 0x01=positive, 0x00=negative.
 - Time component (same as time(n)) + 3B date component (days since 0001-01-01)
 
 **datetimeoffset(n)** (8-10 bytes, TDS 7.3+):
-- Time + date + 2B signed LE offset in minutes (-840 to 840, i.e., -14:00 to +14:00)
+- UTC time + UTC date + 2B signed LE offset in minutes (-840 to 840, i.e.,
+  -14:00 to +14:00). Decode by shifting the UTC fields by the retained offset;
+  do not interpret the first fields as local civil time.
+- Scale conversion rounds the UTC time and carries into the encoded date.
+  Validate both local and UTC year ranges before writing.
+- Example bare value at scale 7: `2026-07-01 02:30:00.1234567 +05:30` →
+  `87 5E 2F 05 B0 D4 49 0B 4A 01` (5-byte UTC time, 3-byte UTC date,
+  signed offset `0x014A`).
 
 ### Scale-to-Length Tables (TDS 7.3+)
 

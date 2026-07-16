@@ -51,6 +51,10 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   little-endian int64 (see §14).
 - Time-only strings need parsing support in date/time codecs — `time(n)`
   values have no date part; MSSQL treats the implied date as 1900-01-01.
+- DATETIMEOFFSETN carries UTC time/date followed by the original signed offset,
+  not local time/date. Its 3/4/5-byte time rounds at the TYPE_INFO scale with
+  date carry; decoding shifts UTC back to local for the canonical string.
+  Keep all 100ns digits and validate local and UTC years without JS `Date`.
 - DECIMAL/NUMERIC values cross the engine/TDS boundary as canonical
   fixed-scale strings. `decimal.ts` rounds to the TYPE_INFO scale, validates
   the declared precision before encoding, then emits the sign byte followed

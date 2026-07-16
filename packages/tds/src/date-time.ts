@@ -83,9 +83,24 @@ export const partsOf =
       seconds: Number(seconds ?? 0),
       ticks: fraction === undefined ? 0 : Number(fraction.padEnd(7, '0'))
     }
+    const validMonth = parts.month >= 1 && parts.month <= 12
+    const next = parts.month === 12 ? { year: parts.year + 1, month: 1 } :
+      { year: parts.year, month: parts.month + 1 }
+    const daysInMonth = validMonth ?
+      daysFromCivil(next.year, next.month, 1) - daysFromCivil(parts.year, parts.month, 1) : 0
+    if (parts.year < 1 || parts.year > 9999 || !validMonth ||
+      parts.day < 1 || parts.day > daysInMonth ||
+      parts.hours > 23 || parts.minutes > 59 || parts.seconds > 59) {
+      throw new Error(`Invalid date/time value ${JSON.stringify(value)}.`)
+    }
     if (zone !== undefined && zone !== 'Z') {
       const sign = zone.startsWith('-') ? -1 : 1
-      const offsetMinutes = sign * ((Number(zone.slice(1, 3)) * 60) + Number(zone.slice(4, 6)))
+      const offsetHours = Number(zone.slice(1, 3))
+      const offsetMinutePart = Number(zone.slice(4, 6))
+      const offsetMinutes = sign * ((offsetHours * 60) + offsetMinutePart)
+      if (offsetMinutePart > 59 || offsetHours > 14 || (offsetHours === 14 && offsetMinutePart !== 0)) {
+        throw new Error(`Invalid datetimeoffset zone ${zone}.`)
+      }
       return { ...parts, offsetMinutes }
     }
     return zone === 'Z' ? { ...parts, offsetMinutes: 0 } : parts
@@ -186,8 +201,28 @@ export const decodeDate =
 
 /** @returns time ticks since midnight in 10^-scale second units. */
 const timeUnits =
-  (parts: Parts, scale: number): number =>
-    Math.round(((daySeconds(parts) * 10000000) + parts.ticks) / (10 ** (7 - scale)))
+  (parts: Parts, scale: number): number => {
+    if (!Number.isInteger(scale) || scale < 0 || scale > 7) {
+      throw new RangeError(`Invalid date/time scale ${scale}; expected 0 through 7.`)
+    }
+    return Math.round(((daySeconds(parts) * 10000000) + parts.ticks) / (10 ** (7 - scale))) %
+      (86400 * (10 ** scale))
+  }
+
+const rounded =
+  (parts: Parts, scale: number): Parts => {
+    if (!Number.isInteger(scale) || scale < 0 || scale > 7) {
+      throw new RangeError(`Invalid date/time scale ${scale}; expected 0 through 7.`)
+    }
+    const unitsPerDay = 86400 * (10 ** scale)
+    const units = Math.round(((daySeconds(parts) * 10000000) + parts.ticks) / (10 ** (7 - scale)))
+    const carry = Math.floor(units / unitsPerDay)
+    return {
+      ...parts,
+      ...civilFromDays(daysFromCivil(parts.year, parts.month, parts.day) + carry),
+      ...timeParts(units % unitsPerDay, scale)
+    }
+  }
 
 /** @returns time(n) bytes — 3-5 byte little-endian tick count. */
 export const encodeTime =
@@ -214,8 +249,13 @@ export const decodeTime =
 
 /** @returns datetime2(n) bytes — time(n) followed by 3 date bytes. */
 export const encodeDateTime2 =
-  (parts: Parts, scale: number): Uint8Array =>
-    Encode.concat(encodeTime(parts, scale), encodeDate(parts))
+  (parts: Parts, scale: number): Uint8Array => {
+    const value = rounded(parts, scale)
+    if (value.year < 1 || value.year > 9999) {
+      throw new Error('The rounded datetime2 value is outside 0001-01-01 through 9999-12-31.')
+    }
+    return Encode.concat(encodeTime(value, scale), encodeDate(value))
+  }
 
 /** @returns `YYYY-MM-DD HH:MM:SS[.f...]` string from datetime2(n) wire parts. */
 export const decodeDateTime2 =
@@ -229,7 +269,14 @@ export const decodeDateTime2 =
 export const encodeDateTimeOffset =
   (parts: Parts, scale: number): Uint8Array => {
     const offsetMinutes = parts.offsetMinutes ?? 0
-    const utc = shifted(parts, -offsetMinutes)
+    const local = rounded(parts, scale)
+    if (local.year < 1 || local.year > 9999) {
+      throw new Error('The rounded local datetimeoffset value is outside 0001-01-01 through 9999-12-31.')
+    }
+    const utc = shifted(local, -offsetMinutes)
+    if (utc.year < 1 || utc.year > 9999) {
+      throw new Error('The UTC datetimeoffset instant is outside 0001-01-01 through 9999-12-31.')
+    }
     return Encode.concat(encodeTime(utc, scale), encodeDate(utc), Encode.int16(offsetMinutes))
   }
 

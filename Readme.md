@@ -62,7 +62,9 @@ transactions and savepoints, `sys.tables` / `sys.columns` /
 `INFORMATION_SCHEMA` catalog queries, `@@ROWCOUNT` / `@@IDENTITY` /
 `SCOPE_IDENTITY()`, a large built-in function surface (strings, math,
 date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
-error numbers, and case-insensitive comparisons via NOCASE collation.
+error numbers, offset-preserving `datetimeoffset` with UTC-normalized
+comparison and exact TDS round trips, and declared case/accent/BIN2 collation
+semantics.
 
 What's still missing is tracked in [TODO.md](TODO.md).
 

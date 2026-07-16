@@ -94,6 +94,15 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   DECIMAL/NUMERIC: columns have TEXT affinity and contain canonical fixed-scale
   strings. Scalar and aggregate UDFs perform scaled-BigInt operations; a
   sortable decimal key UDF replaces lexical TEXT ordering.
+- SQLite has no offset-preserving temporal storage class. mssqlite stores
+  `datetimeoffset(n)` as canonical fixed-scale TEXT containing local civil
+  time and `±HH:MM`, and uses `mssqlite_datetimeoffset_key` (UTC day plus
+  100ns ticks) for comparison, IN/BETWEEN, ORDER BY, UNIQUE constraints, and
+  explicit expression indexes. Inserts, updates, defaults, and typed variables
+  are passed through `mssqlite_datetimeoffset_cast` so affinity cannot discard
+  the offset or fractional precision. Do not use SQLite `datetime()` or
+  `julianday()` for this type: they normalize/format with lower precision and
+  cannot retain the original offset.
 - T-SQL computed columns lower to `GENERATED ALWAYS AS`: VIRTUAL for ordinary
   definitions and STORED for PERSISTED. CREATE supports both; SQLite permits
   ALTER TABLE ADD only for VIRTUAL generated columns. Expressions may reference

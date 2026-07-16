@@ -94,6 +94,8 @@ test('datetime family round trips', () => {
   expect(roundTrip(TypeInfo.datetime2N(7), '2026-07-01 13:45:30.1234567')).toBe('2026-07-01 13:45:30.1234567')
   expect(roundTrip(TypeInfo.datetime2N(3), '2026-07-01 13:45:30.123')).toBe('2026-07-01 13:45:30.123')
   expect(roundTrip(TypeInfo.datetimeOffsetN(0), '2026-07-01 02:30:00 +05:30')).toBe('2026-07-01 02:30:00 +05:30')
+  expect(roundTrip(TypeInfo.datetimeOffsetN(7), '2026-07-01 02:30:00.1234567 +05:30'))
+    .toBe('2026-07-01 02:30:00.1234567 +05:30')
   expect(roundTrip(TypeInfo.datetimeN(8), null)).toBeNull()
   expect(roundTrip(TypeInfo.dateN(), null)).toBeNull()
 })

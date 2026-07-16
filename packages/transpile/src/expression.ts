@@ -1,6 +1,7 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
 import * as Decimal from './decimal.ts'
+import * as DateTimeOffset from './datetimeoffset.ts'
 import * as Quote from './quote.ts'
 import * as Type from './type.ts'
 import call, { convertStyle } from './functions.ts'
@@ -44,6 +45,10 @@ const cast =
       return `mssqlite_cast_integer(${inner}, ${Quote.string(expression_.type.name)}, ` +
         `${expression_.try_ ? 1 : 0})`
     }
+    if (expression_.type.name === 'datetimeoffset') {
+      const scale = typeof expression_.type.args[0] === 'number' ? expression_.type.args[0] : 7
+      return `mssqlite_datetimeoffset_cast(${inner}, ${scale}, ${expression_.try_ ? 1 : 0})`
+    }
     if (Type.category(expression_.type) === 'decimal') {
       const precision = typeof expression_.type.args[0] === 'number' ? expression_.type.args[0] : 18
       const scale = typeof expression_.type.args[1] === 'number' ? expression_.type.args[1] : 0
@@ -69,6 +74,17 @@ const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const left = expression(ctx, expression_.left)
     const right = expression(ctx, expression_.right)
+    const leftOffset = DateTimeOffset.scaleOf(ctx, expression_.left)
+    const rightOffset = DateTimeOffset.scaleOf(ctx, expression_.right)
+    if ((leftOffset !== undefined || rightOffset !== undefined) &&
+      [ '=', '<>', '!=', '<', '<=', '>', '>=', '!>', '!<' ].includes(expression_.operator)) {
+      const scale = leftOffset ?? rightOffset ?? 7
+      const a = leftOffset === undefined ? `mssqlite_datetimeoffset_cast(${left}, ${scale}, 0)` : left
+      const b = rightOffset === undefined ? `mssqlite_datetimeoffset_cast(${right}, ${scale}, 0)` : right
+      const operator = expression_.operator === '!>' ? '<=' : expression_.operator === '!<' ? '>=' :
+        expression_.operator
+      return `(${DateTimeOffset.key(a)} ${operator} ${DateTimeOffset.key(b)})`
+    }
     const leftCollation = Collation.ofExpression(ctx, expression_.left)
     const rightCollation = Collation.ofExpression(ctx, expression_.right)
     if (leftCollation !== undefined && rightCollation !== undefined &&
@@ -260,6 +276,20 @@ export const expression =
         return `(CASE${operand} ${whens}${else_} END)`
       }
       case 'in': {
+        const offsetScale = DateTimeOffset.scaleOf(ctx, expression_.expression) ??
+          (Array.isArray(expression_.values) ? expression_.values
+            .map(value => DateTimeOffset.scaleOf(ctx, value))
+            .find(scale => scale !== undefined) : undefined)
+        if (offsetScale !== undefined && Array.isArray(expression_.values)) {
+          const offsetKey = (value: Ast.Expression): string => {
+            const rendered = expression(ctx, value)
+            const casted = DateTimeOffset.scaleOf(ctx, value) === undefined ?
+              `mssqlite_datetimeoffset_cast(${rendered}, ${offsetScale}, 0)` : rendered
+            return DateTimeOffset.key(casted)
+          }
+          const values = expression_.values.map(offsetKey).join(', ')
+          return `(${offsetKey(expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
+        }
         const collation = Collation.ofExpression(ctx, expression_.expression)
         if (collation !== undefined && Array.isArray(expression_.values)) {
           const left = Collation.expressionKey(expression(ctx, expression_.expression), collation)
@@ -285,8 +315,22 @@ export const expression =
           ` ESCAPE ${expression(ctx, expression_.escape)}`
         return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT LIKE' : 'LIKE'} ${expression(ctx, expression_.pattern)}${escape})`
       }
-      case 'between':
-        return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ${expression(ctx, expression_.low)} AND ${expression(ctx, expression_.high)})`
+      case 'between': {
+        const scale = DateTimeOffset.scaleOf(ctx, expression_.expression) ??
+          DateTimeOffset.scaleOf(ctx, expression_.low) ?? DateTimeOffset.scaleOf(ctx, expression_.high)
+        if (scale !== undefined) {
+          const offsetKey = (value: Ast.Expression): string => {
+            const rendered = expression(ctx, value)
+            const casted = DateTimeOffset.scaleOf(ctx, value) === undefined ?
+              `mssqlite_datetimeoffset_cast(${rendered}, ${scale}, 0)` : rendered
+            return DateTimeOffset.key(casted)
+          }
+          return `(${offsetKey(expression_.expression)} ${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
+            `${offsetKey(expression_.low)} AND ${offsetKey(expression_.high)})`
+        }
+        return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
+          `${expression(ctx, expression_.low)} AND ${expression(ctx, expression_.high)})`
+      }
       case 'isNull':
         return `(${expression(ctx, expression_.expression)} IS ${expression_.negated ? 'NOT ' : ''}NULL)`
       case 'exists':
