@@ -58,7 +58,7 @@ transactions and savepoints, `sys.tables` / `sys.columns` /
 date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
 error numbers, and case-insensitive comparisons via NOCASE collation.
 
-What's still missing is tracked in [Roadmap.md](Roadmap.md).
+What's still missing is tracked in [TODO.md](TODO.md).
 
 ## Development
 

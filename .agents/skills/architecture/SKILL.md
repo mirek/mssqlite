@@ -136,8 +136,8 @@ the engine:
 
 ## Known limitations (v1)
 
-See [Roadmap.md](../../../Roadmap.md) for the prioritized gap analysis
-toward full MSSQL support.
+See [TODO.md](../../../TODO.md) for the prioritized implementation briefs
+toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
