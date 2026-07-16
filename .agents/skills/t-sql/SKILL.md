@@ -115,10 +115,16 @@ The language pipeline lives in three packages:
   rewrites to a partitioned row-number join; GROUP/HAVING/set operations,
   non-equality correlation, other correlated TVFs, and star projection over
   the rewritten source are cleanly unsupported.
+- PIVOT/UNPIVOT parse as postfix table transforms with mandatory aliases.
+  PIVOT supports SUM/AVG/MIN/MAX/COUNT over a value column and requires a
+  statically known source schema; listed values become conditional aggregate
+  columns while every other input column remains a grouping key. UNPIVOT
+  expands listed columns in order, omits NULLs, preserves generated metadata,
+  and rejects duplicate names or incompatible known input types.
 
 ### Not yet implemented (raise clean errors)
 
-CREATE FUNCTION/TRIGGER, PIVOT/UNPIVOT, cursors, WAITFOR,
+CREATE FUNCTION/TRIGGER, cursors, WAITFOR,
 GOTO, source columns in MERGE OUTPUT,
 FOR JSON/XML,
 GROUP BY ROLLUP/CUBE/GROUPING SETS, COLLATE as expression operator,

@@ -42,7 +42,8 @@ const statements = parse(`
   GROUP BY, HAVING, ORDER BY ASC/DESC, OFFSET/FETCH, UNION [ALL], EXCEPT,
   INTERSECT, CTEs (`WITH a AS (...)`), and table-valued functions in FROM
   with aliases/positional column aliases and `OPENJSON ... WITH (...)`;
-  CROSS/OUTER APPLY preserve lateral source order in the AST.
+  CROSS/OUTER APPLY preserve lateral source order in the AST, and PIVOT /
+  UNPIVOT are postfix table-source transforms with required aliases.
 - **Expressions** — full T-SQL operator precedence, unary `- + ~ NOT`,
   arithmetic, concat `+`, bitwise `& ^ |`, comparisons (incl. `!=`, `!<`,
   `!>`), `IS [NOT] NULL`, `[NOT] LIKE ... ESCAPE`, `[NOT] IN (list|subquery)`,

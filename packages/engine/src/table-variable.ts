@@ -1,3 +1,4 @@
+import * as Catalog from '@mssqlite/catalog'
 import * as Transpile from '@mssqlite/transpile'
 import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
@@ -104,11 +105,76 @@ const resolveItem =
       item :
       { ...item, expression: resolveExpression(session, item.expression) }
 
+const typeNameOf =
+  (row: Catalog.ColumnRow): Ast.SourceColumn['type'] => {
+    const type = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === row.user_type_id) ??
+      Catalog.TypeRow.rows.find(candidate => candidate.systemTypeId === row.system_type_id)
+    if (type === undefined) {
+      return undefined
+    }
+    const args: readonly (number | 'max')[] = (() => {
+      switch (type.name) {
+        case 'decimal':
+        case 'numeric':
+          return [ row.precision, row.scale ]
+        case 'char':
+        case 'varchar':
+        case 'binary':
+        case 'varbinary':
+          return [ row.max_length === -1 ? 'max' : row.max_length ]
+        case 'nchar':
+        case 'nvarchar':
+          return [ row.max_length === -1 ? 'max' : row.max_length / 2 ]
+        case 'time':
+        case 'datetime2':
+        case 'datetimeoffset':
+          return [ row.scale ]
+        default:
+          return []
+      }
+    })()
+    return { name: type.name, args }
+  }
+
+const sourceColumns =
+  (session: Session, name: Ast.QualifiedName, pragma: string): readonly Ast.SourceColumn[] => {
+    const tableName = name[name.length - 1] ?? ''
+    const variable = [ ...session.tableVariables.values() ].find(candidate =>
+      candidate.table[candidate.table.length - 1]?.toLowerCase() === tableName.toLowerCase())
+    if (variable !== undefined) {
+      return variable.columns.map(column => ({
+        name: column.name,
+        type: column.type,
+        nullable: column.nullable !== false && column.primaryKey !== true
+      }))
+    }
+    const objectId = Catalog.objectIdOf(session.db, name)
+    if (objectId !== undefined) {
+      return Catalog.tableColumns(session.db, objectId).map(column => {
+        const type = typeNameOf(column)
+        return {
+          name: column.name,
+          ...type === undefined ? {} : { type },
+          nullable: column.is_nullable !== 0
+        }
+      })
+    }
+    const columns = session.db.prepare(pragma).all() as { name: string }[]
+    return columns.map(column => ({ name: column.name }))
+  }
+
 const resolveTableSource =
   (session: Session, source: Ast.TableSource): Ast.TableSource => {
     switch (source.kind) {
-      case 'table':
-        return { ...source, name: resolveName(session, source.name) }
+      case 'table': {
+        const name = resolveName(session, source.name)
+        const table = Transpile.Quote.objectName(name)
+        const tableName = name[name.length - 1] ?? ''
+        const pragma = tableName.startsWith('#') ?
+          `PRAGMA temp.table_info(${Transpile.Quote.identifier(tableName)})` :
+          `PRAGMA table_info(${table})`
+        return { ...source, name, columns: sourceColumns(session, name, pragma) }
+      }
       case 'function':
         return {
           ...source,
@@ -116,6 +182,18 @@ const resolveTableSource =
         }
       case 'derived':
         return { ...source, select: resolveSelect(session, source.select) }
+      case 'pivot':
+        return {
+          ...source,
+          source: resolveTableSource(session, source.source),
+          aggregate: {
+            ...source.aggregate,
+            expression: resolveExpression(session, source.aggregate.expression)
+          },
+          pivotColumn: source.pivotColumn
+        }
+      case 'unpivot':
+        return { ...source, source: resolveTableSource(session, source.source) }
       case 'join':
         return {
           ...source,

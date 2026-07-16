@@ -21,7 +21,7 @@ Source: [sqlite.org/docs](https://sqlite.org/docs.html)
 - [transactions.md](transactions.md) — BEGIN [DEFERRED|IMMEDIATE|EXCLUSIVE], COMMIT/ROLLBACK, SAVEPOINT/RELEASE/ROLLBACK TO nesting, autocommit, isolation model (snapshot per-connection in WAL, serializable in rollback mode), locking-state lifecycle (UNLOCKED→SHARED→RESERVED→PENDING→EXCLUSIVE), WAL reader/writer concurrency, checkpoint modes (PASSIVE/FULL/RESTART/TRUNCATE), `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` handling, deferred FK behavior, server-design recommendations
 - [optimizer.md](optimizer.md) — Index types (rowid B-tree, `sqlite_autoindex_*`, user, automatic), multi-column left-prefix + gap + inequality cutoff rules, covering indexes, partial-index usability (W⇒X rules), expression indexes (textual match + REINDEX EXPRESSIONS), ANALYZE (`sqlite_stat1`/`sqlite_stat4`, `PRAGMA optimize` with mask `0x10002`), join-reorder cost model, WHERE-term shapes, OR optimizations (OR→IN, MULTI-INDEX OR), LIKE/GLOB optimization preconditions, skip-scan, sort elision, subquery flattening, EXPLAIN QUERY PLAN reading guide (SCAN/SEARCH/USING [COVERING] INDEX/CO-ROUTINE/MATERIALIZE), bad-plan diagnostic checklist
 - [extensions.md](extensions.md) — Virtual tables (concept, eponymous, table-valued functions), JSON1 (scalars, `->`/`->>`, JSONB variants, `json_each`/`json_tree`, aggregates), FTS5 (CREATE syntax, MATCH, ranking), R*Tree, `generate_series`, `carray` (host-language array binding ≈ TVP), CSV, spellfix1, dbstat/bytecodevtab introspection, sessions/changesets overview; T-SQL mapping notes (JSON_VALUE/OPENJSON, CONTAINS/FREETEXT, change tracking)
-- [limits-and-quirks.md](limits-and-quirks.md) — Numeric limits (`SQLITE_MAX_LENGTH`, columns, JOIN count 64 vs 256, expression depth, trigger recursion), flexible typing without STRICT, FK off by default, PK allows NULL bug, INTEGER PRIMARY KEY = ROWID, AUTOINCREMENT vs IDENTITY, REPLACE vs MERGE, single-writer concurrency, no procedures/auth, GROUP BY relaxation, CAST gotchas, BINARY collation, double-quoted-string misfeature, ALTER TABLE limits, omitted features (MERGE, PIVOT, OUTPUT, RAISERROR), corruption risks, T-SQL isolation-hint mapping
+- [limits-and-quirks.md](limits-and-quirks.md) — Numeric limits (`SQLITE_MAX_LENGTH`, columns, JOIN count 64 vs 256, expression depth, trigger recursion), flexible typing without STRICT, FK off by default, PK allows NULL bug, INTEGER PRIMARY KEY = ROWID, AUTOINCREMENT vs IDENTITY, REPLACE vs MERGE, single-writer concurrency, no procedures/auth, GROUP BY relaxation, CAST gotchas, BINARY collation, double-quoted-string misfeature, ALTER TABLE limits, omitted features (MERGE, OUTPUT, RAISERROR), corruption risks, T-SQL isolation-hint mapping
 
 ## Quick start for the server
 
@@ -83,6 +83,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   arguments can reference earlier FROM sources. mssqlite uses that for
   correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
   lower to a ROW_NUMBER-partitioned INNER/LEFT join.
+- SQLite has no PIVOT/UNPIVOT operators. mssqlite renders PIVOT as grouped
+  aggregates over `CASE WHEN pivot_key = value THEN aggregate_value END`.
+  UNPIVOT becomes a `MATERIALIZED` CTE plus one NULL-filtered `UNION ALL`
+  term per source column, ensuring volatile source expressions run once.
+  SQLite's dynamic affinity can carry mixed numeric values in direct
+  rendering, but engine execution rejects differing known declared types to
+  retain SQL Server's stable result metadata.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

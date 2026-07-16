@@ -323,6 +323,65 @@ test('apply preserves correlated row elimination and null extension', () => {
   `)).rows).toEqual([ [ 1, 'new' ], [ 2, null ], [ 3, 'only' ] ])
 })
 
+test('pivot and unpivot expose generated values and metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE transform_sales (region NVARCHAR(20), quarter NVARCHAR(2), amount INT);
+    INSERT INTO transform_sales VALUES
+      ('east', 'Q1', 10), ('east', 'Q1', 5), ('east', 'Q2', NULL),
+      ('west', 'Q2', 7);
+  `)
+  const pivot = rowsOf(executeBatch(s, `
+    SELECT region, [Q1], [Q2], [Q3]
+    FROM transform_sales
+    PIVOT (SUM(amount) FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY region
+  `))
+  expect(pivot.rows).toEqual([
+    [ 'east', 15, null, null ],
+    [ 'west', null, 7, null ]
+  ])
+  expect(pivot.columns.map(column => column.name)).toEqual([ 'region', 'Q1', 'Q2', 'Q3' ])
+  expect(pivot.columns.slice(1).map(column => column.typeInfo.type))
+    .toEqual([ DataType.DataType.intN, DataType.DataType.intN, DataType.DataType.intN ])
+
+  executeBatch(s, `
+    CREATE TABLE transform_labels (bucket NVARCHAR(2), label NVARCHAR(12));
+    INSERT INTO transform_labels VALUES ('Q1', 'first');
+  `)
+  const labels = rowsOf(executeBatch(s, `
+    SELECT [Q1], [Q2] FROM transform_labels
+    PIVOT (MAX(label) FOR bucket IN ([Q1], [Q2])) result
+  `))
+  expect(labels.rows).toEqual([ [ 'first', null ] ])
+  expect(labels.columns.map(column => column.typeInfo)).toMatchObject([
+    { type: DataType.DataType.nvarchar, maxLength: 24 },
+    { type: DataType.DataType.nvarchar, maxLength: 24 }
+  ])
+
+  executeBatch(s, `
+    CREATE TABLE transform_quarters (id INT, [Q1] INT, [Q2] INT, [Q3] INT);
+    INSERT INTO transform_quarters VALUES (1, 10, 20, NULL), (2, NULL, 25, 30);
+  `)
+  const unpivot = rowsOf(executeBatch(s, `
+    SELECT id, quarter, amount
+    FROM transform_quarters
+    UNPIVOT (amount FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY id, quarter
+  `))
+  expect(unpivot.rows).toEqual([
+    [ 1, 'Q1', 10 ], [ 1, 'Q2', 20 ], [ 2, 'Q2', 25 ], [ 2, 'Q3', 30 ]
+  ])
+  expect(unpivot.columns.map(column => column.name)).toEqual([ 'id', 'quarter', 'amount' ])
+  expect(unpivot.columns[2]?.typeInfo.type).toBe(DataType.DataType.intN)
+
+  executeBatch(s, 'CREATE TABLE transform_mixed (id INT, a INT, b REAL)')
+  expect(() => executeBatch(s, `
+    SELECT * FROM transform_mixed
+    UNPIVOT (value FOR name IN (a, b)) result
+  `)).toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))

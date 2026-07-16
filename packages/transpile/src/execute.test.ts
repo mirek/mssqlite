@@ -198,6 +198,49 @@ test('cross and outer apply evaluate string split per left row', () => {
   ])
 })
 
+test('pivot groups and aggregates while preserving missing values', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE sales (region NVARCHAR(20), quarter NVARCHAR(2), amount INT);
+    INSERT INTO sales VALUES
+      ('east', 'Q1', 10), ('east', 'Q1', 5), ('east', 'Q2', NULL),
+      ('west', 'Q2', 7);
+  `)
+  expect(all(db, `
+    SELECT region, [Q1], [Q2], [Q3]
+    FROM (SELECT region, quarter, amount FROM sales) source
+    PIVOT (SUM(amount) FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY region
+  `)).toEqual([
+    { region: 'east', Q1: 15, Q2: null, Q3: null },
+    { region: 'west', Q1: null, Q2: 7, Q3: null }
+  ])
+  expect(all(db, `
+    SELECT [Q1], [Q2], [Q3]
+    FROM (SELECT quarter, amount FROM sales) source
+    PIVOT (COUNT(amount) FOR quarter IN ([Q1], [Q2], [Q3])) result
+  `)).toEqual([ { Q1: 2, Q2: 1, Q3: 0 } ])
+})
+
+test('unpivot omits nulls and preserves compatible mixed numeric affinities', () => {
+  const db = database()
+  run(db, `
+    CREATE TABLE quarterly (id INT, [Q1] INT, [Q2] REAL, [Q3] INT);
+    INSERT INTO quarterly VALUES (1, 10, 2.5, NULL), (2, NULL, 4.0, 30);
+  `)
+  expect(all(db, `
+    SELECT id, quarter, amount
+    FROM (SELECT id, [Q1], [Q2], [Q3] FROM quarterly) source
+    UNPIVOT (amount FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY id, quarter
+  `)).toEqual([
+    { id: 1, quarter: 'Q1', amount: 10 },
+    { id: 1, quarter: 'Q2', amount: 2.5 },
+    { id: 2, quarter: 'Q2', amount: 4 },
+    { id: 2, quarter: 'Q3', amount: 30 }
+  ])
+})
+
 test('window functions execute', () => {
   const db = database()
   run(db, `

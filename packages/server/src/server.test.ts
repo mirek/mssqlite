@@ -8,6 +8,12 @@ let connection: Connection
 type Row =
   Record<string, unknown>
 
+type WireColumn = {
+  readonly name: string,
+  readonly type: string,
+  readonly length: number | undefined
+}
+
 const connect =
   (port: number): Promise<Connection> =>
     new Promise((resolve, reject) => {
@@ -38,25 +44,33 @@ const connect =
     })
 
 const query =
-  (sql: string, parameters: { name: string, type: (typeof TYPES)[keyof typeof TYPES], value: unknown }[] = []): Promise<{ rows: Row[], rowCount: number }> =>
+  (sql: string, parameters: { name: string, type: (typeof TYPES)[keyof typeof TYPES], value: unknown }[] = []): Promise<{ rows: Row[], rowCount: number, columns: WireColumn[] }> =>
     new Promise((resolve, reject) => {
       const rows: Row[] = []
+      let columns: WireColumn[] = []
       const request = new Request(sql, (error, rowCount) => {
         if (error) {
           reject(error)
         } else {
-          resolve({ rows, rowCount: rowCount ?? 0 })
+          resolve({ rows, rowCount: rowCount ?? 0, columns })
         }
       })
       for (const parameter of parameters) {
         request.addParameter(parameter.name, parameter.type, parameter.value)
       }
-      request.on('row', columns => {
+      request.on('row', rowColumns => {
         const row: Row = {}
-        for (const [ name, column ] of Object.entries(columns as Record<string, { value: unknown }>)) {
+        for (const [ name, column ] of Object.entries(rowColumns as Record<string, { value: unknown }>)) {
           row[name] = column.value
         }
         rows.push(row)
+      })
+      request.on('columnMetadata', metadata => {
+        columns = Object.values(metadata).map(column => ({
+          name: column.colName,
+          type: column.type.name,
+          length: column.dataLength
+        }))
       })
       connection.execSql(request)
     })
@@ -241,6 +255,62 @@ test('apply correlation and null extension over the wire', async () => {
     ORDER BY t.id
   `)
   expect(latest.rows).toEqual([ { id: 1, note: 'new' }, { id: 2, note: null } ])
+})
+
+test('pivot and unpivot values and metadata over the wire', async () => {
+  await query(`
+    CREATE TABLE wire_sales (region NVARCHAR(20), quarter NVARCHAR(2), amount INT);
+    INSERT INTO wire_sales VALUES
+      ('east', 'Q1', 10), ('east', 'Q1', 5), ('east', 'Q2', NULL),
+      ('west', 'Q2', 7);
+  `)
+  const pivot = await query(`
+    SELECT region, [Q1], [Q2], [Q3]
+    FROM wire_sales
+    PIVOT (SUM(amount) FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY region
+  `)
+  expect(pivot.rows).toEqual([
+    { region: 'east', Q1: 15, Q2: null, Q3: null },
+    { region: 'west', Q1: null, Q2: 7, Q3: null }
+  ])
+  expect(pivot.columns.map(column => [ column.name, column.type ])).toEqual([
+    [ 'region', 'NVarChar' ], [ 'Q1', 'IntN' ], [ 'Q2', 'IntN' ], [ 'Q3', 'IntN' ]
+  ])
+
+  await query(`
+    CREATE TABLE wire_labels (bucket NVARCHAR(2), label NVARCHAR(12));
+    INSERT INTO wire_labels VALUES ('Q1', 'first');
+  `)
+  const labels = await query(`
+    SELECT [Q1], [Q2] FROM wire_labels
+    PIVOT (MAX(label) FOR bucket IN ([Q1], [Q2])) result
+  `)
+  expect(labels.rows).toEqual([ { Q1: 'first', Q2: null } ])
+  expect(labels.columns).toEqual([
+    { name: 'Q1', type: 'NVarChar', length: 24 },
+    { name: 'Q2', type: 'NVarChar', length: 24 }
+  ])
+
+  await query(`
+    CREATE TABLE wire_quarters (id INT, [Q1] INT, [Q2] INT, [Q3] INT);
+    INSERT INTO wire_quarters VALUES (1, 10, 20, NULL), (2, NULL, 25, 30);
+  `)
+  const unpivot = await query(`
+    SELECT id, quarter, amount
+    FROM wire_quarters
+    UNPIVOT (amount FOR quarter IN ([Q1], [Q2], [Q3])) result
+    ORDER BY id, quarter
+  `)
+  expect(unpivot.rows).toEqual([
+    { id: 1, quarter: 'Q1', amount: 10 },
+    { id: 1, quarter: 'Q2', amount: 20 },
+    { id: 2, quarter: 'Q2', amount: 25 },
+    { id: 2, quarter: 'Q3', amount: 30 }
+  ])
+  expect(unpivot.columns.map(column => [ column.name, column.type ])).toEqual([
+    [ 'id', 'IntN' ], [ 'quarter', 'NVarChar' ], [ 'amount', 'IntN' ]
+  ])
 })
 
 test('update and delete counts', async () => {

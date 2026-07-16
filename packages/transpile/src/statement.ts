@@ -2,6 +2,7 @@ import * as Context from './context.ts'
 import * as Output from './output.ts'
 import * as Quote from './quote.ts'
 import * as TableFunction from './table-function.ts'
+import * as TableTransform from './table-transform.ts'
 import * as Type from './type.ts'
 import expression, { useSelectRender } from './expression.ts'
 import { unsupported } from './error.ts'
@@ -22,6 +23,9 @@ const sourceQualifiers =
         return new Set([ source.alias.toLowerCase() ])
       case 'function':
         return new Set([ (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase() ])
+      case 'pivot':
+      case 'unpivot':
+        return new Set([ source.alias.toLowerCase() ])
       case 'join':
         return new Set([ ...sourceQualifiers(source.left), ...sourceQualifiers(source.right) ])
       default:
@@ -153,6 +157,10 @@ const tableSource =
         return TableFunction.source(ctx, source, expression)
       case 'derived':
         return `(${select(ctx, source.select)}) AS ${Quote.identifier(source.alias)}`
+      case 'pivot':
+        return TableTransform.pivot(ctx, source, tableSource, expression)
+      case 'unpivot':
+        return TableTransform.unpivot(ctx, source, tableSource)
       case 'join': {
         const left = tableSource(ctx, source.left)
         if (source.join === 'crossApply' || source.join === 'outerApply') {
@@ -662,7 +670,9 @@ export const statement =
           return unsupported(`Statement ${statement_.kind} has no direct SQLite rendering.`)
       }
     })()
-    const columns = statement_.kind === 'select' ? TableFunction.selectHints(statement_) : undefined
+    const columns = statement_.kind === 'select' ?
+      TableFunction.selectHints(statement_) ?? TableTransform.selectHints(statement_) :
+      undefined
     return {
       sql,
       variables: ctx.variables,

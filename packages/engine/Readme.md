@@ -52,6 +52,10 @@ const items = executeBatch(s, `
 - **CROSS / OUTER APPLY** — supported for correlated two-argument
   STRING_SPLIT and simple correlated TOP (1) derived queries. CROSS removes
   empty right sides; OUTER retains the left row with NULL right columns.
+- **PIVOT / UNPIVOT** — source schemas are resolved before transpilation so
+  conditional-aggregate PIVOT and materialized `UNION ALL` UNPIVOT rewrites
+  can validate names and emit stable generated-column metadata. UNPIVOT
+  rejects statically known input columns whose declared types differ.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
@@ -87,8 +91,8 @@ const items = executeBatch(s, `
 
 ## Column metadata
 
-Result columns get TDS `TYPE_INFO` three ways: table-valued-function
-renderings provide declared hints before execution; `StatementSync.columns()`
+Result columns get TDS `TYPE_INFO` three ways: table-valued-function and
+PIVOT/UNPIVOT renderings provide declared hints before execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
 definitions (exact declared types, nullability); computed columns fall back to value-shape inference
 (int32/int64/float/nvarchar(max)/varbinary(max)/bit).
