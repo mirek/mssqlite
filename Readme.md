@@ -53,6 +53,8 @@ statement-level AFTER and INSTEAD OF DML triggers with persisted definitions
 and multi-row `inserted` / `deleted` transition tables,
 session cursors with LOCAL/GLOBAL lifetime, scroll fetches, INTO assignment,
 and `@@FETCH_STATUS`,
+cataloged sequences with atomic NEXT VALUE FOR allocation, bounds/cycling,
+restart persistence, and rollback-independent consumption,
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
 CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
 indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested

@@ -188,6 +188,92 @@ test('OPEN snapshots cursor rows and reopening refreshes the snapshot', () => {
   executeBatch(s, 'DEALLOCATE snapshot_cursor')
 })
 
+test('sequences allocate values and expose sys.sequences metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE SEQUENCE dbo.order_ids AS INT
+      START WITH 10 INCREMENT BY 5 MINVALUE 10 MAXVALUE 30 NO CYCLE CACHE 4
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR dbo.order_ids AS id')).rows).toEqual([ [ 10 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR order_ids AS id')).rows).toEqual([ [ 15 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT type, type_desc, start_value, increment, minimum_value, maximum_value,
+      current_value, last_used_value, is_cycling, is_cached, cache_size
+    FROM sys.sequences WHERE name = N'order_ids'
+  `)).rows).toEqual([ [ 'SO', 'SEQUENCE_OBJECT', 10, 5, 10, 30, 15, 15, 0, 1, 4 ] ])
+})
+
+test('descending and cycling sequences wrap at the type bounds', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE SEQUENCE descending_ids AS SMALLINT
+      START WITH 3 INCREMENT BY -2 MINVALUE -1 MAXVALUE 3 CYCLE NO CACHE
+  `)
+  const values = Array.from({ length: 4 }, () =>
+    rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR descending_ids AS id')).rows[0]?.[0])
+  expect(values).toEqual([ 3, 1, -1, 3 ])
+})
+
+test('sequence exhaustion and ALTER RESTART follow configured bounds', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE SEQUENCE finite_ids AS INT
+      START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE 2 NO CYCLE
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id')).rows).toEqual([ [ 1 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id')).rows).toEqual([ [ 2 ] ])
+  expect(() => executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id'))
+    .toThrowError(expect.objectContaining({ number: 11728 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT current_value, is_exhausted FROM sys.sequences WHERE name = N'finite_ids'
+  `)).rows).toEqual([ [ 2, 1 ] ])
+  executeBatch(s, 'ALTER SEQUENCE finite_ids RESTART WITH 2 INCREMENT BY -1 MINVALUE 0')
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id')).rows).toEqual([ [ 1 ] ])
+  executeBatch(s, 'ALTER SEQUENCE finite_ids RESTART')
+  expect(rowsOf(executeBatch(s, 'SELECT NEXT VALUE FOR finite_ids AS id')).rows).toEqual([ [ 1 ] ])
+})
+
+test('sequence allocations survive rollback and are atomic across sessions', () => {
+  const srv = server()
+  const first = session(srv)
+  const second = session(srv)
+  executeBatch(first, 'CREATE SEQUENCE shared_ids AS INT START WITH 100')
+  executeBatch(first, 'BEGIN TRAN')
+  expect(rowsOf(executeBatch(first, 'SELECT NEXT VALUE FOR shared_ids AS id')).rows).toEqual([ [ 100 ] ])
+  executeBatch(first, 'ROLLBACK')
+  expect(rowsOf(executeBatch(second, 'SELECT NEXT VALUE FOR shared_ids AS id')).rows).toEqual([ [ 101 ] ])
+  expect(rowsOf(executeBatch(first, `
+    SELECT current_value, last_used_value FROM sys.sequences WHERE name = N'shared_ids'
+  `)).rows).toEqual([ [ 101, 101 ] ])
+})
+
+test('sequences persist across restart and drop cleanly', () => {
+  const path = join(tmpdir(), `mssqlite-sequence-${process.pid}-${Date.now()}.db`)
+  try {
+    const first = session(server({ path }))
+    executeBatch(first, 'CREATE SEQUENCE persisted_ids AS INT START WITH 7 INCREMENT BY 3')
+    expect(rowsOf(executeBatch(first, 'SELECT NEXT VALUE FOR persisted_ids AS id')).rows).toEqual([ [ 7 ] ])
+    const second = session(server({ path }))
+    expect(rowsOf(executeBatch(second, 'SELECT NEXT VALUE FOR persisted_ids AS id')).rows).toEqual([ [ 10 ] ])
+    executeBatch(second, 'DROP SEQUENCE persisted_ids')
+    expect(() => executeBatch(second, 'SELECT NEXT VALUE FOR persisted_ids AS id'))
+      .toThrowError(expect.objectContaining({ number: 11726 }) as Error)
+    expect(rowsOf(executeBatch(second, 'SELECT COUNT(*) AS n FROM sys.sequences')).rows).toEqual([ [ 0 ] ])
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
+test('sequence DDL rejects invalid increments and duplicate options', () => {
+  const s = open()
+  expect(() => executeBatch(s, 'CREATE SEQUENCE zero_step AS INT INCREMENT BY 0'))
+    .toThrowError(expect.objectContaining({ number: 11704 }) as Error)
+  expect(() => executeBatch(s, `
+    CREATE SEQUENCE duplicate_start AS INT START WITH 1 START WITH 2
+  `)).toThrowError(expect.objectContaining({ number: 11708 }) as Error)
+})
+
 test('table variable backing tables clean up at batch end', () => {
   const s = open()
   executeBatch(s, 'DECLARE @t TABLE (id INT); INSERT INTO @t VALUES (1)')

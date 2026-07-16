@@ -1,6 +1,7 @@
 import { bootstrap } from '@mssqlite/catalog'
 import { parse } from '@mssqlite/tsql'
 import { registerFunctions } from './udf.ts'
+import { loadSequences, type Sequence } from './sequence.ts'
 import { DatabaseSync } from 'node:sqlite'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { Column } from './metadata.ts'
@@ -84,6 +85,8 @@ export type Server = {
   readonly functions: Map<string, UserFunction>,
   /** DML triggers keyed by lowercased `schema.name`. */
   readonly triggers: Map<string, Trigger>,
+  /** Persistent sequence generators keyed by lowercased `schema.name`. */
+  readonly sequences: Map<string, Sequence>,
   /** SQLite function names whose dispatch callback has been installed. */
   readonly registeredFunctions: Set<string>,
   /** Session whose batch is executing — read by session-scoped UDFs. */
@@ -246,6 +249,7 @@ export const server =
       procedures: new Map(),
       functions: new Map(),
       triggers: new Map(),
+      sequences: loadSequences(db),
       registeredFunctions: new Set(),
       current: undefined
     }

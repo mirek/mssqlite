@@ -1,5 +1,5 @@
 import { columnType } from './type-row.ts'
-import type { Ast } from '@mssqlite/tsql'
+import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { DatabaseSync } from 'node:sqlite'
 
 /** Resolved object name — schema defaults to dbo, database qualifiers drop. */
@@ -572,6 +572,129 @@ export const createTrigger =
 /** Removes a trigger and its module row. */
 export const dropTrigger =
   dropModule
+
+export type SequenceState = {
+  readonly dataType: TypeName.t,
+  readonly start: string,
+  readonly increment: string,
+  readonly minimum: string,
+  readonly maximum: string,
+  readonly cycling: boolean,
+  readonly cached: boolean,
+  readonly cacheSize: number | null,
+  readonly current: string,
+  readonly exhausted: boolean,
+  readonly lastUsed: string | null
+}
+
+/** Persisted sequence row joined to its schema-scoped name. */
+export type SequenceRow = {
+  readonly object_id: number,
+  readonly schema_name: string,
+  readonly name: string,
+  readonly type_name: string,
+  readonly precision: number,
+  readonly scale: number,
+  readonly start_value: string,
+  readonly increment_value: string,
+  readonly minimum_value: string,
+  readonly maximum_value: string,
+  readonly is_cycling: number,
+  readonly is_cached: number,
+  readonly cache_size: number | null,
+  readonly current_value: string,
+  readonly is_exhausted: number,
+  readonly last_used_value: string | null
+}
+
+const insertSequenceState =
+  (db: DatabaseSync, objectId: number, state: SequenceState): void => {
+    const type = columnType(state.dataType)
+    if (type === undefined) {
+      throw new Error(`Unknown sequence type ${state.dataType.name}.`)
+    }
+    db.prepare(
+      `INSERT INTO "sys.sequence_state" (
+        object_id, system_type_id, user_type_id, precision, scale,
+        start_value, increment_value, minimum_value, maximum_value,
+        is_cycling, is_cached, cache_size, current_value, is_exhausted, last_used_value
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      objectId, type.systemTypeId, type.userTypeId, type.precision, type.scale,
+      state.start, state.increment, state.minimum, state.maximum,
+      state.cycling ? 1 : 0, state.cached ? 1 : 0, state.cacheSize,
+      state.current, state.exhausted ? 1 : 0, state.lastUsed
+    )
+  }
+
+/** Registers a schema-scoped sequence and its persistent counter state. */
+export const createSequence =
+  (db: DatabaseSync, name: Ast.QualifiedName, state: SequenceState): number => {
+    const at = objectNameOf(name)
+    const objectId = allocateId(db)
+    insertObject(db, {
+      objectId,
+      name: at.name,
+      schemaId: schemaIdOf(db, at.schema),
+      type: 'SO',
+      typeDesc: 'SEQUENCE_OBJECT'
+    })
+    insertSequenceState(db, objectId, state)
+    return objectId
+  }
+
+/** Replaces a sequence's persisted definition and counter state. */
+export const alterSequence =
+  (db: DatabaseSync, name: Ast.QualifiedName, state: SequenceState): void => {
+    const objectId = objectIdOf(db, name)
+    if (objectId === undefined) {
+      return
+    }
+    db.prepare('DELETE FROM "sys.sequence_state" WHERE object_id = ?').run(objectId)
+    insertSequenceState(db, objectId, state)
+    db.prepare(
+      `UPDATE "sys.objects" SET modify_date = strftime('%Y-%m-%d %H:%M:%S', 'now')
+        WHERE object_id = ?`
+    ).run(objectId)
+  }
+
+/** Removes a sequence object and its persistent state. */
+export const dropSequence =
+  (db: DatabaseSync, name: Ast.QualifiedName): void => {
+    const objectId = objectIdOf(db, name)
+    if (objectId !== undefined) {
+      db.prepare('DELETE FROM "sys.sequence_state" WHERE object_id = ?').run(objectId)
+      db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(objectId)
+    }
+  }
+
+/** Returns all persisted sequences for server-registry hydration. */
+export const sequenceRows =
+  (db: DatabaseSync): SequenceRow[] =>
+    db.prepare(
+      `SELECT q.*, o.name, s.name AS schema_name, t.name AS type_name
+        FROM "sys.sequence_state" q
+        JOIN "sys.objects" o ON o.object_id = q.object_id
+        JOIN "sys.schemas" s ON s.schema_id = o.schema_id
+        JOIN "sys.types" t ON t.user_type_id = q.user_type_id
+        WHERE o.type = 'SO'`
+    ).all() as unknown as SequenceRow[]
+
+/** Flushes the allocation fields of one sequence. */
+export const updateSequenceValue =
+  (
+    db: DatabaseSync,
+    objectId: number,
+    current: string,
+    exhausted: boolean,
+    lastUsed: string | null
+  ): void => {
+    db.prepare(
+      `UPDATE "sys.sequence_state"
+        SET current_value = ?, is_exhausted = ?, last_used_value = ?
+        WHERE object_id = ?`
+    ).run(current, exhausted ? 1 : 0, lastUsed, objectId)
+  }
 
 /** Registers columns added by ALTER TABLE ADD. */
 export const addColumns =

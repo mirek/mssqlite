@@ -88,6 +88,14 @@ export type Expression =
   | { readonly kind: 'isNull', readonly expression: Expression, readonly negated: boolean }
   | { readonly kind: 'exists', readonly select: Select }
   | { readonly kind: 'subquery', readonly select: Select }
+  | { readonly kind: 'nextValue', readonly sequence: QualifiedName }
+
+/** One CREATE/ALTER SEQUENCE option, retained in source order for validation. */
+export type SequenceOption =
+  | { readonly kind: 'start' | 'increment' | 'restart', readonly value?: string }
+  | { readonly kind: 'min' | 'max', readonly value?: string }
+  | { readonly kind: 'cycle', readonly enabled: boolean }
+  | { readonly kind: 'cache', readonly enabled: boolean, readonly size?: string }
 
 /** SELECT list item. */
 export type SelectItem =
@@ -378,6 +386,18 @@ export type Statement =
       readonly constraints: readonly TableConstraint[]
     }
   | { readonly kind: 'dropTable', readonly names: readonly QualifiedName[], readonly ifExists: boolean }
+  | {
+      readonly kind: 'createSequence',
+      readonly name: QualifiedName,
+      readonly dataType?: TypeName.t,
+      readonly options: readonly SequenceOption[]
+    }
+  | {
+      readonly kind: 'alterSequence',
+      readonly name: QualifiedName,
+      readonly options: readonly SequenceOption[]
+    }
+  | { readonly kind: 'dropSequence', readonly names: readonly QualifiedName[], readonly ifExists: boolean }
   | {
       readonly kind: 'createIndex',
       readonly unique: boolean,

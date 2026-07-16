@@ -466,6 +466,45 @@ test('drop / create index / views / alter table', () => {
   })
 })
 
+test('sequence DDL and NEXT VALUE FOR parse', () => {
+  expect(parseStatement(`
+    CREATE SEQUENCE dbo.order_ids AS INT
+      START WITH 10 INCREMENT BY 5 MINVALUE 10 MAXVALUE 100
+      CYCLE CACHE 8
+  `)).toMatchObject({
+    kind: 'createSequence',
+    name: [ 'dbo', 'order_ids' ],
+    dataType: { name: 'int' },
+    options: [
+      { kind: 'start', value: '10' },
+      { kind: 'increment', value: '5' },
+      { kind: 'min', value: '10' },
+      { kind: 'max', value: '100' },
+      { kind: 'cycle', enabled: true },
+      { kind: 'cache', enabled: true, size: '8' }
+    ]
+  })
+  expect(parseStatement(`
+    ALTER SEQUENCE order_ids RESTART WITH -5 INCREMENT BY -2
+      NO MINVALUE NO MAXVALUE NO CYCLE NO CACHE
+  `)).toMatchObject({
+    kind: 'alterSequence',
+    options: [
+      { kind: 'restart', value: '-5' },
+      { kind: 'increment', value: '-2' },
+      { kind: 'min' }, { kind: 'max' },
+      { kind: 'cycle', enabled: false },
+      { kind: 'cache', enabled: false }
+    ]
+  })
+  expect(parseStatement('DROP SEQUENCE IF EXISTS dbo.order_ids, other')).toMatchObject({
+    kind: 'dropSequence', ifExists: true
+  })
+  expect(parseExpression('NEXT VALUE FOR dbo.order_ids')).toEqual({
+    kind: 'nextValue', sequence: [ 'dbo', 'order_ids' ]
+  })
+})
+
 test('declare and set', () => {
   expect(parseStatement('DECLARE @x INT = 1, @s NVARCHAR(50)')).toMatchObject({
     kind: 'declare',

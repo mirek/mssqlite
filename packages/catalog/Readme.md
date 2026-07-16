@@ -27,6 +27,8 @@ no query interception.
     `createFunction` / `dropFunction`, and `createTrigger` / `dropTrigger`;
     module definitions persist in `sys.sql_modules`, functions use
     sys.objects type `FN` / `IF`, and triggers use table-parented type `TR`;
+    `createSequence` / `alterSequence` / `dropSequence` maintain `SO` objects
+    and lossless counter state behind `sys.sequences`;
     `addColumns` / `dropColumns`.
 - Lookups — `objectIdOf(db, name)` (schema-aware, case-insensitive),
   `tableColumns(db, objectId)` (the engine derives TDS column metadata from

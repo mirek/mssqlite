@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
+import { nextSequenceValue } from './sequence.ts'
 import type { Server } from './session.ts'
 
 type Argument =
@@ -128,6 +129,10 @@ export const registerFunctions =
     })
     define('mssqlite_newid', () => randomUUID().toUpperCase(), { deterministic: false })
     define('mssqlite_rand', () => Math.random(), { deterministic: false })
+    define('mssqlite_next_value_for', name => {
+      const value = nextSequenceValue(server, text(name))
+      return typeof value === 'boolean' ? Number(value) : value
+    }, { deterministic: false })
     define('mssqlite_right', (value, count) =>
       value === null || count === null ?
         null :

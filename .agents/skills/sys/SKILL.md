@@ -37,6 +37,11 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   triggers from it on server start, and
   `OBJECT_DEFINITION()` rewrites to a subquery over it. View definitions
   are not yet stored there.
+- `sys.sequences` joins `SO` / `SEQUENCE_OBJECT` rows to the internal
+  `sys.sequence_state` backing table and exposes type ids, precision/scale,
+  start/increment/bounds, cycle/cache settings, current/exhausted state, and
+  last-used value. Numeric state is stored losslessly as decimal text and cast
+  by the view for ordinary catalog queries.
 - Not yet populated: `sys.computed_columns` (parser accepts computed
   columns but transpile rejects them), extended properties.
 

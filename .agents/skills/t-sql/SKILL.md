@@ -82,6 +82,16 @@ The language pipeline lives in three packages:
   ABSOLUTE. LOCAL cursors clean up at batch/procedure/trigger scope exit,
   while GLOBAL (the default) persists until DEALLOCATE. Cursor variables,
   positioned UPDATE/DELETE, and live KEYSET/DYNAMIC behavior remain deferred.
+- CREATE/ALTER/DROP SEQUENCE parse integer types, START/RESTART, signed
+  INCREMENT, MINVALUE/MAXVALUE (and NO forms), CYCLE and CACHE options in any
+  order. NEXT VALUE FOR is a scalar AST node and uses a server-global generator;
+  values persist across restart and remain consumed after rollback. Ascending
+  sequences default to the type minimum, descending to the type maximum, and a
+  cycle wraps to the configured/type minimum or maximum rather than START.
+  Tinyint/smallint/int/bigint and decimal/numeric scale 0 (precision <= 18) are
+  supported. OVER ordering, SQL Server's context restrictions, duplicate
+  same-sequence coalescing within one result row, and sp_sequence_get_range are
+  deferred; CACHE is retained in metadata but every completed statement flushes.
 - TOP parses `PERCENT` and `WITH TIES` (`top.withTies`); UPDATE/DELETE
   accept `TOP (expr)` only, per MSSQL.
 - OUTPUT clause (`Ast.Output`) sits between the column list / SET list /

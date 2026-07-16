@@ -121,6 +121,14 @@ the engine:
   and sets connection-global `@@FETCH_STATUS`. LOCAL cursors declared in a
   batch, procedure, or trigger are removed on that scope's normal or exceptional
   exit; GLOBAL cursors survive batches until DEALLOCATE or session disposal.
+- **Sequence allocation is server-global and rollback-independent** — `SO`
+  definitions and counters persist in `sys.sequence_state` and surface through
+  `sys.sequences`; server startup hydrates a BigInt registry keyed by schema and
+  name. The nondeterministic NEXT VALUE UDF advances that shared registry
+  synchronously, making sessions atomic without re-entering SQLite. Dirty values
+  flush after each completed autocommit statement; inside a user transaction
+  they flush immediately after COMMIT or ROLLBACK, so rollback never reissues a
+  consumed value. CREATE/ALTER/DROP remain ordinary transactional catalog DDL.
 - **`+` dispatch** — static inference picks `+` / `||`; unknown operand
   types fall back to the `mssqlite_add` UDF (numbers add, strings concat).
 - **UDF strategy** — anything without a clean SQLite rendering becomes an
@@ -207,8 +215,11 @@ toward broader SQL Server compatibility.
 
 - No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
   `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
-- No sequences. Cursor variables, positioned updates, and live KEYSET/DYNAMIC
-  visibility are unsupported. Triggered DML does not yet support OUTPUT or
+- Cursor variables, positioned updates, and live KEYSET/DYNAMIC visibility are
+  unsupported. Sequence DECIMAL/NUMERIC precision is capped at 18, cache options
+  are metadata-only, same-row duplicate NEXT VALUE references are not coalesced,
+  and an abnormal shutdown during an open user transaction can lose unflushed
+  consumption state. Triggered DML does not yet support OUTPUT or
   UPDATE FROM, and MERGE does not yet fire DML triggers. MERGE OUTPUT may not
   reference source columns. Unlike SQL Server, table
   variable changes currently participate in the surrounding SQLite

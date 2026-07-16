@@ -75,6 +75,8 @@ const statements = parse(`
   CREATE/ALTER/CREATE OR ALTER TRIGGER supports AFTER/FOR and INSTEAD OF
   INSERT/UPDATE/DELETE event lists, trigger options and bodies, plus
   DROP TRIGGER [IF EXISTS].
+  CREATE/ALTER/DROP SEQUENCE supports integer types, start/restart, increment,
+  bounds, cycle and cache options; NEXT VALUE FOR is a scalar expression.
 - **Procedural** — scalar DECLARE with initializers and
   `DECLARE @t TABLE (...)` with column/table constraints, SET @x
   (compound operators),

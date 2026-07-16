@@ -112,6 +112,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   with RETURNING plus an UPDATE pre-image snapshot, materializes temp
   `inserted`/`deleted` tables, and interprets the stored T-SQL body once.
   INSTEAD OF operations build intended images without mutating the base table.
+- SQLite has no schema sequence generator. mssqlite persists definitions and
+  allocation state as catalog rows, advances a synchronous server-wide BigInt
+  registry from a nondeterministic UDF, and flushes it only outside SQLite user
+  transactions so SQL Server-style rollback-independent consumption survives.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.
