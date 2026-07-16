@@ -1,10 +1,12 @@
 import * as Context from './context.ts'
 import * as Output from './output.ts'
 import * as Quote from './quote.ts'
+import * as TableFunction from './table-function.ts'
 import * as Type from './type.ts'
 import expression, { useSelectRender } from './expression.ts'
 import { unsupported } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
+import type { ColumnHint } from './table-function.ts'
 
 const tableSource =
   (ctx: Context.t, source: Ast.TableSource): string => {
@@ -22,6 +24,8 @@ const tableSource =
             ` AS ${Quote.identifier(tablePart)}`
         return `${object}${alias}`
       }
+      case 'function':
+        return TableFunction.source(ctx, source, expression)
       case 'derived':
         return `(${select(ctx, source.select)}) AS ${Quote.identifier(source.alias)}`
       case 'join': {
@@ -442,7 +446,8 @@ const createIndex =
 /** Rendered statement with the variables it binds. */
 export type Rendered = {
   readonly sql: string,
-  readonly variables: readonly string[]
+  readonly variables: readonly string[],
+  readonly columns?: readonly ColumnHint[]
 }
 
 /**
@@ -504,7 +509,12 @@ export const statement =
           return unsupported(`Statement ${statement_.kind} has no direct SQLite rendering.`)
       }
     })()
-    return { sql, variables: ctx.variables }
+    const columns = statement_.kind === 'select' ? TableFunction.selectHints(statement_) : undefined
+    return {
+      sql,
+      variables: ctx.variables,
+      ...columns === undefined ? {} : { columns }
+    }
   }
 
 /** @returns rendered scalar expression with its variables. */

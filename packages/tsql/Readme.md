@@ -40,7 +40,8 @@ const statements = parse(`
   INTO, FROM with aliases and parsed-but-ignored table hints, INNER/LEFT/
   RIGHT/FULL/CROSS JOIN and comma cross joins, derived tables, WHERE,
   GROUP BY, HAVING, ORDER BY ASC/DESC, OFFSET/FETCH, UNION [ALL], EXCEPT,
-  INTERSECT, CTEs (`WITH a AS (...)`).
+  INTERSECT, CTEs (`WITH a AS (...)`), and table-valued functions in FROM
+  with aliases/positional column aliases and `OPENJSON ... WITH (...)`.
 - **Expressions** — full T-SQL operator precedence, unary `- + ~ NOT`,
   arithmetic, concat `+`, bitwise `& ^ |`, comparisons (incl. `!=`, `!<`,
   `!>`), `IS [NOT] NULL`, `[NOT] LIKE ... ESCAPE`, `[NOT] IN (list|subquery)`,

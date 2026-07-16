@@ -109,6 +109,11 @@ const resolveTableSource =
     switch (source.kind) {
       case 'table':
         return { ...source, name: resolveName(session, source.name) }
+      case 'function':
+        return {
+          ...source,
+          args: source.args.map(argument => resolveExpression(session, argument))
+        }
       case 'derived':
         return { ...source, select: resolveSelect(session, source.select) }
       case 'join':

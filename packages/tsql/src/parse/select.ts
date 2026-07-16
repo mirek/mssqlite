@@ -1,5 +1,6 @@
 import * as C from './combinators.ts'
 import * as Result from './result.ts'
+import typeName from './type-name.ts'
 import { expression, operand, orderByItem, useSelectParser } from './expression.ts'
 import type * as Ast from '../ast.ts'
 import type * as Parser from './parser.ts'
@@ -9,6 +10,66 @@ const alias: Parser.t<string | undefined> =
     C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
     C.identifier
   ))
+
+const tableFunctionColumn: Parser.t<Ast.TableFunctionColumn> =
+  reader => {
+    const head = C.seq(C.anyIdentifier, typeName)(reader)
+    if (Result.failed(head)) {
+      return head
+    }
+    const path = C.maybe(expression)(head.reader)
+    if (Result.failed(path)) {
+      return path
+    }
+    if (path.value !== undefined && path.value.kind !== 'string') {
+      return Result.fail(head.reader, 'Expected a JSON path string.')
+    }
+    const asJson = C.maybe(C.seq(C.keyword('as'), C.keyword('json')))(path.reader)
+    if (Result.failed(asJson)) {
+      return asJson
+    }
+    return Result.ok(asJson.reader, {
+      name: head.value[0],
+      type: head.value[1],
+      ...path.value === undefined ? {} : { path: path.value.value },
+      asJson: asJson.value !== undefined
+    })
+  }
+
+const tableFunction: Parser.t<Ast.TableSource> =
+  C.map(
+    C.seq(
+      C.qualifiedName,
+      C.parens(C.sepBy1(expression, C.punct(','))),
+      C.maybe(C.map(
+        C.seq(
+          C.keyword('with'),
+          C.parens(C.sepBy1(tableFunctionColumn, C.punct(',')))
+        ),
+        ([ , columns ]) => columns
+      )),
+      C.maybe(C.map(
+        C.seq(
+          C.first(
+            C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
+            C.identifier
+          ),
+          C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(','))))
+        ),
+        ([ name, columns ]) => ({ name, columns })
+      ))
+    ),
+    ([ name, args, with_, alias_ ]) => ({
+      kind: 'function' as const,
+      name,
+      args,
+      ...with_ === undefined ? {} : { with: with_ },
+      ...alias_ === undefined ? {} : {
+        alias: alias_.name,
+        ...alias_.columns === undefined ? {} : { columns: alias_.columns }
+      }
+    })
+  )
 
 /** Optional WITH (hints) or bare legacy (NOLOCK) — parsed and ignored. */
 export const tableHints: Parser.t<string[] | undefined> =
@@ -31,6 +92,7 @@ const tablePrimary: Parser.t<Ast.TableSource> =
         alias: alias_ ?? ''
       })
     ),
+    tableFunction,
     C.map(
       C.seq(C.tableName, tableHints, alias, tableHints),
       ([ name, hintsBefore, alias_, hintsAfter ]) => {

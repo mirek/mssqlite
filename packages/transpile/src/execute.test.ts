@@ -8,6 +8,20 @@ const database =
   (): DatabaseSync =>
     new DatabaseSync(':memory:')
 
+const tableFunctionDatabase =
+  (): DatabaseSync => {
+    const db = database()
+    db.function('mssqlite_string_split', (value, separator) =>
+      value === null || separator === null || value === '' ?
+        '[]' :
+        JSON.stringify(String(value).split(String(separator))))
+    db.function('mssqlite_series_step', (start, stop, step) =>
+      start === null || stop === null ?
+        null :
+        Number(step ?? (Number(start) <= Number(stop) ? 1 : -1)))
+    return db
+  }
+
 const run =
   (db: DatabaseSync, tsql: string): void => {
     for (const parsed of parse(tsql)) {
@@ -92,6 +106,51 @@ test('joins, subqueries and ctes execute', () => {
     WITH big AS (SELECT team_id FROM users GROUP BY team_id HAVING COUNT(*) > 1)
     SELECT name FROM teams WHERE id IN (SELECT team_id FROM big)
   `)).toEqual([ { name: 'red' } ])
+})
+
+test('table-valued functions execute against real SQLite', () => {
+  const db = tableFunctionDatabase()
+  expect(all(db, `
+    SELECT token, position
+    FROM STRING_SPLIT('a,,b', ',', 1) AS s (token, position)
+    ORDER BY position
+  `)).toEqual([
+    { token: 'a', position: 1 },
+    { token: '', position: 2 },
+    { token: 'b', position: 3 }
+  ])
+  expect(all(db, 'SELECT * FROM STRING_SPLIT(NULL, \',\')')).toEqual([])
+  expect(all(db, 'SELECT * FROM STRING_SPLIT(\'\', \',\')')).toEqual([])
+
+  expect(all(db, `
+    SELECT [key], value, type
+    FROM OPENJSON('{"name":"Ada","active":true,"items":[1]}')
+    ORDER BY [key]
+  `)).toEqual([
+    { key: 'active', value: 'true', type: 3 },
+    { key: 'items', value: '[1]', type: 4 },
+    { key: 'name', value: 'Ada', type: 1 }
+  ])
+  expect(all(db, `
+    SELECT id, name, details
+    FROM OPENJSON('{"id":7,"name":"Ada","details":{"active":true}}')
+    WITH (id INT, name NVARCHAR(20), details NVARCHAR(MAX) AS JSON)
+  `)).toEqual([ { id: 7, name: 'Ada', details: '{"active":true}' } ])
+  expect(all(db, `
+    SELECT id FROM OPENJSON('{"items":[{"id":1},{"id":2}]}', '$.items')
+    WITH (id INT) ORDER BY id
+  `)).toEqual([ { id: 1 }, { id: 2 } ])
+  expect(all(db, 'SELECT * FROM OPENJSON(NULL)')).toEqual([])
+  expect(all(db, 'SELECT * FROM OPENJSON(\'[]\')')).toEqual([])
+
+  expect(all(db, 'SELECT value FROM GENERATE_SERIES(1, 5, 2)')).toEqual([
+    { value: 1 }, { value: 3 }, { value: 5 }
+  ])
+  expect(all(db, 'SELECT value FROM GENERATE_SERIES(3, 1)')).toEqual([
+    { value: 3 }, { value: 2 }, { value: 1 }
+  ])
+  expect(all(db, 'SELECT value FROM GENERATE_SERIES(1, 3, -1)')).toEqual([])
+  expect(all(db, 'SELECT value FROM GENERATE_SERIES(NULL, 3)')).toEqual([])
 })
 
 test('window functions execute', () => {

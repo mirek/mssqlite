@@ -63,3 +63,8 @@ Table-variable backing tables also use this shared connection's `temp`
 schema, so their generated names include the session spid plus a monotonic
 counter. `StatementSync.columns()` origins are matched back to the active
 declaration to preserve TDS type and nullability metadata.
+The bundled build includes JSON1's `json_each` but not the optional
+`generate_series` module. The engine registers scalar adapters for
+STRING_SPLIT's JSON rowset and GENERATE_SERIES step validation; the
+transpiler supplies result-column hints where `StatementSync.columns()`
+cannot recover a derived TVF column's declared type.

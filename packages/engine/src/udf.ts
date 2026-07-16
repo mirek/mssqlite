@@ -106,6 +106,26 @@ export const registerFunctions =
       }
       return (a as number) + (b as number)
     })
+    define('mssqlite_string_split', (value, separator) => {
+      if (value === null || separator === null || value === '') {
+        return '[]'
+      }
+      const delimiter = text(separator)
+      if ([ ...delimiter ].length !== 1 || delimiter === '\0') {
+        throw new RangeError('STRING_SPLIT separator must be one character.')
+      }
+      return JSON.stringify(text(value).split(delimiter))
+    })
+    define('mssqlite_series_step', (start, stop, step) => {
+      if (start === null || stop === null) {
+        return null
+      }
+      const resolved = step ?? (Number(start) <= Number(stop) ? 1 : -1)
+      if (Number(resolved) === 0) {
+        throw new RangeError('GENERATE_SERIES step cannot be zero.')
+      }
+      return resolved
+    })
     define('mssqlite_newid', () => randomUUID().toUpperCase(), { deterministic: false })
     define('mssqlite_rand', () => Math.random(), { deterministic: false })
     define('mssqlite_right', (value, count) =>

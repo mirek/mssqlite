@@ -73,6 +73,12 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   result metadata and drops each backing table at batch/procedure scope exit.
   Current divergence: their DML shares the surrounding SQLite transaction,
   while SQL Server table-variable updates survive user transaction rollback.
+- Built-in T-SQL table-valued functions lean on JSON1: `STRING_SPLIT` feeds
+  an adapter-produced JSON array to `json_each`, while `OPENJSON` remaps
+  `json_each` key/value/type fields and uses `json_extract` for explicit
+  schemas. Node's bundled SQLite does not expose the optional
+  `generate_series` virtual table, so `GENERATE_SERIES` renders as a
+  streaming recursive CTE with SQL Server's direction-sensitive default step.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

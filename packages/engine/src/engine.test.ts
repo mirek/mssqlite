@@ -253,6 +253,53 @@ test('date and string udfs through full pipeline', () => {
   ])
 })
 
+test('table-valued functions return rows and metadata through the engine', () => {
+  const s = open()
+  const split = rowsOf(executeBatch(s, `
+    SELECT value, ordinal
+    FROM STRING_SPLIT(N'a,,b', N',', 1)
+    ORDER BY ordinal
+  `))
+  expect(split.rows).toEqual([ [ 'a', 1 ], [ '', 2 ], [ 'b', 3 ] ])
+  expect(split.columns).toMatchObject([
+    { name: 'value', typeInfo: { type: DataType.DataType.nvarchar, maxLength: 8 } },
+    { name: 'ordinal', typeInfo: { type: DataType.DataType.intN, maxLength: 8 } }
+  ])
+  const emptySplit = rowsOf(executeBatch(s, 'SELECT * FROM STRING_SPLIT(NULL, \',\', 1)'))
+  expect(emptySplit.rows).toEqual([])
+  expect(emptySplit.columns.map(column => column.name)).toEqual([ 'value', 'ordinal' ])
+
+  const json = rowsOf(executeBatch(s, `
+    SELECT [key], value, type
+    FROM OPENJSON('{"name":"Ada","active":true,"items":[1]}')
+    ORDER BY [key]
+  `))
+  expect(json.rows).toEqual([
+    [ 'active', 'true', 3 ],
+    [ 'items', '[1]', 4 ],
+    [ 'name', 'Ada', 1 ]
+  ])
+  expect(json.columns.map(column => column.name)).toEqual([ 'key', 'value', 'type' ])
+  const shaped = rowsOf(executeBatch(s, `
+    SELECT id, name
+    FROM OPENJSON('{"items":[{"id":1,"name":"a"},{"id":2,"name":"b"}]}', '$.items')
+    WITH (id INT, name NVARCHAR(20))
+    ORDER BY id
+  `))
+  expect(shaped.rows).toEqual([ [ 1, 'a' ], [ 2, 'b' ] ])
+  expect(shaped.columns[1]).toMatchObject({
+    typeInfo: { type: DataType.DataType.nvarchar, maxLength: 40 }
+  })
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM OPENJSON(NULL)')).rows).toEqual([])
+
+  const series = rowsOf(executeBatch(s, 'SELECT value FROM GENERATE_SERIES(5, 1, -2)'))
+  expect(series.rows).toEqual([ [ 5 ], [ 3 ], [ 1 ] ])
+  expect(series.columns[0]).toMatchObject({
+    typeInfo: { type: DataType.DataType.intN, maxLength: 4 }
+  })
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))

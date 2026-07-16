@@ -1,5 +1,6 @@
 import { objectIdOf, tableColumns, TypeRow, type ColumnRow } from '@mssqlite/catalog'
 import { TypeInfo } from '@mssqlite/tds'
+import type { ColumnHint } from '@mssqlite/transpile'
 import type { TableVariable, Value } from './session.ts'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 
@@ -168,6 +169,32 @@ const tableVariableColumn =
     return undefined
   }
 
+const hintedColumn =
+  (hint: ColumnHint): Column | undefined => {
+    const type = TypeRow.columnType(hint.type)
+    if (type === undefined) {
+      return undefined
+    }
+    const row: ColumnRow = {
+      object_id: 0,
+      name: hint.name,
+      column_id: 0,
+      system_type_id: type.systemTypeId,
+      user_type_id: type.userTypeId,
+      max_length: type.maxLength,
+      precision: type.precision,
+      scale: type.scale,
+      collation_name: type.collationName,
+      is_nullable: hint.nullable ? 1 : 0,
+      is_identity: 0
+    }
+    return {
+      name: hint.name,
+      typeInfo: typeInfoOfCatalogRow(row),
+      nullable: hint.nullable
+    }
+  }
+
 /**
  * @returns TDS column metadata for a prepared statement's result — catalog
  * lookups when the column maps to a table column, value shape otherwise.
@@ -177,11 +204,16 @@ export const columnsOf =
     db: DatabaseSync,
     statement: StatementSync,
     rows: readonly Record<string, Value>[],
-    tableVariables: Iterable<TableVariable> = []
+    tableVariables: Iterable<TableVariable> = [],
+    hints: readonly ColumnHint[] = []
   ): Column[] => {
     const sources = statement.columns() as unknown as SourceColumn[]
     const variables = [ ...tableVariables ]
-    return sources.map(source => {
+    return sources.map((source, index) => {
+      const hinted = hints[index] === undefined ? undefined : hintedColumn(hints[index])
+      if (hinted !== undefined) {
+        return { ...hinted, name: source.name }
+      }
       if (source.table !== null && source.column !== null) {
         const row = catalogColumn(db, source.table, source.column)
         if (row !== undefined) {
