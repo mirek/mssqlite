@@ -1071,8 +1071,20 @@ const executeStatementInner =
         }
         return undefined
       case 'createIndex':
-        session.db.exec(Transpile.statement(statement).sql)
-        Catalog.createIndex(session.db, statement)
+        {
+          const objectId = Catalog.objectIdOf(session.db, statement.table)
+          const collations = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
+          const resolved = {
+            ...statement,
+            columns: statement.columns.map(column => {
+              const collation = collations.find(candidate =>
+                candidate.name.toLowerCase() === column.name.toLowerCase())?.collation_name
+              return { ...column, ...collation === null || collation === undefined ? {} : { collation } }
+            })
+          }
+          session.db.exec(Transpile.statement(resolved).sql)
+          Catalog.createIndex(session.db, resolved)
+        }
         return undefined
       case 'dropIndex':
         session.db.exec(Transpile.statement(statement).sql)

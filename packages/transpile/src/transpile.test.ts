@@ -371,6 +371,26 @@ test('computed columns render inferred virtual and stored generated columns', ()
   )
 })
 
+test('collations render normalized predicates, ordering and uniqueness', () => {
+  expect(scalarOf('value COLLATE Latin1_General_100_CI_AI = N\'café\'')).toBe(
+    '(mssqlite_collation_key(("value" COLLATE NOCASE), \'latin1_general_100_ci_ai\') = ' +
+    'mssqlite_collation_key(\'café\', \'latin1_general_100_ci_ai\'))'
+  )
+  expect(sqlOf(`
+    CREATE TABLE names (
+      value NVARCHAR(20) COLLATE Latin1_General_100_CI_AI UNIQUE,
+      exact NVARCHAR(20) COLLATE Latin1_General_100_CS_AS
+    )
+  `)).toBe(
+    'CREATE TABLE "names" (' +
+    '"value" TEXT COLLATE NOCASE UNIQUE, "exact" TEXT COLLATE BINARY); ' +
+    'CREATE UNIQUE INDEX "__mssqlite_names_collation_0" ON "names" (' +
+    'mssqlite_collation_key("value", \'latin1_general_100_ci_ai\'))'
+  )
+  expect(() => sqlOf('CREATE TABLE bad (value NVARCHAR(10) COLLATE Unknown_Collation)'))
+    .toThrow(UnsupportedError)
+})
+
 test('identity via table-level primary key', () => {
   expect(sqlOf('CREATE TABLE t (id INT IDENTITY(1,1), name TEXT, PRIMARY KEY (id))'))
     .toBe('CREATE TABLE "t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "name" TEXT COLLATE NOCASE)')

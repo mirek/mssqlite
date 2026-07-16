@@ -137,6 +137,66 @@ test('computed columns support ALTER, table variables and database restart', () 
   }
 })
 
+test('declared collations control case, accent, binary ordering and indexes', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE collated_names (
+      id INT PRIMARY KEY,
+      flexible NVARCHAR(30) COLLATE Latin1_General_100_CI_AI,
+      exact NVARCHAR(30) COLLATE Latin1_General_100_CS_AS,
+      binary_name NVARCHAR(30) COLLATE Latin1_General_100_BIN2
+    )
+    INSERT INTO collated_names VALUES
+      (1, N'café', N'Alpha', N'a'),
+      (2, N'CAFE', N'alpha', N'A'),
+      (3, N'cafe', N'Alpha', N'á')
+    CREATE INDEX ix_collated_flexible ON collated_names (flexible)
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM collated_names WHERE flexible = N'CAFÉ' ORDER BY id
+  `)).rows).toEqual([ [ 1 ], [ 2 ], [ 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM collated_names WHERE flexible LIKE N'CAF_' ORDER BY id
+  `)).rows).toEqual([ [ 1 ], [ 2 ], [ 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM collated_names WHERE exact = N'Alpha' ORDER BY id
+  `)).rows).toEqual([ [ 1 ], [ 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM collated_names
+    WHERE exact COLLATE Latin1_General_100_CI_AI = N'álpha' ORDER BY id
+  `)).rows).toEqual([ [ 1 ], [ 2 ], [ 3 ] ])
+  expect(() => executeBatch(s, 'SELECT id FROM collated_names WHERE flexible = exact'))
+    .toThrowError(expect.objectContaining({ number: 468 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT binary_name FROM collated_names ORDER BY binary_name
+  `)).rows).toEqual([ [ 'A' ], [ 'a' ], [ 'á' ] ])
+  const plan = s.db.prepare(
+    'EXPLAIN QUERY PLAN SELECT * FROM "collated_names" WHERE ' +
+    'mssqlite_collation_key("flexible", \'latin1_general_100_ci_ai\') = ' +
+    'mssqlite_collation_key(\'cafe\', \'latin1_general_100_ci_ai\')'
+  ).all() as { detail: string }[]
+  expect(plan.some(row => row.detail.includes('ix_collated_flexible'))).toBe(true)
+  expect(rowsOf(executeBatch(s, `
+    SELECT collation_name FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'collated_names') AND name = N'flexible'
+  `)).rows).toEqual([ [ 'Latin1_General_100_CI_AI' ] ])
+})
+
+test('collation-aware uniqueness rejects case and accent equivalents', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE unique_names (
+      value NVARCHAR(30) COLLATE Latin1_General_100_CI_AI UNIQUE
+    )
+    INSERT INTO unique_names VALUES (N'café')
+  `)
+  expect(() => executeBatch(s, 'INSERT INTO unique_names VALUES (N\'CAFE\')'))
+    .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+  expect(() => executeBatch(s, `CREATE TABLE bad_collation (
+    value NVARCHAR(10) COLLATE Unknown_Collation
+  )`)).toThrowError(expect.objectContaining({ number: 448 }) as Error)
+})
+
 test('variables, set and select assignment', () => {
   const s = open()
   executeBatch(s, 'DECLARE @x INT = 1 SET @x = @x + 10')

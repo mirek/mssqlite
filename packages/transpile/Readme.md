@@ -40,6 +40,10 @@ const { sql, variables } = statement(parseStatement(
 - **Computed columns** — result types are inferred from base/earlier columns,
   then definitions render as SQLite VIRTUAL or PERSISTED/STORED generated
   columns. Generated expression mode uses deterministic checked numeric UDFs.
+- **Collations** — supported column and expression COLLATE names lower to
+  deterministic Unicode normalization keys used by comparisons, LIKE/IN,
+  ordering and indexes. CREATE TABLE emits supplemental key-based unique
+  indexes where a declared collation must exceed BINARY/NOCASE behavior.
 
 Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
 operands execute once and the engine can enforce divide-by-zero/overflow and

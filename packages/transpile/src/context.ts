@@ -8,6 +8,7 @@ export type Context = {
   /** Lowercased variable tokens in order of first use, e.g. `@x`, `@@rowcount`. */
   readonly variables: string[]
   readonly columnTypes: ReadonlyMap<string, TypeName.t>[]
+  readonly columnCollations: ReadonlyMap<string, string>[]
   generated: boolean
   nextSource: number
 }
@@ -18,7 +19,9 @@ export type t =
 /** @returns fresh render context. */
 export const of =
   (): Context =>
-    ({ variables: [], columnTypes: [], generated: false, nextSource: 1 })
+    ({
+      variables: [], columnTypes: [], columnCollations: [], generated: false, nextSource: 1
+    })
 
 /** Runs expression rendering in SQLite generated-column mode. */
 export const withGenerated =
@@ -47,6 +50,21 @@ const sourceColumns =
     ])
   }
 
+const sourceCollations =
+  (source: Ast.TableSource): readonly { readonly key: string, readonly collation: string }[] => {
+    if (source.kind === 'join') {
+      return [ ...sourceCollations(source.left), ...sourceCollations(source.right) ]
+    }
+    if (source.kind !== 'table' || source.columns === undefined) {
+      return []
+    }
+    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
+    return source.columns.flatMap(column => column.collation === undefined ? [] : [
+      { key: column.name.toLowerCase(), collation: column.collation },
+      { key: `${qualifier}.${column.name.toLowerCase()}`, collation: column.collation }
+    ])
+  }
+
 /** Runs a SELECT renderer with its source-column types in lexical scope. */
 export const withSourceTypes =
   <T>(ctx: Context, source: Ast.TableSource | undefined, run: () => T): T => {
@@ -56,12 +74,34 @@ export const withSourceTypes =
     const types = new Map(columns
       .filter(column => column.key.includes('.') || counts.get(column.key) === 1)
       .map(column => [ column.key, column.type ]))
+    const collations = source === undefined ? [] : sourceCollations(source)
+    const collationCounts = new Map<string, number>()
+    collations.forEach(column =>
+      collationCounts.set(column.key, (collationCounts.get(column.key) ?? 0) + 1))
+    const scopedCollations = new Map(collations
+      .filter(column => column.key.includes('.') || collationCounts.get(column.key) === 1)
+      .map(column => [ column.key, column.collation ]))
     ctx.columnTypes.push(types)
+    ctx.columnCollations.push(scopedCollations)
     try {
       return run()
     } finally {
       ctx.columnTypes.pop()
+      ctx.columnCollations.pop()
     }
+  }
+
+/** @returns declared collation of a column in the innermost visible source. */
+export const columnCollation =
+  (ctx: Context, name: Ast.QualifiedName): string | undefined => {
+    const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
+    for (let i = ctx.columnCollations.length - 1; i >= 0; i--) {
+      const found = ctx.columnCollations[i]?.get(key)
+      if (found !== undefined) {
+        return found
+      }
+    }
+    return undefined
   }
 
 /** @returns declared type of a column in the innermost visible SELECT source. */

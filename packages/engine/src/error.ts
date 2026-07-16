@@ -49,6 +49,12 @@ export const of =
       return new MssqlError(`Incorrect syntax: ${message}`, 102, 15)
     }
     if (name === 'UnsupportedError') {
+      if (message.startsWith('Invalid collation')) {
+        return new MssqlError(message, 448, 16)
+      }
+      if (message.startsWith('Cannot resolve the collation conflict')) {
+        return new MssqlError(message, 468, 16)
+      }
       return new MssqlError(message, 40000, 16)
     }
     if (message.includes('no such table')) {

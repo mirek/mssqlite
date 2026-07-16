@@ -1,5 +1,5 @@
 import { objectIdOf, tableColumns, TypeRow, type ColumnRow } from '@mssqlite/catalog'
-import { TypeInfo } from '@mssqlite/tds'
+import { Collation, TypeInfo } from '@mssqlite/tds'
 import type { ColumnHint } from '@mssqlite/transpile'
 import type { TableVariable, Value } from './session.ts'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
@@ -55,12 +55,16 @@ export const typeInfoOfCatalogRow =
       case 167:
       case 175:
       case 35:
-        return TypeInfo.varchar(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
+        return TypeInfo.varchar(
+          row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length,
+          Collation.ofName(row.collation_name))
       case 231:
       case 239:
       case 99:
       case 241:
-        return TypeInfo.nvarchar(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length / 2)
+        return TypeInfo.nvarchar(
+          row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length / 2,
+          Collation.ofName(row.collation_name))
       case 165:
       case 173:
       case 34:
@@ -156,7 +160,7 @@ const tableVariableColumn =
         max_length: type.maxLength,
         precision: type.precision,
         scale: type.scale,
-        collation_name: type.collationName,
+        collation_name: definition.collate ?? type.collationName,
         is_nullable: definition.nullable === false || definition.primaryKey === true || tablePrimaryKey ? 0 : 1,
         is_identity: definition.identity === undefined ? 0 : 1,
         is_computed: definition.computed === undefined ? 0 : 1

@@ -13,6 +13,13 @@ test('default collation matches SQL_Latin1_General_CP1_CI_AS wire bytes', () => 
   })
 })
 
+test('supported sensitivity collations carry distinct TDS flags', () => {
+  expect(Array.from(Collation.encode(Collation.ofName('Latin1_General_100_CI_AI'))))
+    .toEqual([ 9, 4, 240, 32, 52 ])
+  expect(Collation.ofName('Latin1_General_100_CS_AS')).toMatchObject({ flags: 0x0c, version: 2 })
+  expect(Collation.ofName('Latin1_General_100_BIN2')).toMatchObject({ flags: 0x20, sortId: 0 })
+})
+
 test('guid mixed-endian round trip', () => {
   const guid = '00112233-4455-6677-8899-AABBCCDDEEFF'
   const bytes = Guid.encode(guid)

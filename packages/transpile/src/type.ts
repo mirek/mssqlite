@@ -1,4 +1,5 @@
 import type { TypeName } from '@mssqlite/tsql'
+import * as Collation from './collation.ts'
 
 /** Type category driving affinity, collation and cast behavior. */
 export type Category =
@@ -71,7 +72,7 @@ export const category =
  * NOCASE to approximate MSSQL's default case-insensitive collation.
  */
 export const columnType =
-  (type: TypeName.t): string => {
+  (type: TypeName.t, collation?: string): string => {
     switch (category(type)) {
       case 'integer':
       case 'bit':
@@ -84,7 +85,7 @@ export const columnType =
         return 'TEXT'
       case 'text':
       case 'ntext':
-        return 'TEXT COLLATE NOCASE'
+        return `TEXT COLLATE ${collation === undefined ? 'NOCASE' : Collation.sqlite(collation)}`
       case 'blob':
         return 'BLOB'
       case 'date':

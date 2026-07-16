@@ -35,6 +35,8 @@ export const infer =
         return 'text'
       case 'unary':
         return 'number'
+      case 'collate':
+        return infer(expression.expression)
       case 'binaryOp': {
         if (expression.operator === '+') {
           const left = infer(expression.left)

@@ -71,6 +71,8 @@ const resolveExpression =
       }
       case 'cast':
         return { ...value, expression: resolveExpression(session, value.expression) }
+      case 'collate':
+        return { ...value, expression: resolveExpression(session, value.expression) }
       case 'convert':
         return {
           ...value,
@@ -185,7 +187,8 @@ const sourceColumns =
       return variable.columns.map(column => ({
         name: column.name,
         type: column.type,
-        nullable: column.nullable !== false && column.primaryKey !== true
+        nullable: column.nullable !== false && column.primaryKey !== true,
+        ...column.collate === undefined ? {} : { collation: column.collate }
       }))
     }
     const objectId = Catalog.objectIdOf(session.db, name)
@@ -195,7 +198,8 @@ const sourceColumns =
         return {
           name: column.name,
           ...type === undefined ? {} : { type },
-          nullable: column.is_nullable !== 0
+          nullable: column.is_nullable !== 0,
+          ...column.collation_name === null ? {} : { collation: column.collation_name }
         }
       })
     }
@@ -246,6 +250,8 @@ const substituteExpression =
           }
         }
       case 'cast':
+        return { ...value, expression: substituteExpression(value.expression, values) }
+      case 'collate':
         return { ...value, expression: substituteExpression(value.expression, values) }
       case 'convert':
         return {

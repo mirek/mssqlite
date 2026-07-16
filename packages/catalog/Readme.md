@@ -37,6 +37,8 @@ no query interception.
 - `TypeRow.columnType(typeName)` — declared T-SQL type → sys.columns fields
   (`decimal(p,s)` wire lengths, `time/datetime2/datetimeoffset` scale
   lengths, `nvarchar` byte doubling, `max` → -1).
+  Per-column COLLATE names override the type default in `collation_name` and
+  are later translated to TDS collation bytes by engine metadata.
 
 Object ids allocate from 100000001 via the `sys._next_id` counter, per the
 skill's guidance.
