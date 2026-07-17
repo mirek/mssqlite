@@ -1,7 +1,7 @@
-import { Encode, Result } from '@mssqlite/bytes'
+import { Cursor, Encode, Result } from '@mssqlite/bytes'
 import {
-  BulkLoad as TdsBulkLoad, Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch,
-  Token, TransactionManager
+  BulkLoad as TdsBulkLoad, Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, Smp,
+  SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
 import {
   abortBulkLoad, BatchError, beginBulkLoad, closeSession, errorOf, executeBatch, executeSql,
@@ -21,7 +21,39 @@ export type EncryptionOptions = {
   readonly rejectUnauthorized: boolean
 }
 
-/** Per-connection state. */
+type BulkState = {
+  decoder: TdsBulkLoad.State,
+  loader: BulkLoader | undefined,
+  error: MssqlError | undefined
+}
+
+/** Per-MARS-session request framing and response flow-control state. */
+type LogicalSession = {
+  readonly id: number | undefined,
+  state: Message.State,
+  bulkPlan: BulkPlan | undefined,
+  bulk: BulkState | undefined,
+  sendSequence: number,
+  receiveSequence: number,
+  sendWindow: number,
+  receiveWindow: number,
+  readonly outgoing: Uint8Array[]
+}
+
+const logicalSession =
+  (id: number | undefined, window = 4): LogicalSession => ({
+    id,
+    state: Message.initial,
+    bulkPlan: undefined,
+    bulk: undefined,
+    sendSequence: 0,
+    receiveSequence: 0,
+    sendWindow: window,
+    receiveWindow: 4,
+    outgoing: []
+  })
+
+/** Per-physical-connection state. */
 type Connection = {
   readonly network: Socket,
   stream: Socket | TLSSocket,
@@ -31,32 +63,73 @@ type Connection = {
   phase: 'prelogin' | 'tls' | 'plaintext' | 'encrypted',
   tls: TlsTransport | undefined,
   session: Session | undefined,
-  state: Message.State,
+  readonly defaultSession: LogicalSession,
+  marsRequested: boolean,
+  mars: boolean,
+  smp: Smp.State,
+  readonly logicalSessions: Map<number, LogicalSession>,
+  nextOutputSession: number,
   packetSize: number,
   /** Prepared statement handles for sp_prepare / sp_execute. */
   readonly prepared: Map<number, string>,
   nextHandle: number,
   transactionDescriptor: bigint,
-  bulkPlan: BulkPlan | undefined,
-  bulk: {
-    decoder: TdsBulkLoad.State,
-    loader: BulkLoader | undefined,
-    error: MssqlError | undefined
-  } | undefined
 }
 
 const productVersion = { major: 15, minor: 0, build: 2000 }
 
-const send =
-  (connection: Connection, type: number, payload: Uint8Array): void => {
-    for (const packet of Packet.split(type, payload, connection.packetSize, connection.session?.spid ?? 0)) {
-      connection.stream.write(packet)
+const flushMars =
+  (connection: Connection): void => {
+    const sessions = [ ...connection.logicalSessions.values() ]
+    if (sessions.length === 0) {
+      return
+    }
+    let sent = true
+    while (sent) {
+      sent = false
+      for (let offset = 0; offset < sessions.length; offset++) {
+        const index = (connection.nextOutputSession + offset) % sessions.length
+        const logical = sessions[index]
+        if (logical === undefined || logical.outgoing.length === 0 ||
+          logical.sendSequence >= logical.sendWindow) {
+          continue
+        }
+        const packet = logical.outgoing.shift()
+        if (packet === undefined || logical.id === undefined) {
+          continue
+        }
+        logical.sendSequence += 1
+        connection.stream.write(Smp.encode(
+          Smp.Type.data, logical.id, logical.sendSequence, logical.receiveWindow, packet))
+        connection.nextOutputSession = (index + 1) % sessions.length
+        sent = true
+        break
+      }
     }
   }
 
+const send =
+  (
+    connection: Connection,
+    type: number,
+    payload: Uint8Array,
+    logical = connection.defaultSession
+  ): void => {
+    const packets = Packet.split(
+      type, payload, connection.packetSize, connection.session?.spid ?? 0)
+    if (!connection.mars || logical.id === undefined) {
+      for (const packet of packets) {
+        connection.stream.write(packet)
+      }
+      return
+    }
+    logical.outgoing.push(...packets)
+    flushMars(connection)
+  }
+
 const respond =
-  (connection: Connection, payload: Uint8Array): void =>
-    send(connection, Packet.Type.tabularResult, payload)
+  (connection: Connection, payload: Uint8Array, logical = connection.defaultSession): void =>
+    send(connection, Packet.Type.tabularResult, payload, logical)
 
 const onPrelogin =
   (connection: Connection, payload: Uint8Array): void => {
@@ -80,11 +153,12 @@ const onPrelogin =
       connection.network.destroy()
       return
     }
+    connection.marsRequested = prelogin.mars === true
     respond(connection, Prelogin.encode({
       version: { ...productVersion, subBuild: 0 },
       encryption: negotiation.response,
       instance: '',
-      mars: false,
+      mars: connection.marsRequested,
       ...prelogin?.fedAuthRequired === undefined ? {} : { fedAuthRequired: false }
     }))
     if (!negotiation.tls) {
@@ -104,7 +178,7 @@ const onPrelogin =
       }
       connection.phase = 'encrypted'
       connection.stream = tls.socket
-      connection.state = Message.initial
+      connection.defaultSession.state = Message.initial
     }
     const tls = createTlsTransport(
       encryption.context,
@@ -189,32 +263,40 @@ const onLogin =
       Token.EnvChange.packetSize(connection.packetSize, connection.packetSize),
       Token.done(Token.Status.final, 0, 0n)
     ))
+    connection.mars = connection.marsRequested
   }
 
 const onSqlBatch =
-  (connection: Connection, session_: Session, payload: Uint8Array): void => {
+  (
+    connection: Connection,
+    logical: LogicalSession,
+    session_: Session,
+    payload: Uint8Array
+  ): void => {
+    const request = logical
     const batch = SqlBatch.decode(payload)
     if (batch === undefined) {
-      respond(connection, errorResponse(errorOf(new Error('Malformed SQL batch.')), connection.engine.serverName))
+      respond(connection,
+        errorResponse(errorOf(new Error('Malformed SQL batch.')), connection.engine.serverName), logical)
       return
     }
     try {
       const bulkPlan = prepareBulkLoad(session_, batch.sql)
       if (bulkPlan !== undefined) {
-        if (connection.bulkPlan !== undefined || connection.bulk !== undefined) {
+        if (request.bulkPlan !== undefined || request.bulk !== undefined) {
           throw new MssqlError('A bulk load request is already pending.', 4815, 16)
         }
-        connection.bulkPlan = bulkPlan
-        respond(connection, Token.done(Token.Status.final, 0, 0n))
+        request.bulkPlan = bulkPlan
+        respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
         return
       }
       const items = executeBatch(session_, batch.sql)
-      respond(connection, batchResponse(items, connection.engine.serverName))
+      respond(connection, batchResponse(items, connection.engine.serverName), logical)
     } catch (error) {
       const mapped = errorOf(error)
       respond(connection, error instanceof BatchError ?
         batchResponse(error.items, connection.engine.serverName) :
-        errorResponse(mapped, connection.engine.serverName))
+        errorResponse(mapped, connection.engine.serverName), logical)
       if (mapped.severity >= 20) {
         connection.stream.end()
       }
@@ -222,54 +304,57 @@ const onSqlBatch =
   }
 
 const clearBulk =
-  (connection: Connection): void => {
-    if (connection.bulk?.loader !== undefined) {
-      abortBulkLoad(connection.bulk.loader)
+  (logical: LogicalSession): void => {
+    const request = logical
+    if (request.bulk?.loader !== undefined) {
+      abortBulkLoad(request.bulk.loader)
     }
-    connection.bulk = undefined
-    connection.bulkPlan = undefined
+    request.bulk = undefined
+    request.bulkPlan = undefined
   }
 
 const finishBulkError =
-  (connection: Connection, error: MssqlError): void => {
-    respond(connection, errorResponse(error, connection.engine.serverName))
-    connection.bulk = undefined
-    connection.bulkPlan = undefined
+  (connection: Connection, logical: LogicalSession, error: MssqlError): void => {
+    const request = logical
+    respond(connection, errorResponse(error, connection.engine.serverName), logical)
+    request.bulk = undefined
+    request.bulkPlan = undefined
   }
 
 const onBulkFragment =
-  (connection: Connection, fragment: Message.Fragment): void => {
+  (connection: Connection, logical: LogicalSession, fragment: Message.Fragment): void => {
+    const request = logical
     const session_ = connection.session
     if (session_ === undefined) {
       connection.network.destroy()
       return
     }
     if (fragment.ignore) {
-      clearBulk(connection)
+      clearBulk(logical)
       // A client that cancels before finishing the request terminates it with
       // IGNORE and does not send Attention; it still waits for a normal reply.
       if (fragment.eom) {
-        respond(connection, Token.done(Token.Status.final, 0, 0n))
+        respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
       }
       return
     }
-    const plan = connection.bulkPlan
+    const plan = request.bulkPlan
     if (plan === undefined) {
       if (fragment.eom) {
-        finishBulkError(connection,
+        finishBulkError(connection, logical,
           new MssqlError('Bulk load data arrived without INSERT BULK.', 4815, 16))
       }
       return
     }
-    const bulk = connection.bulk ?? {
+    const bulk = request.bulk ?? {
       decoder: TdsBulkLoad.initial,
       loader: undefined,
       error: undefined
     }
-    connection.bulk = bulk
+    request.bulk = bulk
     if (bulk.error !== undefined) {
       if (fragment.eom) {
-        finishBulkError(connection, bulk.error)
+        finishBulkError(connection, logical, bulk.error)
       }
       return
     }
@@ -293,9 +378,9 @@ const onBulkFragment =
         }
         const count = finishBulkLoad(bulk.loader)
         respond(connection, Token.done(
-          Token.Status.final | Token.Status.count, 0xf0, BigInt(count)))
-        connection.bulk = undefined
-        connection.bulkPlan = undefined
+          Token.Status.final | Token.Status.count, 0xf0, BigInt(count)), logical)
+        request.bulk = undefined
+        request.bulkPlan = undefined
       }
     } catch (error) {
       const mapped = errorOf(error)
@@ -305,7 +390,7 @@ const onBulkFragment =
       }
       bulk.error = mapped
       if (fragment.eom) {
-        finishBulkError(connection, mapped)
+        finishBulkError(connection, logical, mapped)
       }
     }
   }
@@ -322,10 +407,16 @@ const parameterValues =
     }))
 
 const onRpc =
-  (connection: Connection, session_: Session, payload: Uint8Array): void => {
+  (
+    connection: Connection,
+    logical: LogicalSession,
+    session_: Session,
+    payload: Uint8Array
+  ): void => {
     const rpc = Rpc.decode(payload)
     if (rpc === undefined) {
-      respond(connection, errorResponse(errorOf(new Error('Malformed RPC request.')), connection.engine.serverName))
+      respond(connection,
+        errorResponse(errorOf(new Error('Malformed RPC request.')), connection.engine.serverName), logical)
       return
     }
     const procedure = typeof rpc.procedure === 'string' ? rpc.procedure.toLowerCase() : rpc.procedure
@@ -336,7 +427,8 @@ const onRpc =
           const [ statement, , ...rest ] = rpc.parameters
           const sql = typeof statement?.value === 'string' ? statement.value : ''
           const result = executeSql(session_, sql, parameterValues(rest))
-          respond(connection, rpcResponse(result.items, connection.engine.serverName, result.outputs))
+          respond(connection, rpcResponse(
+            result.items, connection.engine.serverName, result.outputs), logical)
           return
         }
         case Rpc.ProcId.prepare:
@@ -348,7 +440,7 @@ const onRpc =
           connection.prepared.set(handle, sql)
           respond(connection, rpcResponse([], connection.engine.serverName, [
             { name: rpc.parameters[0]?.name ?? '@handle', value: handle }
-          ]))
+          ]), logical)
           return
         }
         case Rpc.ProcId.execute:
@@ -360,18 +452,19 @@ const onRpc =
             throw errorOf(new Error(`Prepared handle ${handle} not found.`))
           }
           const result = executeSql(session_, sql, parameterValues(rest))
-          respond(connection, rpcResponse(result.items, connection.engine.serverName, result.outputs))
+          respond(connection, rpcResponse(
+            result.items, connection.engine.serverName, result.outputs), logical)
           return
         }
         case Rpc.ProcId.unprepare:
         case 'sp_unprepare': {
           const handle = Number(rpc.parameters[0]?.value ?? 0)
           connection.prepared.delete(handle)
-          respond(connection, rpcResponse([], connection.engine.serverName))
+          respond(connection, rpcResponse([], connection.engine.serverName), logical)
           return
         }
         case 'sp_reset_connection':
-          respond(connection, rpcResponse([], connection.engine.serverName))
+          respond(connection, rpcResponse([], connection.engine.serverName), logical)
           return
         default: {
           // Fall back to EXEC procedure via the engine (raises 2812 for unknown).
@@ -388,7 +481,7 @@ const onRpc =
           const sql = `EXEC ${name}${argumentList}`
           const result = executeSql(session_, sql, parameters)
           respond(connection, rpcResponse(
-            result.items, connection.engine.serverName, result.outputs, session_.lastReturnStatus))
+            result.items, connection.engine.serverName, result.outputs, session_.lastReturnStatus), logical)
           return
         }
       }
@@ -396,7 +489,7 @@ const onRpc =
       const mapped = errorOf(error)
       respond(connection, error instanceof BatchError ?
         rpcResponse(error.items, connection.engine.serverName) :
-        errorResponse(mapped, connection.engine.serverName, true))
+        errorResponse(mapped, connection.engine.serverName, true), logical)
       if (mapped.severity >= 20) {
         connection.stream.end()
       }
@@ -404,10 +497,17 @@ const onRpc =
   }
 
 const onTransactionManager =
-  (connection: Connection, session_: Session, payload: Uint8Array): void => {
+  (
+    connection: Connection,
+    logical: LogicalSession,
+    session_: Session,
+    payload: Uint8Array
+  ): void => {
     const request = TransactionManager.decode(payload)
     if (request === undefined) {
-      respond(connection, errorResponse(errorOf(new Error('Malformed transaction manager request.')), connection.engine.serverName))
+      respond(connection, errorResponse(
+        errorOf(new Error('Malformed transaction manager request.')),
+        connection.engine.serverName), logical)
       return
     }
     try {
@@ -418,7 +518,7 @@ const onTransactionManager =
           respond(connection, Encode.concat(
             Token.EnvChange.beginTransaction(connection.transactionDescriptor),
             Token.done(Token.Status.final, 0, 0n)
-          ))
+          ), logical)
           return
         }
         case TransactionManager.Type.commitXact:
@@ -426,30 +526,35 @@ const onTransactionManager =
           respond(connection, Encode.concat(
             Token.EnvChange.commitTransaction(connection.transactionDescriptor),
             Token.done(Token.Status.final, 0, 0n)
-          ))
+          ), logical)
           return
         case TransactionManager.Type.rollbackXact:
           executeBatch(session_, 'ROLLBACK TRANSACTION')
           respond(connection, Encode.concat(
             Token.EnvChange.rollbackTransaction(connection.transactionDescriptor),
             Token.done(Token.Status.final, 0, 0n)
-          ))
+          ), logical)
           return
         case TransactionManager.Type.saveXact:
           executeBatch(session_, `SAVE TRANSACTION [${request.name ?? 'sp'}]`)
-          respond(connection, Token.done(Token.Status.final, 0, 0n))
+          respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
           return
         default:
-          respond(connection, Token.done(Token.Status.final, 0, 0n))
+          respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
           return
       }
     } catch (error) {
-      respond(connection, errorResponse(errorOf(error), connection.engine.serverName))
+      respond(connection, errorResponse(errorOf(error), connection.engine.serverName), logical)
     }
   }
 
 const onMessage =
-  (connection: Connection, message: Message.t): void => {
+  (connection: Connection, logical: LogicalSession, message: Message.t): void => {
+    const request = logical
+    if (logical.id !== undefined &&
+      (message.type === Packet.Type.prelogin || message.type === Packet.Type.login7)) {
+      throw new Error('Login messages are forbidden inside SMP sessions.')
+    }
     switch (message.type) {
       case Packet.Type.prelogin:
         onPrelogin(connection, message.payload)
@@ -458,8 +563,9 @@ const onMessage =
         onLogin(connection, message.payload)
         return
       case Packet.Type.attention:
-        clearBulk(connection)
-        respond(connection, Token.done(Token.Status.attention, 0, 0n))
+        clearBulk(logical)
+        request.outgoing.length = 0
+        respond(connection, Token.done(Token.Status.attention, 0, 0n), logical)
         return
       default:
         break
@@ -471,36 +577,126 @@ const onMessage =
     }
     switch (message.type) {
       case Packet.Type.sqlBatch:
-        onSqlBatch(connection, session_, message.payload)
+        onSqlBatch(connection, logical, session_, message.payload)
         return
       case Packet.Type.rpc:
-        onRpc(connection, session_, message.payload)
+        onRpc(connection, logical, session_, message.payload)
         return
       case Packet.Type.transactionManager:
-        onTransactionManager(connection, session_, message.payload)
+        onTransactionManager(connection, logical, session_, message.payload)
         return
       default:
         respond(connection, errorResponse(
           errorOf(new Error(`Unsupported packet type 0x${message.type.toString(16)}.`)),
           connection.engine.serverName
-        ))
+        ), logical)
+    }
+  }
+
+const consumeTds =
+  (connection: Connection, logical: LogicalSession, chunk: Uint8Array): void => {
+    const request = logical
+    const { state, messages, fragments } = Message.push(
+      request.state, chunk, [ Packet.Type.bulkLoad ])
+    request.state = state
+    for (const fragment of fragments) {
+      onBulkFragment(connection, logical, fragment)
+    }
+    for (const message of messages) {
+      onMessage(connection, logical, message)
+    }
+  }
+
+const smpControl =
+  (connection: Connection, logical: LogicalSession, type: Smp.Type): void => {
+    if (logical.id === undefined) {
+      return
+    }
+    connection.stream.write(Smp.encode(
+      type, logical.id, logical.sendSequence, logical.receiveWindow))
+  }
+
+const openMarsSession =
+  (connection: Connection, packet: Smp.Packet): void => {
+    if (packet.sequence !== 0 || connection.logicalSessions.has(packet.sessionId)) {
+      throw new Error(`Invalid or duplicate SMP SYN for session ${packet.sessionId}.`)
+    }
+    connection.logicalSessions.set(
+      packet.sessionId, logicalSession(packet.sessionId, packet.window))
+  }
+
+const marsData =
+  (connection: Connection, logical: LogicalSession, packet: Smp.Packet): void => {
+    const request = logical
+    if (packet.sequence !== request.receiveSequence + 1) {
+      throw new Error(`Out-of-sequence SMP DATA for session ${packet.sessionId}.`)
+    }
+    if (packet.window < request.sendWindow) {
+      throw new Error(`SMP window moved backwards for session ${packet.sessionId}.`)
+    }
+    const header = Packet.decodeHeader(Cursor.of(packet.data))
+    if (Result.failed(header) || header.value.length !== packet.data.byteLength) {
+      throw new Error('SMP DATA must contain exactly one complete TDS packet.')
+    }
+    request.sendWindow = packet.window
+    request.receiveSequence = packet.sequence
+    if (request.receiveSequence + 2 >= request.receiveWindow) {
+      request.receiveWindow = request.receiveSequence + 4
+      smpControl(connection, logical, Smp.Type.ack)
+    }
+    consumeTds(connection, logical, packet.data)
+    flushMars(connection)
+  }
+
+const closeMarsSession =
+  (connection: Connection, logical: LogicalSession, packet: Smp.Packet): void => {
+    if (packet.sequence !== logical.receiveSequence) {
+      throw new Error(`Out-of-sequence SMP FIN for session ${packet.sessionId}.`)
+    }
+    clearBulk(logical)
+    smpControl(connection, logical, Smp.Type.fin)
+    connection.logicalSessions.delete(packet.sessionId)
+  }
+
+const consumeMars =
+  (connection: Connection, chunk: Uint8Array): void => {
+    const decoded = Smp.push(connection.smp, chunk)
+    connection.smp = decoded.state
+    for (const packet of decoded.packets) {
+      if (packet.type === Smp.Type.syn) {
+        openMarsSession(connection, packet)
+        continue
+      }
+      const logical = connection.logicalSessions.get(packet.sessionId)
+      if (logical === undefined) {
+        throw new Error(`SMP packet references unknown session ${packet.sessionId}.`)
+      }
+      if (packet.type === Smp.Type.data) {
+        marsData(connection, logical, packet)
+      } else if (packet.type === Smp.Type.ack) {
+        if (packet.window < logical.sendWindow) {
+          throw new Error(`SMP window moved backwards for session ${packet.sessionId}.`)
+        }
+        logical.sendWindow = packet.window
+        flushMars(connection)
+      } else if (packet.type === Smp.Type.fin) {
+        closeMarsSession(connection, logical, packet)
+      }
     }
   }
 
 const consume =
   (connection: Connection, chunk: Uint8Array): void => {
     try {
-      const { state, messages, fragments } = Message.push(
-        connection.state, chunk, [ Packet.Type.bulkLoad ])
-      connection.state = state
-      for (const fragment of fragments) {
-        onBulkFragment(connection, fragment)
-      }
-      for (const message of messages) {
-        onMessage(connection, message)
+      if (connection.mars) {
+        consumeMars(connection, chunk)
+      } else {
+        consumeTds(connection, connection.defaultSession, chunk)
       }
     } catch (error) {
-      respond(connection, errorResponse(errorOf(error), connection.engine.serverName))
+      if (!connection.mars) {
+        respond(connection, errorResponse(errorOf(error), connection.engine.serverName))
+      }
       connection.network.destroy()
     }
   }
@@ -522,13 +718,16 @@ export const attach =
       phase: 'prelogin',
       tls: undefined,
       session: undefined,
-      state: Message.initial,
+      defaultSession: logicalSession(undefined),
+      marsRequested: false,
+      mars: false,
+      smp: Smp.initial,
+      logicalSessions: new Map(),
+      nextOutputSession: 0,
       packetSize: Packet.defaultPacketSize,
       prepared: new Map(),
       nextHandle: 1,
-      transactionDescriptor: 0n,
-      bulkPlan: undefined,
-      bulk: undefined
+      transactionDescriptor: 0n
     }
     socket.on('data', (chunk: Buffer) => {
       const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
@@ -541,7 +740,10 @@ export const attach =
     socket.on('end', () => connection.tls?.end())
     socket.on('error', () => socket.destroy())
     socket.once('close', () => {
-      clearBulk(connection)
+      clearBulk(connection.defaultSession)
+      for (const logical of connection.logicalSessions.values()) {
+        clearBulk(logical)
+      }
       if (connection.session !== undefined) {
         closeSession(connection.session)
       }

@@ -6,6 +6,7 @@ import * as Message from './message.ts'
 import * as Packet from './packet.ts'
 import * as Prelogin from './prelogin.ts'
 import * as Rpc from './rpc.ts'
+import * as Smp from './smp.ts'
 import * as TransactionManager from './transaction-manager.ts'
 import * as TypeInfo from './type-info.ts'
 import * as Value from './value.ts'
@@ -68,6 +69,11 @@ test('random and truncated bytes never throw or hang the decoders', () => {
       Message.push(Message.initial, bytes)
     } catch (error) {
       expect((error as Error).message).toMatch(/[Mm]alformed/)
+    }
+    try {
+      Smp.push(Smp.initial, bytes)
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error)
     }
   }
 })

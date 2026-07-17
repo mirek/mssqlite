@@ -260,3 +260,30 @@ graph TD
 - Attention messages also pass through SMP
 - Each SMP session has its own independent TDS state
 - RESETCONNECTION and RESETCONNECTIONSKIPTRAN status bits are MARS-specific
+
+### SMP wire header
+
+Every SMP frame starts with 16 little-endian bytes:
+
+```
+53 FLAGS SID:u16 LENGTH:u32 SEQNUM:u32 WNDW:u32 [DATA]
+```
+
+`FLAGS` is exactly one of SYN `0x01`, ACK `0x02`, FIN `0x04`, or DATA
+`0x08`; combinations are invalid. Control frames have length 16. DATA has one
+complete TDS packet after the header, so its minimum useful length is 24.
+The client opens each SID with SYN sequence 0 and initial window credit
+(Microsoft clients use 4). DATA sequence numbers begin at 1 and increase per
+direction; WNDW advertises the exclusive high-water mark available to the
+peer. FIN carries the sender's current sequence and is answered by peer FIN.
+
+### mssqlite behavior
+
+`packages/tds/src/smp.ts` incrementally frames arbitrary socket chunks and
+rejects invalid signatures, flags, lengths, and control payloads.
+`server/connection.ts` owns per-SID TDS message state, bulk state, queues, and
+flow-control counters. The physical engine session, transaction, selected
+database, and prepared handles are shared. Responses are packetized then
+drained round-robin only while `sendSequence < peerWindow`; receiving DATA
+advances credit and emits a delayed ACK near the window edge. Attention clears
+only the addressed SID's unsent response, and FIN tears down only that SID.

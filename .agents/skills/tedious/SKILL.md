@@ -56,6 +56,12 @@ new Connection({
 | `cancel()` | Attention (0x06) | DONE with DONE_ATTN |
 | pooled reset | RPC `sp_reset_connection` | acknowledged no-op |
 
+Tedious 20 does not expose MARS/SMP, so it cannot be the MARS-capable client
+ground truth. Use `System.Data.SqlClient` (or `Microsoft.Data.SqlClient`) with
+`MultipleActiveResultSets=True` for the external interoperability smoke test.
+The repository's `server/mars.test.ts` independently drives exact PRELOGIN,
+SMP, and TDS bytes so automated tests do not depend on a .NET installation.
+
 ## Request API and events
 
 ```ts
@@ -131,6 +137,12 @@ connection.execSql(request)
   handling, a constraint rollback, and cancellation followed by another query
   on the same connection. node-mssql `Table` + `request.bulk` exercises the
   higher-level SqlBulkCopy-style API over the same tedious wire path.
+- MARS wire e2e tests should hold a multi-packet reader at its four-packet SMP
+  window, prove a sibling SID still completes, then cover a shared transaction,
+  sibling SQL error, session-local Attention, connection reuse, and FIN reply.
+  Separately run a .NET SqlClient reader plus concurrent command on one
+  `MultipleActiveResultSets=True` connection to catch implementation-specific
+  sequence/window assumptions.
 - User-function e2e tests should cover a scalar declared return type (BIGINT
   arrives as IntN(8) and a string) and an inline TVF used as an ordinary FROM
   source. CREATE FUNCTION definitions must be sent in their own request/batch.

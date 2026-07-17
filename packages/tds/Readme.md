@@ -20,6 +20,10 @@ token layouts are tested against its annotated hex dumps.
   and any completed `{ type, payload }` messages. Passing selected packet types
   returns packet-sized `fragments` instead, so large streams need not be
   retained until EOM. Pure — feed it socket data, keep the returned state.
+- `Smp` — incremental Session Multiplex Protocol framing used after MARS login:
+  exact 16-byte little-endian SYN/ACK/FIN/DATA headers, bounded lengths,
+  per-session ids, sequence numbers, sliding windows, and DATA payloads that
+  contain one complete TDS packet.
 
 ### Handshake
 

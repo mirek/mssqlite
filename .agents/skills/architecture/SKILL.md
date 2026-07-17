@@ -25,7 +25,9 @@ the engine:
    encryption. During a TDS 7.4 TLS handshake, `server/tls-transport.ts`
    bridges Node's `TLSSocket` records through PRELOGIN packet wrappers; after
    the final wrapped server record drains, both directions switch to raw TLS
-   carrying ordinary TDS packets. `Tds.Message.push` then reassembles packets
+   carrying ordinary TDS packets. After a MARS-enabled login, `Tds.Smp.push`
+   first separates SYN/ACK/FIN/DATA frames by logical SID; DATA contains one
+   TDS packet. `Tds.Message.push` then reassembles each session independently
    (pure incremental state) into `{ type, payload }` messages; selected large
    packet types such as Bulk Load instead emit packet-sized fragments.
 2. **Dispatch by packet type** (`server/connection.ts`) — prelogin,
@@ -49,6 +51,11 @@ the engine:
    ROW/NULL/PLP values, and DONE; complete rows enter cached prepared INSERTs
    under one savepoint. EOM commits and returns DONE_COUNT. Invalid data,
    conversion/constraint errors, disconnect, IGNORE, or Attention roll back.
+7. **MARS response path** — each logical response becomes ordinary TDS packets
+   queued on its SID. SMP sequence/window credit limits transmission, and a
+   round-robin drain emits one eligible packet at a time so a stalled reader
+   cannot block another session. Attention drops only that SID's unsent output;
+   FIN rolls back its bulk state and closes only the logical stream.
 
 ## Key decisions
 
@@ -105,7 +112,19 @@ the engine:
   and is rejected while a transaction is active. SQLite temp schemas belong to a
   handle, so local table variables/cursors remain scoped and cleaned by the engine,
   but user `#temp` objects created before `USE` are intentionally not visible from
-  a different database handle. MARS remains separately unsupported.
+  a different database handle.
+
+- **MARS multiplexes wire state, not SQLite handles** — PRELOGIN enables SMP
+  only when requested. Login remains ordinary TDS; subsequent client SYN opens
+  a logical SID with independent message reassembly, bulk plan/decoder,
+  sequence/window counters, queued output, cancellation, error, and FIN state.
+  Logical sessions deliberately share the physical connection's engine
+  `Session`, selected database, prepared handles, and transaction, matching the
+  connection-wide effects clients rely on. SQLite execution is synchronous and
+  responses are materialized before packet scheduling, but bounded SMP windows
+  suspend socket delivery and fair scheduling permits interleaved readers and
+  writes. Malformed framing, duplicate SIDs, backward windows, and out-of-order
+  DATA are fatal to the physical transport; ordinary SQL errors remain SID-local.
 
 - **TLS is full-session or absent** — supplying `listen({ tls: { key, cert } })`
   requires encryption by default and advertises `ENCRYPT_REQ`; optional mode
