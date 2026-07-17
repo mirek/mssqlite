@@ -80,8 +80,10 @@ export type ColumnRow = {
   readonly scale: number,
   readonly collation_name: string | null,
   readonly is_nullable: number,
+  readonly is_rowguidcol?: number,
   readonly is_identity: number
   readonly is_computed: number
+  readonly default_object_id?: number
 }
 
 /** @returns sys.columns rows of an object ordered by column id. */
@@ -922,6 +924,36 @@ export const addColumns =
         ).run(defaultId, objectId, at)
       }
     }
+  }
+
+/** Updates one column's declared type/collation/nullability without changing its identity. */
+export const alterColumn =
+  (
+    db: DatabaseSync,
+    name: Ast.QualifiedName,
+    column: string,
+    type: TypeName.t,
+    collation: string | undefined,
+    nullable: boolean
+  ): void => {
+    const objectId = objectIdOf(db, name)
+    const fields = columnType(type)
+    if (objectId === undefined || fields === undefined) {
+      return
+    }
+    db.prepare(
+      `UPDATE "sys.columns" SET
+        system_type_id = ?, user_type_id = ?, max_length = ?, precision = ?, scale = ?,
+        collation_name = ?, is_nullable = ?
+        WHERE object_id = ? AND lower(name) = lower(?)`
+    ).run(
+      fields.systemTypeId, fields.userTypeId, fields.maxLength, fields.precision, fields.scale,
+      collation ?? fields.collationName, nullable ? 1 : 0, objectId, column
+    )
+    db.prepare(
+      `UPDATE "sys.objects" SET modify_date = strftime('%Y-%m-%d %H:%M:%S', 'now')
+        WHERE object_id = ?`
+    ).run(objectId)
   }
 
 /** Removes columns dropped by ALTER TABLE DROP COLUMN. */

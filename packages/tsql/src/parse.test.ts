@@ -517,6 +517,19 @@ test('drop / create index / views / alter table', () => {
     kind: 'alterTable',
     action: { kind: 'addColumns', columns: [ { name: 'c' } ] }
   })
+  expect(parseStatement(`
+    ALTER TABLE t ALTER COLUMN c NVARCHAR(40)
+      COLLATE Latin1_General_100_CS_AS NOT NULL
+  `)).toMatchObject({
+    kind: 'alterTable',
+    action: {
+      kind: 'alterColumn', column: 'c', type: { name: 'nvarchar', args: [ 40 ] },
+      collate: 'Latin1_General_100_CS_AS', nullable: false
+    }
+  })
+  expect(parseStatement('ALTER TABLE t ALTER COLUMN c BIGINT')).toMatchObject({
+    action: { kind: 'alterColumn', column: 'c', type: { name: 'bigint' }, nullable: true }
+  })
   expect(parseStatement('ALTER TABLE t DROP COLUMN c, d')).toMatchObject({
     action: { kind: 'dropColumns', columns: [ 'c', 'd' ] }
   })

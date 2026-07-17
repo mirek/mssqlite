@@ -37,7 +37,10 @@ no query interception.
     rowversion/TIMESTAMP columns use type id 189 and the database-wide counter
     persists as decimal text in the singleton `sys.rowversion_state` table;
     computed columns populate `is_computed` plus definition/persistence rows
-    behind `sys.computed_columns`; `addColumns` / `dropColumns`.
+    behind `sys.computed_columns`; `addColumns` / `alterColumn` / `dropColumns`.
+    ALTER COLUMN replaces declared type, width/precision/scale, collation and
+    nullability in place, preserving object_id, column_id, identity, and
+    constraint relationships while updating the parent modify date.
     DEFAULT expressions and `sys.columns.default_object_id` stay synchronized
     through the inherited `sys.default_constraints` view.
   - `rename(db, oldName, newName, kind)` uses a savepoint to rename a physical

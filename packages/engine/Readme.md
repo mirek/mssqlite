@@ -145,7 +145,10 @@ const items = executeBatch(s, `
   directional reseeding follow SQL Server behavior.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. DELETE retains identity state; TRUNCATE transactionally resets
-  the next value to the declared seed.
+  the next value to the declared seed. ALTER TABLE ALTER COLUMN validates
+  SQL Server dependency rules, converts stored values, and atomically rebuilds
+  the SQLite table under a savepoint while preserving indexes, triggers,
+  views, modules, catalog ids, defaults, constraints, and identity state.
 - **Unique keys** — constraints and explicit unique indexes treat NULL as a
   comparable component of the complete key tuple. Supplemental/expression
   indexes apply the declared or default Unicode/padding collation key and
