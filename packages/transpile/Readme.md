@@ -125,8 +125,13 @@ rendered statement reports the variables it binds.
   than JSON1 extraction. JSON_VALUE/JSON_QUERY carry `nvarchar(4000)` hints so
   scalar, fragment and NULL results retain SQL Server wire metadata; the engine
   owns strict/lax validation and source-slice preservation.
-- **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
-  default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
+- **Collation** — char/text columns retain BINARY/NOCASE only as a SQLite
+  baseline. Predicates, IN/BETWEEN, joins, ORDER/GROUP BY, DISTINCT aggregates
+  and projections, set operators, and indexes use one deterministic key for the
+  effective or default `SQL_Latin1_General_CP1_CI_AS` collation. The key folds
+  Unicode case, applies the declared accent/BIN2 sensitivity, and removes only
+  comparison-padding U+0020 suffixes; LIKE keeps its asymmetric trailing-blank
+  rule and never uses the padded-comparison key.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,
   or the `mssqlite_add` UDF for dynamic dispatch when types are unknown.
 - **IDENTITY** — renders as an ordinary typed, non-null SQLite column;

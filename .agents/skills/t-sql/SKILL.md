@@ -141,6 +141,13 @@ The language pipeline lives in three packages:
   AI removes canonical combining marks, AS retains accents, and BIN2 uses the
   unmodified text key. Unknown names raise 448 and conflicting implicit
   collations raise 468.
+- Missing COLLATE clauses are coercible-default
+  `SQL_Latin1_General_CP1_CI_AS`. Predicates, joins, IN/BETWEEN, ordering,
+  grouping, DISTINCT, set operators, and uniqueness compare a shared key that
+  removes trailing U+0020 from both operands before applying Unicode case and
+  accent sensitivity. Other Unicode space characters remain significant.
+  LIKE is deliberately separate: a trailing blank in the pattern is
+  significant, while trailing source blanks may match a shorter pattern.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

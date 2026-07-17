@@ -453,8 +453,12 @@ the engine:
   column and expression COLLATE names; source metadata carries declarations
   into predicate and ORDER BY rendering. BINARY/NOCASE provide a baseline,
   while `mssqlite_collation_key` applies the supported case/accent/BIN2 matrix
-  consistently to equality/range/IN/LIKE, ordering, uniqueness, and expression
-  indexes. Catalog rows retain the SQL name and TDS TYPE_INFO derives matching
+  consistently to equality/range/IN, joins, ordering/grouping, DISTINCT,
+  UNION/EXCEPT/INTERSECT, uniqueness, and expression indexes. Missing names use
+  `SQL_Latin1_General_CP1_CI_AS`; keys fold Unicode case and trim only trailing
+  U+0020 comparison padding. LIKE uses the same sensitivity matrix through its
+  separate matcher because SQL Server's trailing-blank rule is asymmetric.
+  Catalog rows retain the SQL name and TDS TYPE_INFO derives matching
   LCID/flag/version/sort-id bytes. Conflicting implicit names raise 468.
 - **Unique keys make NULL an ordinary key component** — SQLite normally treats
   every NULL as distinct. CREATE TABLE UNIQUE declarations retain their native

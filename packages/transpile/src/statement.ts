@@ -13,7 +13,7 @@ import * as TableTransform from './table-transform.ts'
 import * as Type from './type.ts'
 import expression, { useSelectRender } from './expression.ts'
 import { unsupported } from './error.ts'
-import type { Ast } from '@mssqlite/tsql'
+import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
 
 type ApplyPair = {
@@ -302,6 +302,41 @@ const selectItem =
     }
   }
 
+const relationalKey =
+  (ctx: Context.t, value: Ast.Expression, rendered: string = expression(ctx, value)): string => {
+    const type = Implicit.typeOf(ctx, value)
+    if (type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '')) {
+      return Collation.expressionKey(rendered, Collation.ofExpression(ctx, value) ?? Collation.default_)
+    }
+    const offset = DateTimeOffset.scaleOf(ctx, value)
+    if (offset !== undefined) {
+      return DateTimeOffset.key(rendered)
+    }
+    const decimal = Decimal.typeOf(ctx, value)
+    return decimal === undefined ? rendered : `mssqlite_decimal_sort_key(${rendered}, ${decimal.scale})`
+  }
+
+const starExpressions =
+  (source: Ast.TableSource | undefined, qualifier: Ast.QualifiedName | undefined): readonly Ast.Expression[] => {
+    if (source === undefined) {
+      return []
+    }
+    if (source.kind === 'join') {
+      return [ ...starExpressions(source.left, qualifier), ...starExpressions(source.right, qualifier) ]
+    }
+    if (source.kind !== 'table' && source.kind !== 'values') {
+      return []
+    }
+    const alias = source.kind === 'table' ?
+      source.alias ?? source.name[source.name.length - 1] ?? '' : source.alias
+    const requested = qualifier?.[qualifier.length - 1]?.toLowerCase()
+    if (requested !== undefined && alias.toLowerCase() !== requested) {
+      return []
+    }
+    const columns = source.kind === 'table' ? source.columns : source.columnMetadata
+    return columns?.map(column => ({ kind: 'column', name: [ alias, column.name ] })) ?? []
+  }
+
 const orderBy =
   (ctx: Context.t, items: readonly Ast.OrderBy[], select_?: Ast.Select): string =>
     Context.withSourceTypes(ctx, select_?.from, () => `ORDER BY ${items
@@ -312,13 +347,8 @@ const orderBy =
           select_?.items.find(candidate => candidate.kind === 'expression' &&
             candidate.alias?.toLowerCase() === alias)
         const resolved = value?.kind === 'expression' ? value.expression : item.expression
-        const type = Decimal.typeOf(ctx, resolved)
-        const offset = DateTimeOffset.scaleOf(ctx, resolved)
         const rendered = expression(ctx, item.expression)
-        const collation = Collation.ofExpression(ctx, resolved)
-        const key = collation !== undefined ? Collation.expressionKey(rendered, collation) :
-          offset !== undefined ? DateTimeOffset.key(rendered) :
-            type === undefined ? rendered : `mssqlite_decimal_sort_key(${rendered}, ${type.scale})`
+        const key = relationalKey(ctx, resolved, rendered)
         return `${key}${item.descending ? ' DESC' : ''}`
       })
       .join(', ')}`)
@@ -341,9 +371,15 @@ const selectCore =
         hidden.includes((item.qualifier[item.qualifier.length - 1] ?? '').toLowerCase())))) {
       return unsupported('SELECT * over a rewritten TOP (1) APPLY source is not supported.')
     }
+    const distinctExpressions = select_.items.flatMap(item => item.kind === 'expression' ?
+      [ item.expression ] : item.kind === 'star' ? starExpressions(select_.from, item.qualifier) : [])
+    const distinctKeys = select_.distinct && select_.groupBy === undefined && distinctExpressions.length > 0 &&
+      select_.items.every(item => item.kind !== 'assign' &&
+        (item.kind !== 'expression' || !Grouping.containsAggregate(item.expression))) ?
+      distinctExpressions.map(value => relationalKey(ctx, value)) : undefined
     const parts: string[] = [
       'SELECT',
-      ...select_.distinct ? [ 'DISTINCT' ] : [],
+      ...select_.distinct && distinctKeys === undefined ? [ 'DISTINCT' ] : [],
       select_.items.map(item => selectItem(ctx, item)).join(', ')
     ]
     if (select_.from !== undefined) {
@@ -357,7 +393,9 @@ const selectCore =
       if (values === undefined) {
         return unsupported('Advanced grouping must be expanded before rendering.')
       }
-      parts.push(`GROUP BY ${values.map(value => expression(ctx, value)).join(', ')}`)
+      parts.push(`GROUP BY ${values.map(value => relationalKey(ctx, value)).join(', ')}`)
+    } else if (distinctKeys !== undefined) {
+      parts.push(`GROUP BY ${distinctKeys.join(', ')}`)
     }
     if (select_.having !== undefined) {
       parts.push(`HAVING ${expression(ctx, select_.having)}`)
@@ -545,6 +583,121 @@ const declaredSourceColumns =
     source.kind === 'table' ? source.columns :
       source.kind === 'values' ? source.columnMetadata : undefined
 
+const setProjectionName =
+  (item: Ast.SelectItem, index: number): string =>
+    item.kind !== 'expression' ? `column${index + 1}` :
+      item.alias ?? (item.expression.kind === 'column' ?
+        item.expression.name[item.expression.name.length - 1] ?? `column${index + 1}` : `column${index + 1}`)
+
+const collationSet =
+  (ctx: Context.t, terms: readonly Ast.Select[], index: number): string => {
+    const values = terms.flatMap(term => Context.withSourceTypes(ctx, term.from, () => {
+      const item = term.items[index]
+      return item?.kind === 'expression' ? [ item.expression ] : []
+    }))
+    const explicit = values.flatMap(value => value.kind === 'collate' ?
+      [ Collation.key(value.collation) ] : [])
+    const declared = values.flatMap(value => Collation.ofExpression(ctx, value) ?? [])
+    const names = explicit.length > 0 ? explicit : declared
+    const distinct = [ ...new Set(names) ]
+    if (distinct.length > 1) {
+      return unsupported(
+        `Cannot resolve the collation conflict between '${distinct[0]}' and '${distinct[1]}'.`)
+    }
+    return distinct[0] ?? Collation.default_
+  }
+
+/** Distinct set operators over canonical keys while returning original representative values. */
+const collatedUnion =
+  (ctx: Context.t, select_: Ast.Select): string | undefined => {
+    const terms: Ast.Select[] = []
+    const kinds: ('union' | 'unionAll' | 'except' | 'intersect')[] = []
+    for (let term: Ast.Select | undefined = select_; term !== undefined; term = term.union?.select) {
+      terms.push(term)
+      if (term.union !== undefined) {
+        kinds.push(term.union.kind)
+      }
+    }
+    const union = kinds.length > 0 && kinds.every(kind => kind === 'union')
+    const pair = kinds.length === 1 && [ 'except', 'intersect' ].includes(kinds[0] ?? '')
+    if ((!union && !pair) || terms.some(term => term.items.some(item => item.kind !== 'expression'))) {
+      return undefined
+    }
+    const types = terms[0]?.items.map((_item, index) =>
+      Implicit.commonTypes(terms.flatMap(term => Context.withSourceTypes(ctx, term.from, () => {
+        const item = term.items[index]
+        return item?.kind === 'expression' ? Implicit.typeOf(ctx, item.expression) ?? [] : []
+      })))) ?? []
+    if (!types.some(type => type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? ''))) {
+      return undefined
+    }
+    const aliases = types.map((_type, index) => `__mssqlite_set_${index}`)
+    const branches = terms.map(term => {
+      const { union: _union, ctes: _ctes, orderBy: _orderBy, ...bare } = term
+      return selectCore(ctx, {
+        ...bare,
+        items: term.items.map((item, index) => item.kind === 'expression' ?
+          { ...item, alias: aliases[index] ?? `__mssqlite_set_${index}` } : item)
+      })
+    })
+    const projected = aliases.map((alias, index) => {
+      const item = terms[0]?.items[index]
+      const name = item === undefined ? `column${index + 1}` : setProjectionName(item, index)
+      return `${Quote.identifier(alias)} AS ${Quote.identifier(name)}`
+    })
+    const keys = aliases.map((alias, index) => {
+      const rendered = Quote.identifier(alias)
+      const type = types[index]
+      return type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '') ?
+        Collation.expressionKey(rendered, collationSet(ctx, terms, index)) : rendered
+    })
+    if (pair) {
+      const left = aliases.map(alias => `${Quote.identifier('left_')}.${Quote.identifier(alias)}`)
+      const right = aliases.map(alias => `${Quote.identifier('right_')}.${Quote.identifier(alias)}`)
+      const comparisons = aliases.map((_alias, index) => {
+        const type = types[index]
+        const a = type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '') ?
+          Collation.expressionKey(left[index] ?? 'NULL', collationSet(ctx, terms, index)) : left[index] ?? 'NULL'
+        const b = type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '') ?
+          Collation.expressionKey(right[index] ?? 'NULL', collationSet(ctx, terms, index)) : right[index] ?? 'NULL'
+        return `((${a} = ${b}) OR (${a} IS NULL AND ${b} IS NULL))`
+      })
+      const exists = kinds[0] === 'except' ? 'NOT EXISTS' : 'EXISTS'
+      const selected = left.map((value, index) => `${value} AS ${Quote.identifier(
+        setProjectionName(terms[0]?.items[index] ?? { kind: 'star' }, index))}`)
+      const grouped = keys.map((_key, index) => {
+        const type = types[index]
+        const value = left[index] ?? 'NULL'
+        return type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '') ?
+          Collation.expressionKey(value, collationSet(ctx, terms, index)) : value
+      })
+      return `SELECT ${selected.join(', ')} FROM (${branches[0]}) AS ${Quote.identifier('left_')} ` +
+        `WHERE ${exists} (SELECT 1 FROM (${branches[1]}) AS ${Quote.identifier('right_')} ` +
+        `WHERE ${comparisons.join(' AND ')}) GROUP BY ${grouped.join(', ')}`
+    }
+    return `SELECT ${projected.join(', ')} FROM (${branches.join(' UNION ALL ')}) ` +
+      `GROUP BY ${keys.join(', ')}`
+  }
+
+const renderedSet =
+  (ctx: Context.t, select_: Ast.Select): { readonly sql: string, readonly collated: boolean } => {
+    const collated = collatedUnion(ctx, select_)
+    if (collated !== undefined) {
+      return { sql: collated, collated: true }
+    }
+    const parts = [ setTerm(ctx, select_) ]
+    for (let union = select_.union; union !== undefined; union = union.select.union) {
+      const keyword = {
+        union: 'UNION',
+        unionAll: 'UNION ALL',
+        except: 'EXCEPT',
+        intersect: 'INTERSECT'
+      }[union.kind]
+      parts.push(keyword, setTerm(ctx, union.select))
+    }
+    return { sql: parts.join(' '), collated: false }
+  }
+
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => Context.withColumnExpressions(
@@ -563,18 +716,10 @@ export const select =
         parts.push(`WITH ${cteDefinitions(ctx, current.ctes).join(', ')}`)
       }
       const inSet = current.union !== undefined
-      parts.push(inSet ? setTerm(ctx, current) : selectCore(ctx, current))
-      for (let union = current.union; union !== undefined; union = union.select.union) {
-        const keyword = {
-          union: 'UNION',
-          unionAll: 'UNION ALL',
-          except: 'EXCEPT',
-          intersect: 'INTERSECT'
-        }[union.kind]
-        parts.push(keyword, setTerm(ctx, union.select))
-      }
+      const set = inSet ? renderedSet(ctx, current) : undefined
+      parts.push(set?.sql ?? selectCore(ctx, current))
       if (current.orderBy !== undefined) {
-        parts.push(orderBy(ctx, current.orderBy, inSet ? undefined : current))
+        parts.push(orderBy(ctx, current.orderBy, inSet && set?.collated !== true ? undefined : current))
       }
       if (current.offset !== undefined) {
         const fetch = current.fetch === undefined ? '-1' : expression(ctx, current.fetch)
@@ -822,6 +967,13 @@ const nullSafeKey =
     return [ `(${value} IS NULL)${order}`, `ifnull(${value}, 0)${order}` ]
   }
 
+const indexKey =
+  (rendered: string, type: TypeName.t | undefined, collation: string | undefined): string =>
+    collation !== undefined ||
+    (type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '')) ?
+      Collation.expressionKey(rendered, collation ?? Collation.default_) :
+      type?.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
+
 const createTable =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createTable' }): string => {
     const members = [
@@ -849,9 +1001,7 @@ const createTable =
       const keys = columns.flatMap(column => {
         const definition = byName.get(column.name.toLowerCase())
         const rendered = Quote.identifier(column.name)
-        const value = definition?.collate !== undefined ?
-          Collation.expressionKey(rendered, definition.collate) :
-          definition?.type.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
+        const value = indexKey(rendered, definition?.type, definition?.collate)
         return nullSafeKey(value, column.descending)
       })
       const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
@@ -862,16 +1012,15 @@ const createTable =
       .flatMap(constraint => constraint.kind === 'primaryKey' ? [ constraint.columns ] : [])
     const primaryIndexes = primaryColumns.flatMap((columns, index) => {
       const definitions = columns.map(column => byName.get(column.name.toLowerCase()))
-      if (!definitions.some(column =>
-        column?.collate !== undefined || column?.type.name === 'datetimeoffset')) {
+      if (!definitions.some(column => column !== undefined &&
+        ([ 'text', 'ntext' ].includes(Type.category(column.type) ?? '') ||
+          column.type.name === 'datetimeoffset'))) {
         return []
       }
       const keys = columns.map(column => {
         const definition = byName.get(column.name.toLowerCase())
         const rendered = Quote.identifier(column.name)
-        return definition?.collate !== undefined ?
-          Collation.expressionKey(rendered, definition.collate) :
-          definition?.type.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
+        return indexKey(rendered, definition?.type, definition?.collate)
       })
       const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
       const target = Quote.indexTarget(`__mssqlite_${tableName}_collation_${index}`, statement_.name)
@@ -887,9 +1036,7 @@ const createIndex =
     const columns = statement_.columns
       .flatMap(column => {
         const value = Quote.identifier(column.name)
-        const key = column.collation !== undefined ?
-          Collation.expressionKey(value, column.collation) :
-          column.type?.name === 'datetimeoffset' ? DateTimeOffset.key(value) : value
+        const key = indexKey(value, column.type, column.collation)
         return statement_.unique ?
           nullSafeKey(key, column.descending) :
           [ `${key}${column.descending ? ' DESC' : ''}` ]

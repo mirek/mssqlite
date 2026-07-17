@@ -133,6 +133,9 @@ because LOGIN7 password scrambling is not transport encryption.
   projections carry the same exact TYPE_INFO (family, width, precision/scale,
   temporal scale, collation, and nullability) through SQL batches, parameterized
   RPCs, prepared handles, stored procedures, UDFs, empty results, and SELECT INTO.
+  Default-collated text also uses one Unicode-aware, trailing-U+0020-padded
+  comparison key across predicates, joins, grouping, DISTINCT, set operators,
+  ordering, and indexes; LIKE retains SQL Server's separate blank semantics.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, user procedures, and the common system

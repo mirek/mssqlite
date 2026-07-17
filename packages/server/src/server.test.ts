@@ -496,6 +496,45 @@ test('collation comparisons, uniqueness and catalog metadata cross tedious', asy
   expect(catalog.rows).toEqual([ { collation_name: 'Latin1_General_100_CI_AI' } ])
 })
 
+test('default Unicode collation and padding govern relational operations over tedious', async () => {
+  const scalar = await query(`
+    SELECT CASE WHEN 'a' = 'a   ' THEN 1 ELSE 0 END AS padded,
+      CASE WHEN N'É' = N'é' THEN 1 ELSE 0 END AS unicode_case,
+      CASE WHEN N'a' = N'a' + NCHAR(160) THEN 1 ELSE 0 END AS nbsp,
+      CASE WHEN 'a' LIKE 'a ' THEN 1 ELSE 0 END AS like_pattern,
+      CASE WHEN 'a ' LIKE 'a' THEN 1 ELSE 0 END AS like_value
+  `)
+  expect(scalar.rows).toEqual([ {
+    padded: 1, unicode_case: 1, nbsp: 0, like_pattern: 0, like_value: 1
+  } ])
+
+  await query(`
+    CREATE TABLE wire_default_collation (id int PRIMARY KEY, value nvarchar(10))
+    INSERT wire_default_collation VALUES
+      (1, N'É'), (2, N'é'), (3, N'a'), (4, N'a   '), (5, N'a' + NCHAR(160))
+  `)
+  const relational = await query(`
+    SELECT COUNT(DISTINCT value) AS distinct_count,
+      (SELECT COUNT(*) FROM (
+        SELECT left_.id AS left_id, right_.id AS right_id
+        FROM wire_default_collation left_
+        JOIN wire_default_collation right_ ON left_.value = right_.value
+      ) AS pairs) AS join_count
+    FROM wire_default_collation
+  `)
+  expect(relational.rows).toEqual([ { distinct_count: 3, join_count: 9 } ])
+  expect((await query('SELECT N\'É\' AS value UNION SELECT N\'é   \'')).rows)
+    .toEqual([ { value: 'É' } ])
+  expect((await query('SELECT N\'É\' AS value EXCEPT SELECT N\'é   \'')).rows).toEqual([])
+  expect((await query('SELECT N\'É\' AS value INTERSECT SELECT N\'é   \'')).rows)
+    .toEqual([ { value: 'É' } ])
+
+  await query('CREATE TABLE wire_default_unique (id int, value nvarchar(10) UNIQUE)')
+  await query('INSERT wire_default_unique VALUES (1, N\'É\'), (2, N\'a\')')
+  await expect(query('INSERT wire_default_unique VALUES (3, N\'é   \')'))
+    .rejects.toMatchObject({ number: 2627 })
+})
+
 test('NULL-containing unique keys and error origins cross tedious', async () => {
   await query(`
     CREATE TABLE wire_unique_constraint (id INT PRIMARY KEY, value INT UNIQUE);

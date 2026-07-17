@@ -17,6 +17,17 @@ const database =
         operator === '/' ? a / b : a % b
     })
     db.function('mssqlite_decimal_cast', (value, _precision, _scale, _try) => value)
+    db.function('mssqlite_collation_key', { deterministic: true }, (value, collation) => {
+      if (value === null) {
+        return null
+      }
+      const name = String(collation).toLowerCase()
+      let key = String(value).replace(/ +$/u, '')
+      if (name.endsWith('_ai')) {
+        key = key.normalize('NFD').replace(/\p{M}/gu, '')
+      }
+      return name.includes('_cs_') || name.endsWith('_bin2') ? key : key.toLocaleLowerCase('en-US')
+    })
     db.function('mssqlite_cast_character', (value, _type, _length, _try) => value)
     db.function('mssqlite_temporal_cast', (value, _type, _try) => value)
     db.function('mssqlite_datefromparts', (year, month, day) =>

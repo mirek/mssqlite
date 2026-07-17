@@ -421,9 +421,11 @@ test('create table', () => {
     '"team_id" INTEGER REFERENCES "teams" ("id") ON DELETE CASCADE, ' +
     'CONSTRAINT "uq_name" UNIQUE ("name")); ' +
     'CREATE UNIQUE INDEX "__mssqlite_users_unique_0" ON "users" ' +
-    '(("email" IS NULL), ifnull("email", 0)); ' +
+    '((mssqlite_collation_key("email", \'sql_latin1_general_cp1_ci_as\') IS NULL), ' +
+    'ifnull(mssqlite_collation_key("email", \'sql_latin1_general_cp1_ci_as\'), 0)); ' +
     'CREATE UNIQUE INDEX "__mssqlite_users_unique_1" ON "users" ' +
-    '(("name" IS NULL), ifnull("name", 0))'
+    '((mssqlite_collation_key("name", \'sql_latin1_general_cp1_ci_as\') IS NULL), ' +
+    'ifnull(mssqlite_collation_key("name", \'sql_latin1_general_cp1_ci_as\'), 0))'
   )
 })
 
@@ -450,6 +452,11 @@ test('computed columns render inferred virtual and stored generated columns', ()
 })
 
 test('collations render normalized predicates, ordering and uniqueness', () => {
+  expect(scalarOf('\'a\' = \'A   \'')).toBe(
+    '(mssqlite_collation_key(mssqlite_cast_character(\'a\', \'varchar\', 4, 0), ' +
+    '\'sql_latin1_general_cp1_ci_as\') = ' +
+    'mssqlite_collation_key(\'A   \', \'sql_latin1_general_cp1_ci_as\'))'
+  )
   expect(scalarOf('value COLLATE Latin1_General_100_CI_AI = N\'café\'')).toBe(
     '(mssqlite_collation_key(("value" COLLATE NOCASE), \'latin1_general_100_ci_ai\') = ' +
     'mssqlite_collation_key(\'café\', \'latin1_general_100_ci_ai\'))'

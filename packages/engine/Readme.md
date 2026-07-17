@@ -148,9 +148,15 @@ const items = executeBatch(s, `
   the next value to the declared seed.
 - **Unique keys** — constraints and explicit unique indexes treat NULL as a
   comparable component of the complete key tuple. Supplemental/expression
-  indexes preserve declared collation and filtered predicates across INSERT,
+  indexes apply the declared or default Unicode/padding collation key and
+  preserve filtered predicates across INSERT,
   UPDATE, MERGE, triggers, and bulk load; failures retain statement atomicity
   and map to 2627 for constraints or 2601 for named indexes.
+- **Default text comparisons** — `SQL_Latin1_General_CP1_CI_AS` is the
+  canonical fallback for literals and default-collated columns. The same
+  Unicode case-insensitive/accent-sensitive, U+0020-trimmed key drives scalar
+  comparisons, joins, grouping, distinctness, set operators, ordering, and
+  index lookup while original text remains available for result rows.
 - **Databases** — CREATE/DROP DATABASE owns an independent in-memory store or
   deterministic sibling file; ALTER DATABASE supports MODIFY NAME and
   READ_ONLY/READ_WRITE. USE switches the session's primary handle. Three-part

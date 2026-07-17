@@ -191,7 +191,7 @@ const normalizedCollationText =
     const name = text(collation).toLowerCase()
     const accentSensitive = !name.endsWith('_ai')
     const caseSensitive = name.includes('_cs_') || name.endsWith('_bin2')
-    let key = trim ? value.trimEnd() : value
+    let key = trim ? value.replace(/ +$/u, '') : value
     if (!accentSensitive) {
       key = key.normalize('NFD').replace(/\p{M}/gu, '')
     }

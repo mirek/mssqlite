@@ -8,6 +8,9 @@ export type Sensitivity = {
   readonly binary: boolean
 }
 
+export const default_ =
+  'sql_latin1_general_cp1_ci_as'
+
 const supported: Record<string, Sensitivity> = {
   sql_latin1_general_cp1_ci_as: { caseSensitive: false, accentSensitive: true, binary: false },
   latin1_general_100_ci_as: { caseSensitive: false, accentSensitive: true, binary: false },
@@ -61,5 +64,5 @@ export const ofExpression =
 
 /** Renders the deterministic normalization key used by predicates and indexes. */
 export const expressionKey =
-  (rendered: string, name: string): string =>
+  (rendered: string, name: string = default_): string =>
     `mssqlite_collation_key(${rendered}, '${key(name)}')`
