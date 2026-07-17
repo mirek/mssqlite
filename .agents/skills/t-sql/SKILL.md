@@ -96,6 +96,10 @@ The language pipeline lives in three packages:
   LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
   return NULL, and QUOTENAME accepts the documented delimiter pairs, doubles
   closing delimiters, and returns NULL for input longer than 128 characters.
+- LIKE uses the effective or default SQL collation for literals, columns,
+  variables, parameters, and computed expressions. Its matcher implements `%`,
+  `_`, `[abc]`, `[a-c]`, `[^...]`, literal `[`, and ESCAPE; invalid ranges and
+  malformed classes miss, while a multi-character ESCAPE raises 506.
 - Character declarations default an omitted width to 1; CAST/CONVERT default
   it to 30. Explicit char/varchar/nchar/nvarchar conversions truncate and
   fixed-width families pad, while assignment into table storage rejects

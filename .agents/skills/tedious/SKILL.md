@@ -128,6 +128,9 @@ connection.execSql(request)
   object through a three-part name on the still-master first connection.
 - Wrap Request in a promise helper collecting rows + rowCount (see
   `server.test.ts`).
+- LIKE character-class e2e tests should include literal and typed RPC patterns,
+  case folding under the default collation, ESCAPE, and error 506 so SQLite's
+  native no-class LIKE cannot leak through one expression source.
 - Keep a table variable's declaration and all references in one SQL-batch
   request; a later `execSql` call is a new batch and must receive error 1087.
 - TVF result metadata is available even for NULL/empty inputs. Remember that

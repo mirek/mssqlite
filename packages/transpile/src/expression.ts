@@ -486,16 +486,11 @@ export const expression =
           return unsupported(`Operator 'LIKE' is not supported for ${opaque} values.`)
         }
         const collation = Collation.ofExpression(ctx, expression_.expression) ??
-          Collation.ofExpression(ctx, expression_.pattern)
-        if (collation !== undefined && expression_.escape === undefined) {
-          return `(${expression_.negated ? 'NOT ' : ''}mssqlite_collation_like(` +
-            `${expression(ctx, expression_.expression)}, ${expression(ctx, expression_.pattern)}, ` +
-            `'${collation}'))`
-        }
-        const escape = expression_.escape === undefined ?
-          '' :
-          ` ESCAPE ${expression(ctx, expression_.escape)}`
-        return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT LIKE' : 'LIKE'} ${expression(ctx, expression_.pattern)}${escape})`
+          Collation.ofExpression(ctx, expression_.pattern) ?? 'sql_latin1_general_cp1_ci_as'
+        const escape = expression_.escape === undefined ? '\'\'' : expression(ctx, expression_.escape)
+        return `(${expression_.negated ? 'NOT ' : ''}mssqlite_collation_like(` +
+          `${expression(ctx, expression_.expression)}, ${expression(ctx, expression_.pattern)}, ` +
+          `'${collation}', ${escape}))`
       }
       case 'between': {
         const opaque = opaqueCategory(ctx, expression_.expression)

@@ -771,6 +771,29 @@ test('string function edge cases cross the tedious boundary', async () => {
     .rejects.toMatchObject({ number: 536 })
 })
 
+test('LIKE character classes and ESCAPE cross the tedious boundary', async () => {
+  const result = await query(`
+    SELECT CASE WHEN 'b' LIKE '[a-c]' THEN 1 ELSE 0 END AS range_hit,
+      CASE WHEN 'z' LIKE '[^a-c]' THEN 1 ELSE 0 END AS negated_hit,
+      CASE WHEN '[' LIKE '[[]' THEN 1 ELSE 0 END AS bracket_hit,
+      CASE WHEN '%' LIKE '!%' ESCAPE '!' THEN 1 ELSE 0 END AS escaped_hit,
+      CASE WHEN 'B' LIKE '[a-c]' THEN 1 ELSE 0 END AS folded_hit
+  `)
+  expect(result.rows).toEqual([ {
+    range_hit: 1, negated_hit: 1, bracket_hit: 1, escaped_hit: 1, folded_hit: 1
+  } ])
+
+  const rpc = await query(`
+    SELECT CASE WHEN @value LIKE @pattern THEN 1 ELSE 0 END AS matched
+  `, [
+    { name: 'value', type: TYPES.VarChar, value: 'c' },
+    { name: 'pattern', type: TYPES.VarChar, value: '[a-c]' }
+  ])
+  expect(rpc.rows).toEqual([ { matched: 1 } ])
+  await expect(query('SELECT 1 WHERE \'a\' LIKE \'a\' ESCAPE \'xx\''))
+    .rejects.toMatchObject({ number: 506 })
+})
+
 test('character widths and fixed families cross the tedious boundary', async () => {
   const casts = await query(`
     SELECT
