@@ -68,6 +68,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - Dotted object names inside quoted identifiers (`"sys.tables"`,
   `"app.users"`) to flatten MSSQL schemas without query interception,
   and the `temp` schema for `#temp` tables.
+- Each SQL database owns a primary `DatabaseSync` and independent catalog.
+  Every primary attaches the other stores under encoded aliases, so
+  cross-database DML shares one SQLite transaction. Cross-file crash atomicity
+  requires disk-backed `main` with rollback journaling; it is not guaranteed
+  for in-memory `main` or WAL. SQLite's ten-attachment limit caps mssqlite at
+  eleven logical databases. Cross-database DDL switches to the target primary
+  and is rejected during user transactions.
 - Table variables use unique tables in the SQLite `temp` schema. Their names
   stay out of the catalog; the engine keeps the T-SQL column definitions for
   result metadata and drops each backing table at batch/procedure scope exit.
@@ -155,7 +162,7 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   persisted decimal-text state flushes only outside user transactions, so a
   SQLite rollback does not reuse an allocated version.
 - SQLite has no schema sequence generator. mssqlite persists definitions and
-  allocation state as catalog rows, advances a synchronous server-wide BigInt
+  allocation state as catalog rows, advances a synchronous database-wide BigInt
   registry from a nondeterministic UDF, and flushes it only outside SQLite user
   transactions so SQL Server-style rollback-independent consumption survives.
 - SQLite returns NULL for division/modulo by zero and promotes overflowing

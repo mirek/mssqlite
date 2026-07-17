@@ -4,6 +4,10 @@ import { registerFunctions } from './udf.ts'
 import { loadSequences, type Sequence } from './sequence.ts'
 import type { RowversionState } from './rowversion.ts'
 import { DatabaseSync } from 'node:sqlite'
+import { randomUUID } from 'node:crypto'
+import * as Transpile from '@mssqlite/transpile'
+import { initializeDatabases } from './database.ts'
+import { localize } from './database-name.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { Column } from './metadata.ts'
 
@@ -75,11 +79,33 @@ export type Cursor = {
 }
 
 /** Server-wide state shared by sessions. */
+export type DatabaseState = {
+  id: number,
+  name: string,
+  alias: string,
+  readOnly: boolean,
+  readonly location: string,
+  readonly engineOwned: boolean,
+  readonly db: DatabaseSync,
+  readonly procedures: Map<string, Procedure>,
+  readonly functions: Map<string, UserFunction>,
+  readonly triggers: Map<string, Trigger>,
+  readonly sequences: Map<string, Sequence>,
+  readonly rowversion: RowversionState,
+  readonly registeredFunctions: Set<string>
+}
+
 export type Server = {
   readonly db: DatabaseSync,
-  readonly databaseName: string,
+  databaseName: string,
   readonly serverName: string,
   readonly version: string,
+  readonly initialPath: string,
+  readonly storageId: string | undefined,
+  /** Logical databases keyed by lowercased SQL name. */
+  readonly databases: Map<string, DatabaseState>,
+  /** Live sessions, used to protect and synchronize database lifecycle changes. */
+  readonly sessions: Set<Session>,
   /** Stored procedures keyed by lowercased `schema.name`. */
   readonly procedures: Map<string, Procedure>,
   /** User functions keyed by lowercased `schema.name`. */
@@ -102,7 +128,10 @@ export type Server = {
  */
 export type Session = {
   readonly server: Server,
-  readonly db: DatabaseSync,
+  db: DatabaseSync,
+  databaseState: DatabaseState,
+  /** Database whose write is currently allocating rowversion values. */
+  allocationDatabaseState: DatabaseState | undefined,
   readonly spid: number,
   database: string,
   userName: string,
@@ -168,17 +197,17 @@ export const triggerKey =
 // Re-registers procedures persisted in sys.sql_modules (file-backed
 // databases survive restarts) by re-parsing their stored definitions.
 const loadProcedures =
-  (server_: Server): void => {
-    const rows = server_.db.prepare(
+  (state: DatabaseState): void => {
+    const rows = state.db.prepare(
       `SELECT m.definition FROM "sys.sql_modules" m
         JOIN "sys.objects" o ON o.object_id = m.object_id
         WHERE o.type = 'P' AND m.definition IS NOT NULL`
     ).all() as { definition: string }[]
     for (const row of rows) {
       try {
-        for (const statement of parse(row.definition)) {
+        for (const statement of parse(row.definition).map(value => localize(value, state.name))) {
           if (statement.kind === 'createProcedure') {
-            server_.procedures.set(procedureKey(statement.name), {
+            state.procedures.set(procedureKey(statement.name), {
               name: statement.name[statement.name.length - 1] ?? '',
               parameters: statement.parameters,
               body: statement.body,
@@ -193,17 +222,17 @@ const loadProcedures =
   }
 
 const loadUserFunctions =
-  (server_: Server): void => {
-    const rows = server_.db.prepare(
+  (state: DatabaseState): void => {
+    const rows = state.db.prepare(
       `SELECT m.definition FROM "sys.sql_modules" m
         JOIN "sys.objects" o ON o.object_id = m.object_id
         WHERE o.type IN ('FN', 'IF') AND m.definition IS NOT NULL`
     ).all() as { definition: string }[]
     for (const row of rows) {
       try {
-        for (const statement of parse(row.definition)) {
+        for (const statement of parse(row.definition).map(value => localize(value, state.name))) {
           if (statement.kind === 'createFunction') {
-            server_.functions.set(functionKey(statement.name), {
+            state.functions.set(functionKey(statement.name), {
               name: statement.name,
               parameters: statement.parameters,
               returns: statement.returns,
@@ -218,17 +247,17 @@ const loadUserFunctions =
   }
 
 const loadTriggers =
-  (server_: Server): void => {
-    const rows = server_.db.prepare(
+  (state: DatabaseState): void => {
+    const rows = state.db.prepare(
       `SELECT m.definition FROM "sys.sql_modules" m
         JOIN "sys.objects" o ON o.object_id = m.object_id
         WHERE o.type = 'TR' AND m.definition IS NOT NULL`
     ).all() as { definition: string }[]
     for (const row of rows) {
       try {
-        for (const statement of parse(row.definition)) {
+        for (const statement of parse(row.definition).map(value => localize(value, state.name))) {
           if (statement.kind === 'createTrigger') {
-            server_.triggers.set(triggerKey(statement.name), {
+            state.triggers.set(triggerKey(statement.name), {
               name: statement.name,
               target: statement.target,
               timing: statement.timing,
@@ -245,18 +274,44 @@ const loadTriggers =
     }
   }
 
+/** Loads persisted executable definitions into a database-owned runtime state. */
+export const hydrateDatabaseState =
+  (state: DatabaseState): void => {
+    loadProcedures(state)
+    loadUserFunctions(state)
+    loadTriggers(state)
+  }
+
 /** @returns server over a SQLite database path (`:memory:` by default). */
 export const server =
   (options: { path?: string, databaseName?: string, serverName?: string } = {}): Server => {
-    const db = new DatabaseSync(options.path ?? ':memory:')
+    const requestedPath = options.path ?? ':memory:'
+    const storageId = requestedPath === ':memory:' ? randomUUID() : undefined
+    const requestedDatabaseName = options.databaseName ?? 'master'
+    const initialLocation = storageId === undefined ? requestedPath :
+      `file:mssqlite-${storageId}-${Transpile.Quote.databaseAlias(requestedDatabaseName)}?mode=memory&cache=shared`
+    const db = new DatabaseSync(initialLocation)
     db.exec('PRAGMA foreign_keys = ON')
-    const databaseName = options.databaseName ?? 'master'
+    const hasContext = db.prepare(
+      `SELECT 1 AS found FROM sqlite_schema
+        WHERE type = 'table' AND name = 'sys._database_context'`
+    ).get() as { found: number } | undefined
+    const persisted = hasContext === undefined ? undefined : db.prepare(
+      'SELECT name FROM "sys._database_context" WHERE singleton = 1'
+    ).get() as { name: string } | undefined
+    const databaseName = persisted?.name ?? requestedDatabaseName
     bootstrap(db, databaseName)
-    const server_: Server = {
+    const databaseRow = db.prepare(
+      'SELECT database_id, is_read_only FROM "sys.databases" WHERE name = ?'
+    ).get(databaseName) as { database_id: number, is_read_only: number } | undefined
+    const initial: DatabaseState = {
+      id: databaseRow?.database_id ?? 5,
+      name: databaseName,
+      alias: Transpile.Quote.databaseAlias(databaseName),
+      readOnly: databaseRow?.is_read_only !== 0,
+      location: initialLocation,
+      engineOwned: false,
       db,
-      databaseName,
-      serverName: options.serverName ?? 'mssqlite',
-      version: 'Microsoft SQL Server 2019 (mssqlite) - 15.0.2000.5 (X64)',
       procedures: new Map(),
       functions: new Map(),
       triggers: new Map(),
@@ -265,13 +320,49 @@ export const server =
         current: BigInt(rowversionValue(db)),
         dirty: false
       },
-      registeredFunctions: new Set(),
+      registeredFunctions: new Set()
+    }
+    const server_: Server = {
+      get db() {
+        return this.current?.databaseState.db ?? initial.db
+      },
+      databaseName,
+      serverName: options.serverName ?? 'mssqlite',
+      version: 'Microsoft SQL Server 2019 (mssqlite) - 15.0.2000.5 (X64)',
+      initialPath: requestedPath,
+      storageId,
+      databases: new Map([ [ databaseName.toLowerCase(), initial ] ]),
+      sessions: new Set(),
+      get procedures() {
+        return this.current?.databaseState.procedures ?? initial.procedures
+      },
+      get functions() {
+        return this.current?.databaseState.functions ?? initial.functions
+      },
+      get triggers() {
+        return this.current?.databaseState.triggers ?? initial.triggers
+      },
+      get sequences() {
+        return this.current?.databaseState.sequences ?? initial.sequences
+      },
+      get rowversion() {
+        return this.current?.databaseState.rowversion ?? initial.rowversion
+      },
+      get registeredFunctions() {
+        return this.current?.databaseState.registeredFunctions ?? initial.registeredFunctions
+      },
       current: undefined
     }
-    registerFunctions(server_)
-    loadProcedures(server_)
-    loadUserFunctions(server_)
-    loadTriggers(server_)
+    registerFunctions(server_, db)
+    hydrateDatabaseState(initial)
+    try {
+      initializeDatabases(server_, initial)
+    } catch (error) {
+      for (const state of server_.databases.values()) {
+        state.db.close()
+      }
+      throw error
+    }
     return server_
   }
 
@@ -281,6 +372,8 @@ export const session =
     const session_: Session = {
       server: server_,
       db: server_.db,
+      databaseState: server_.databases.get(server_.databaseName.toLowerCase()) as DatabaseState,
+      allocationDatabaseState: undefined,
       spid: nextSpid++,
       database: server_.databaseName,
       userName: 'sa',
@@ -308,23 +401,32 @@ export const session =
       lastReturnStatus: 0,
       nestLevel: 0
     }
+    server_.sessions.add(session_)
     syncSession(session_)
     return session_
   }
 
 /** Synchronizes mutable connection identity and counters with sys.dm_exec_sessions. */
 const databaseId =
-  (session_: Session): number => {
-    const row = session_.db.prepare(
-      'SELECT database_id FROM "sys.databases" WHERE name = ?'
-    ).get(session_.database) as { database_id: number } | undefined
-    return row?.database_id ?? 5
+  (session_: Session): number => session_.databaseState.id
+
+const catalogTable =
+  (session_: Session, state: DatabaseState, name: string): string =>
+    state === session_.databaseState ?
+      Transpile.Quote.identifier(name) :
+      `${Transpile.Quote.identifier(state.alias)}.${Transpile.Quote.identifier(name)}`
+
+const everyCatalog =
+  (session_: Session, run: (table: (name: string) => string) => void): void => {
+    for (const state of session_.server.databases.values()) {
+      run(name => catalogTable(session_, state, name))
+    }
   }
 
 export const syncSession =
   (session_: Session): void => {
-    session_.db.prepare(
-      `INSERT INTO "sys.dm_exec_sessions" (
+    everyCatalog(session_, table => session_.db.prepare(
+      `INSERT INTO ${table('sys.dm_exec_sessions')} (
         session_id, login_time, host_name, program_name, client_version,
         client_interface_name, login_name, status, database_id,
         open_transaction_count, row_count, prev_error, original_login_name
@@ -342,7 +444,7 @@ export const syncSession =
       session_.requestDepth > 0 ? 'running' : 'sleeping', databaseId(session_),
       session_.transactionCount,
       session_.rowCount, session_.lastError, session_.userName
-    )
+    ))
   }
 
 const requestCommand =
@@ -358,20 +460,20 @@ export const beginRequest =
     }
     syncSession(session_)
     mutable.requestStartedAt = Date.now()
-    session_.db.prepare(
-      `INSERT OR REPLACE INTO "sys.dm_exec_requests" (
+    everyCatalog(session_, table => session_.db.prepare(
+      `INSERT OR REPLACE INTO ${table('sys.dm_exec_requests')} (
         session_id, request_id, start_time, status, command, database_id,
         open_transaction_count, row_count
       ) VALUES (?, 0, ?, 'running', ?, ?, ?, ?)`
     ).run(
       session_.spid, new Date(session_.requestStartedAt).toISOString(),
       requestCommand(sql), databaseId(session_), session_.transactionCount, session_.rowCount
-    )
-    session_.db.prepare(
-      `UPDATE "sys.dm_exec_sessions"
+    ))
+    everyCatalog(session_, table => session_.db.prepare(
+      `UPDATE ${table('sys.dm_exec_sessions')}
         SET status = 'running', last_request_start_time = ?, open_transaction_count = ?
         WHERE session_id = ?`
-    ).run(new Date(session_.requestStartedAt).toISOString(), session_.transactionCount, session_.spid)
+    ).run(new Date(session_.requestStartedAt).toISOString(), session_.transactionCount, session_.spid))
   }
 
 /** Completes an outer request and leaves the authenticated session sleeping. */
@@ -384,30 +486,33 @@ export const endRequest =
     }
     const ended = new Date().toISOString()
     const elapsed = Math.max(0, Date.now() - session_.requestStartedAt)
-    session_.db.prepare(
-      `UPDATE "sys.dm_exec_requests" SET total_elapsed_time = ?, row_count = ?
+    everyCatalog(session_, table => session_.db.prepare(
+      `UPDATE ${table('sys.dm_exec_requests')} SET total_elapsed_time = ?, row_count = ?
         WHERE session_id = ? AND request_id = 0`
-    ).run(elapsed, session_.rowCount, session_.spid)
-    session_.db.prepare(
-      `UPDATE "sys.dm_exec_sessions" SET status = 'sleeping',
+    ).run(elapsed, session_.rowCount, session_.spid))
+    everyCatalog(session_, table => session_.db.prepare(
+      `UPDATE ${table('sys.dm_exec_sessions')} SET status = 'sleeping',
         last_request_end_time = ?, open_transaction_count = ?, row_count = ?, prev_error = ?
         WHERE session_id = ?`
     ).run(
       ended, session_.transactionCount, session_.rowCount, session_.lastError, session_.spid
-    )
-    session_.db.prepare(
-      'DELETE FROM "sys.dm_exec_requests" WHERE session_id = ? AND request_id = 0'
-    ).run(session_.spid)
+    ))
+    everyCatalog(session_, table => session_.db.prepare(
+      `DELETE FROM ${table('sys.dm_exec_requests')} WHERE session_id = ? AND request_id = 0`
+    ).run(session_.spid))
   }
 
 /** Removes disconnected session/request rows from the dynamic management surface. */
 export const closeSession =
   (session_: Session): void => {
+    session_.server.sessions.delete(session_)
     try {
-      session_.db.prepare('DELETE FROM "sys.dm_exec_requests" WHERE session_id = ?')
-        .run(session_.spid)
-      session_.db.prepare('DELETE FROM "sys.dm_exec_sessions" WHERE session_id = ?')
-        .run(session_.spid)
+      everyCatalog(session_, table => {
+        session_.db.prepare(`DELETE FROM ${table('sys.dm_exec_requests')} WHERE session_id = ?`)
+          .run(session_.spid)
+        session_.db.prepare(`DELETE FROM ${table('sys.dm_exec_sessions')} WHERE session_id = ?`)
+          .run(session_.spid)
+      })
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('database is not open')) {
         throw error

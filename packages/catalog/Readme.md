@@ -56,4 +56,7 @@ no query interception.
   are later translated to TDS collation bytes by engine metadata.
 
 Object ids allocate from 100000001 via the `sys._next_id` counter, per the
-skill's guidance.
+skill's guidance. Every logical database has its own complete catalog and id
+allocator. The initial database additionally owns the internal
+`sys._database_files` manifest used to reopen engine-owned sibling stores;
+`sys.databases` rows are mirrored into every catalog as server-level metadata.

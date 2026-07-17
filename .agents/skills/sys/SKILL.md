@@ -813,6 +813,10 @@ CREATE TABLE IF NOT EXISTS [sys.databases] (
 | 4 | msdb |
 
 The user's working database should be added dynamically (database_id=5+).
+Mssqlite keeps this server-level table mirrored in each database-owned catalog.
+The initial store also owns an internal `sys._database_files` manifest with
+`database_id`, SQL name, backing location, and an engine-owned deletion flag;
+it is an implementation table, not a SQL Server catalog surface.
 
 ---
 

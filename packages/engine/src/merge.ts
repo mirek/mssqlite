@@ -3,6 +3,7 @@ import * as Transpile from '@mssqlite/transpile'
 import { bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { MssqlError } from './error.ts'
+import { stateForName } from './database.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Item } from './execute.ts'
 import { countVisibility, type Session } from './session.ts'
@@ -19,6 +20,10 @@ const INSERTED = 'temp."__mssqlite_merge_inserted"'
 const last =
   (name: Ast.QualifiedName): string =>
     name[name.length - 1] ?? ''
+
+const catalogOf =
+  (session: Session, name: Ast.QualifiedName): Session['db'] =>
+    stateForName(session, name).db
 
 const isNull =
   (expression: Ast.Expression, negated = false): Ast.Expression =>
@@ -94,10 +99,11 @@ const insertColumnCount =
       }
       return
     }
-    const objectId = Catalog.objectIdOf(session.db, statement.target)
+    const catalog = catalogOf(session, statement.target)
+    const objectId = Catalog.objectIdOf(catalog, statement.target)
     const columns = objectId === undefined ? session.db
-      .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(statement.target)})`)
-      .all() as { name: string }[] : Catalog.tableColumns(session.db, objectId)
+      .prepare(Transpile.Quote.pragmaTableInfo(statement.target))
+      .all() as { name: string }[] : Catalog.tableColumns(catalog, objectId)
       .filter(column => column.is_identity === 0 && column.is_computed === 0 && column.system_type_id !== 189)
     if (columns.length > 0 && columns.length !== action.values.length) {
       throw new MssqlError('Column name or number of supplied values does not match table definition.', 213, 16)
@@ -106,11 +112,12 @@ const insertColumnCount =
 
 const resolveRowversion =
   (session: Session, statement: Merge): Merge => {
-    const objectId = Catalog.objectIdOf(session.db, statement.target)
+    const catalog = catalogOf(session, statement.target)
+    const objectId = Catalog.objectIdOf(catalog, statement.target)
     if (objectId === undefined) {
       return statement
     }
-    const columns = Catalog.tableColumns(session.db, objectId)
+    const columns = Catalog.tableColumns(catalog, objectId)
     const rowversion = columns.find(column => column.system_type_id === 189)
     if (rowversion === undefined) {
       return statement
@@ -159,9 +166,10 @@ const resolveRowversion =
 
 const hasIdentity =
   (session: Session, table: Ast.QualifiedName): boolean => {
-    const objectId = Catalog.objectIdOf(session.db, table)
+    const catalog = catalogOf(session, table)
+    const objectId = Catalog.objectIdOf(catalog, table)
     return objectId !== undefined &&
-      Catalog.tableColumns(session.db, objectId).some(column => column.is_identity === 1)
+      Catalog.tableColumns(catalog, objectId).some(column => column.is_identity === 1)
   }
 
 /**
@@ -558,7 +566,7 @@ export const executeMerge =
     const targetColumns = output === undefined ?
       [] :
       (session.db
-        .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(statement.target)})`)
+        .prepare(Transpile.Quote.pragmaTableInfo(statement.target))
         .all() as { name: string }[])
         .map(column => column.name)
     const capture = output !== undefined && statement.whens.some(when => when.action.kind === 'insert')

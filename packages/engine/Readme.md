@@ -23,8 +23,7 @@ const items = executeBatch(s, `
 
 - `server(options)` — opens the SQLite database, bootstraps the catalog and
   registers every `mssqlite_*` UDF the transpiler emits. One server hosts
-  many sessions on a shared connection (SQLite serializes writes; one
-  transaction at a time).
+  many sessions and one SQLite store/primary handle per SQL database.
 - `session(server)` — per-connection state: declared variables, SET
   options, `@@ROWCOUNT` / `@@IDENTITY` / `@@TRANCOUNT` / `@@ERROR`, spid,
   and a synchronized `sys.dm_exec_sessions` row. Outermost batches expose a
@@ -88,6 +87,12 @@ const items = executeBatch(s, `
   NULL; otherwise they follow TRY/CATCH, continuation, and XACT_ABORT rules.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
+- **Databases** — CREATE/DROP DATABASE owns an independent in-memory store or
+  deterministic sibling file; ALTER DATABASE supports MODIFY NAME and
+  READ_ONLY/READ_WRITE. USE switches the session's primary handle. Three-part
+  names query attached stores, and three-part procedure calls execute in the
+  procedure's database. Catalogs, modules, sequences, rowversion, and settings
+  are database-scoped; `sys.databases` remains server-wide and mirrored.
 - **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.
 - **OUTPUT** — INSERT/DELETE (and inserted-only UPDATE) run the
   transpiled `RETURNING` and emit the rows as a result set. UPDATE
@@ -147,7 +152,7 @@ const items = executeBatch(s, `
   use read-only static snapshots; cursor variables and positioned writes are
   not implemented.
 - **Sequences** — CREATE/ALTER/DROP persists `SO` objects and NEXT VALUE FOR
-  advances a server-wide BigInt counter shared atomically by every session.
+  advances a database-wide BigInt counter shared atomically by every session.
   Signed increments, bounds, exhaustion, cycling, restart, cache metadata, and
   `sys.sequences` are supported. Dirty allocation state flushes after statements
   and after COMMIT/ROLLBACK, so consumed values survive rollback and restart.

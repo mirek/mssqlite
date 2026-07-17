@@ -63,28 +63,38 @@ export const loadSequences =
 /** Writes dirty allocation state once no user transaction can roll it back. */
 export const flushSequences =
   (server: Server): void => {
-    if (server.db.isTransaction) {
-      return
-    }
-    for (const sequence of server.sequences.values()) {
-      if (!sequence.dirty) {
+    for (const state of server.databases.values()) {
+      if (state.db.isTransaction) {
         continue
       }
-      Catalog.updateSequenceValue(
-        server.db,
-        sequence.objectId,
-        sequence.current.toString(),
-        sequence.exhausted,
-        sequence.lastUsed?.toString() ?? null
-      )
-      sequence.dirty = false
+      for (const sequence of state.sequences.values()) {
+        if (!sequence.dirty) {
+          continue
+        }
+        Catalog.updateSequenceValue(
+          state.db,
+          sequence.objectId,
+          sequence.current.toString(),
+          sequence.exhausted,
+          sequence.lastUsed?.toString() ?? null
+        )
+        sequence.dirty = false
+      }
     }
   }
 
 /** Atomically reserves and returns one sequence value. */
 export const nextSequenceValue =
   (server: Server, name: string): Value => {
-    const sequence = server.sequences.get(sequenceKey(name))
+    const parts = name.split('.')
+    const database = parts.length >= 3 ? parts[parts.length - 3] : undefined
+    const state = database === undefined ? server.current?.databaseState :
+      server.databases.get(database.toLowerCase())
+    if (state?.readOnly === true) {
+      throw new MssqlError(
+        `Failed to update database '${state.name}' because the database is read-only.`, 3906, 16)
+    }
+    const sequence = state?.sequences.get(sequenceKey(name))
     if (sequence === undefined) {
       throw new MssqlError(`Object '${name}' is not a sequence object.`, 11726, 16)
     }

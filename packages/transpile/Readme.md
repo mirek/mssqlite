@@ -29,8 +29,9 @@ const { sql, variables } = statement(parseStatement(
 
 ## Mapping decisions
 
-- **Names** — database qualifiers and the `dbo` schema are dropped
-  (`master.dbo.users` → `"users"`); `sys` / `INFORMATION_SCHEMA` objects
+- **Names** — database qualifiers become deterministic SQLite attachment
+  aliases (`sales.dbo.users` → `"mssqlite_73616c6573"."users"`) while the
+  `dbo` schema drops; `sys` / `INFORMATION_SCHEMA` objects
   flatten to lowercase names the catalog provides (`sys.Tables` →
   `"sys.tables"`); other schemas flatten into dotted identifiers
   (`app.users` → `"app.users"`); `#temp` tables land in SQLite's `temp`

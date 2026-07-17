@@ -478,6 +478,15 @@ export type Statement =
   | { readonly kind: 'commitTransaction', readonly name?: string }
   | { readonly kind: 'rollbackTransaction', readonly name?: string }
   | { readonly kind: 'saveTransaction', readonly name: string }
+  | { readonly kind: 'createDatabase', readonly name: string }
+  | {
+      readonly kind: 'alterDatabase',
+      readonly name: string,
+      readonly action:
+        | { readonly kind: 'rename', readonly name: string }
+        | { readonly kind: 'setAccess', readonly readOnly: boolean }
+    }
+  | { readonly kind: 'dropDatabase', readonly name: string, readonly ifExists: boolean }
   | { readonly kind: 'use', readonly database: string }
   | { readonly kind: 'print', readonly expression: Expression }
   | {

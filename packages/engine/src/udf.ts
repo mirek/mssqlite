@@ -8,6 +8,7 @@ import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
 import { SqlVariant, TypeInfo } from '@mssqlite/tds'
 import type { Server } from './session.ts'
+import type { DatabaseSync } from 'node:sqlite'
 
 type Argument =
   null | number | bigint | string | Uint8Array
@@ -286,8 +287,7 @@ const sumResult =
  * scoped functions read `server.current`, set by the engine per batch.
  */
 export const registerFunctions =
-  (server: Server): void => {
-    const { db } = server
+  (server: Server, db: DatabaseSync = server.db): void => {
     const define =
       (name: string, fn: (...args: Argument[]) => Argument, options: { deterministic?: boolean, varargs?: boolean } = {}): void => {
         db.function(name, { deterministic: options.deterministic ?? true, varargs: options.varargs ?? false }, fn)
@@ -561,8 +561,9 @@ export const registerFunctions =
         null :
         eomonth(text(value), Number(n ?? 0)))
     // Session-scoped.
-    define('mssqlite_db_name', () => server.current?.database ?? server.databaseName, { deterministic: false })
-    define('mssqlite_db_id', () => 5, { deterministic: false })
+    define('mssqlite_db_name', () =>
+      server.current?.databaseState.name ?? server.databaseName, { deterministic: false })
+    define('mssqlite_db_id', () => server.current?.databaseState.id ?? 5, { deterministic: false })
     define('mssqlite_scope_identity', () => {
       const identity = server.current?.lastIdentity ?? null
       return typeof identity === 'boolean' ? (identity ? 1 : 0) : identity

@@ -23,6 +23,8 @@ import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import positionalRows from './positional-rows.ts'
 import * as SystemProcedures from './system-procedures.ts'
+import * as Databases from './database.ts'
+import { localize } from './database-name.ts'
 import {
   flushRowversion,
   installRowversionTriggers,
@@ -50,6 +52,77 @@ import {
   type Value,
   type Variable
 } from './session.ts'
+
+const catalogDatabase =
+  (session: Session, name: Ast.QualifiedName): Session['db'] =>
+    Databases.stateForName(session, name).db
+
+const ddlOwner =
+  (statement: Ast.Statement): Ast.QualifiedName | undefined => {
+    switch (statement.kind) {
+      case 'createTable':
+      case 'alterTable':
+      case 'createView':
+      case 'createProcedure':
+      case 'createFunction':
+      case 'createTrigger':
+      case 'createSequence':
+      case 'alterSequence':
+        return statement.name
+      case 'createIndex':
+        return statement.table
+      case 'dropIndex':
+        return statement.table
+      case 'dropTable':
+      case 'dropView':
+      case 'dropProcedure':
+      case 'dropFunction':
+      case 'dropTrigger':
+      case 'dropSequence':
+        return statement.names[0]
+      default:
+        return undefined
+    }
+  }
+
+const writeTargets =
+  (statement: Ast.Statement): readonly Ast.QualifiedName[] => {
+    switch (statement.kind) {
+      case 'insert':
+        return [ statement.table ]
+      case 'update':
+      case 'delete':
+        return [ statement.target ]
+      case 'merge':
+        return [ statement.target ]
+      case 'truncate':
+        return [ statement.table ]
+      case 'select':
+        return statement.into === undefined ? [] : [ statement.into ]
+      case 'createTable':
+      case 'alterTable':
+      case 'createView':
+      case 'createProcedure':
+      case 'createFunction':
+      case 'createTrigger':
+      case 'createSequence':
+      case 'alterSequence':
+        return [ statement.name ]
+      case 'createIndex':
+        return [ statement.table ]
+      case 'dropIndex':
+        return statement.table === undefined ? [] : [ statement.table ]
+      case 'dropTable':
+      case 'dropView':
+      case 'dropProcedure':
+      case 'dropFunction':
+      case 'dropTrigger':
+      case 'dropSequence':
+        return statement.names
+      default:
+        return []
+    }
+  }
 
 /** Result set of a SELECT. */
 export type Rows = {
@@ -139,9 +212,10 @@ const hasIdentity =
     if (tableVariable !== undefined) {
       return tableVariable.columns.some(column => column.identity !== undefined)
     }
-    const objectId = Catalog.objectIdOf(session.db, table)
+    const db = catalogDatabase(session, table)
+    const objectId = Catalog.objectIdOf(db, table)
     return objectId !== undefined &&
-      Catalog.tableColumns(session.db, objectId).some(column => column.is_identity === 1)
+      Catalog.tableColumns(db, objectId).some(column => column.is_identity === 1)
   }
 
 const decimalType =
@@ -209,11 +283,12 @@ const targetColumns =
         ...isRowversionType(column.type) ? { rowversion: true } : {}
       }))
     }
-    const objectId = Catalog.objectIdOf(session.db, name)
+    const db = catalogDatabase(session, name)
+    const objectId = Catalog.objectIdOf(db, name)
     if (objectId === undefined) {
       return []
     }
-    return Catalog.tableColumns(session.db, objectId).map(column => {
+    return Catalog.tableColumns(db, objectId).map(column => {
       const declared = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === column.user_type_id)
       const opaque = declared !== undefined &&
         [ 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ].includes(declared.name) ?
@@ -775,9 +850,9 @@ const selectInto =
     const table = Transpile.Quote.objectName(into)
     const create = `CREATE TABLE ${table} AS ${select.sql}`
     session.db.prepare(create).run(bindings(session, select.variables))
-    const columns = session.db.prepare(`PRAGMA table_info(${table})`).all() as
+    const columns = session.db.prepare(Transpile.Quote.pragmaTableInfo(into)).all() as
       { name: string, type: string }[]
-    Catalog.createTable(session.db, {
+    Catalog.createTable(Databases.stateForName(session, into).db, {
       kind: 'createTable',
       name: into,
       columns: columns.map(column => ({
@@ -1012,6 +1087,21 @@ const executeStatementInner =
       throw new MssqlError(
         `The logical table '${transitionTarget[0]}' cannot be updated.`, 286, 16)
     }
+    const ownerName = ddlOwner(statement_)
+    if (ownerName !== undefined) {
+      const owner = Databases.stateForName(session, ownerName)
+      if (owner !== session.databaseState) {
+        if (session.transactionCount > 0) {
+          throw new MssqlError(
+            'Cross-database DDL is not allowed within a multi-statement transaction.', 226, 16)
+        }
+        return Databases.withState(session, owner, () =>
+          executeStatementInner(session, localize(statement_, owner.name), items))
+      }
+    }
+    for (const target of writeTargets(statement_)) {
+      Databases.assertWritable(Databases.stateForName(session, target))
+    }
     const statement = resolveStoredDml(session, resolveTableVariables(session, statement_))
     if (statement.kind === 'createFunction') {
       defineFunction(session, statement)
@@ -1086,6 +1176,26 @@ const executeStatementInner =
       for (const name of statement.names) {
         removeSequence(session, name, statement.ifExists)
       }
+      return undefined
+    }
+    if (statement.kind === 'createDatabase') {
+      Databases.createDatabase(session, statement.name)
+      return undefined
+    }
+    if (statement.kind === 'alterDatabase') {
+      if (statement.action.kind === 'rename') {
+        Databases.renameDatabase(session, statement.name, statement.action.name)
+      } else {
+        Databases.setDatabaseAccess(session, statement.name, statement.action.readOnly)
+      }
+      return undefined
+    }
+    if (statement.kind === 'dropDatabase') {
+      Databases.dropDatabase(session, statement.name, statement.ifExists)
+      return undefined
+    }
+    if (statement.kind === 'use') {
+      Databases.useDatabase(session, statement.database)
       return undefined
     }
     switch (statement.kind) {
@@ -1165,7 +1275,9 @@ const executeStatementInner =
         validateRowversionColumns(resolved.columns)
         const rendered = Transpile.statement(resolved)
         session.db.exec(rendered.sql)
-        Catalog.createTable(session.db, resolved, expression => Transpile.scalar(expression).sql)
+        Catalog.createTable(
+          catalogDatabase(session, resolved.name), resolved,
+          expression => Transpile.scalar(expression).sql)
         const rowversion = resolved.columns.find(column => isRowversionType(column.type))
         if (rowversion !== undefined) {
           installRowversionTriggers(session.db, resolved.name, rowversion.name)
@@ -1181,13 +1293,14 @@ const executeStatementInner =
               session.server.triggers.delete(key)
             }
           }
-          Catalog.dropTable(session.db, name)
+          Catalog.dropTable(catalogDatabase(session, name), name)
         }
         return undefined
       case 'createIndex':
         {
-          const objectId = Catalog.objectIdOf(session.db, statement.table)
-          const catalogColumns = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
+          const db = catalogDatabase(session, statement.table)
+          const objectId = Catalog.objectIdOf(db, statement.table)
+          const catalogColumns = objectId === undefined ? [] : Catalog.tableColumns(db, objectId)
           const resolved = {
             ...statement,
             columns: statement.columns.map(column => {
@@ -1204,30 +1317,32 @@ const executeStatementInner =
             })
           }
           session.db.exec(Transpile.statement(resolved).sql)
-          Catalog.createIndex(session.db, resolved)
+          Catalog.createIndex(db, resolved)
         }
         return undefined
       case 'dropIndex':
         session.db.exec(Transpile.statement(statement).sql)
-        Catalog.dropIndex(session.db, statement.name)
+        Catalog.dropIndex(
+          statement.table === undefined ? session.db : catalogDatabase(session, statement.table),
+          statement.name)
         return undefined
       case 'createView':
         {
           if (statement.orReplace === true &&
-            Catalog.objectIdOf(session.db, statement.name) !== undefined) {
+            Catalog.objectIdOf(catalogDatabase(session, statement.name), statement.name) !== undefined) {
             session.db.exec(Transpile.statement({
               kind: 'dropView', names: [ statement.name ], ifExists: true
             }).sql)
           }
           const rendered = Transpile.statement(statement).sql
           session.db.exec(rendered)
-          Catalog.createView(session.db, statement.name, rendered)
+          Catalog.createView(catalogDatabase(session, statement.name), statement.name, rendered)
         }
         return undefined
       case 'dropView':
         session.db.exec(Transpile.statement(statement).sql)
         for (const name of statement.names) {
-          Catalog.dropView(session.db, name)
+          Catalog.dropView(catalogDatabase(session, name), name)
         }
         return undefined
       case 'alterTable': {
@@ -1239,8 +1354,9 @@ const executeStatementInner =
               statement.action.columns, columnsOfTable(session, statement.name))
           }
         } : statement
-        const objectId = Catalog.objectIdOf(session.db, resolved.name)
-        const existing = objectId === undefined ? [] : Catalog.tableColumns(session.db, objectId)
+        const db = catalogDatabase(session, resolved.name)
+        const objectId = Catalog.objectIdOf(db, resolved.name)
+        const existing = objectId === undefined ? [] : Catalog.tableColumns(db, objectId)
         if (resolved.action.kind === 'addColumns') {
           validateRowversionColumns(
             resolved.action.columns,
@@ -1258,7 +1374,7 @@ const executeStatementInner =
         switch (resolved.action.kind) {
           case 'addColumns': {
             Catalog.addColumns(
-              session.db, resolved.name, resolved.action.columns,
+              db, resolved.name, resolved.action.columns,
               expression => Transpile.scalar(expression).sql)
             const rowversion = resolved.action.columns.find(column => isRowversionType(column.type))
             if (rowversion !== undefined) {
@@ -1268,7 +1384,7 @@ const executeStatementInner =
             break
           }
           case 'dropColumns':
-            Catalog.dropColumns(session.db, resolved.name, resolved.action.columns)
+            Catalog.dropColumns(db, resolved.name, resolved.action.columns)
             break
           default:
             break
@@ -1361,9 +1477,6 @@ const executeStatementInner =
       case 'rollbackTransaction':
       case 'saveTransaction':
         executeTransaction(session, statement)
-        return undefined
-      case 'use':
-        session.database = statement.database
         return undefined
       case 'print':
         items.push({ kind: 'message', text: String(evaluate(session, statement.expression) ?? '') })
@@ -1461,9 +1574,14 @@ const executeStatementInner =
 
 const executeStatement =
   (session: Session, statement: Ast.Statement, items: Item[]): Signal => {
+    const savedAllocation = session.allocationDatabaseState
+    const target = writeTargets(statement)[0]
+    session.allocationDatabaseState = target === undefined ?
+      session.databaseState : Databases.stateForName(session, target)
     try {
       return executeStatementInner(session, statement, items)
     } finally {
+      session.allocationDatabaseState = savedAllocation
       flushSequences(session.server)
       flushRowversion(session.server)
     }
@@ -1857,6 +1975,15 @@ const executeProcedure =
       })
       return undefined
     }
+    if (statement.procedure.length >= 3) {
+      const owner = Databases.stateForName(session, statement.procedure)
+      if (owner !== session.databaseState) {
+        return Databases.withState(session, owner, () => executeProcedure(session, {
+          ...statement,
+          procedure: localize(statement.procedure, owner.name)
+        }, items))
+      }
+    }
     const systemItems = SystemProcedures.execute(session, name, statement.args.map(argument => ({
       ...argument.name === undefined ? {} : { name: argument.name },
       value: argument.value.kind === 'default' ? undefined : evaluate(session, argument.value)
@@ -1958,7 +2085,7 @@ export const executeBatch =
     const items: Item[] = []
     try {
       return withCursorScope(session, () => withTableVariableScope(session, () => {
-        const statements = parse(sql)
+        const statements = parse(sql).map(statement => localize(statement, session.database))
         let firstError: MssqlError | undefined
         for (const statement of statements) {
           try {

@@ -296,6 +296,37 @@ const ifExists: Parser.t<boolean> =
     value => value !== undefined
   )
 
+/** CREATE/ALTER/DROP DATABASE lifecycle statements. */
+export const createDatabase: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(C.keyword('create'), C.keyword('database'), C.anyIdentifier),
+    ([ , , name ]) => ({ kind: 'createDatabase' as const, name })
+  )
+
+export const alterDatabase: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(
+      C.keyword('alter'), C.keyword('database'), C.anyIdentifier,
+      C.first(
+        C.map(
+          C.seq(C.keyword('modify'), C.keyword('name'), C.punct('='), C.anyIdentifier),
+          ([ , , , name ]) => ({ kind: 'rename' as const, name })
+        ),
+        C.map(
+          C.seq(C.keyword('set'), C.first(C.keyword('read_only'), C.keyword('read_write'))),
+          ([ , access ]) => ({ kind: 'setAccess' as const, readOnly: access === 'read_only' })
+        )
+      )
+    ),
+    ([ , , name, action ]) => ({ kind: 'alterDatabase' as const, name, action })
+  )
+
+export const dropDatabase: Parser.t<Ast.Statement> =
+  C.map(
+    C.seq(C.keyword('drop'), C.keyword('database'), ifExists, C.anyIdentifier),
+    ([ , , ifExists_, name ]) => ({ kind: 'dropDatabase' as const, name, ifExists: ifExists_ })
+  )
+
 /** DROP schema-scoped object parser. */
 export const drop: Parser.t<Ast.Statement> =
   C.map(

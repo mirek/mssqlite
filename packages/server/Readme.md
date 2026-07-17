@@ -96,8 +96,9 @@ plaintext development mode. `requestClientCertificate` and
 - **Attention (0x06)** — acknowledged with DONE_ATTN.
 - Packet-size negotiation from LOGIN7; responses split across packets.
 
-Each connection gets its own engine session (variables, transactions,
-`@@`-state); all sessions share the server's SQLite database.
+Each connection gets its own engine session (selected database, variables,
+transactions, `@@`-state). CREATE/ALTER/DROP DATABASE, USE, and three-part
+names operate across database-scoped SQLite stores shared by those sessions.
 Authenticated connections and in-flight requests are visible through the
 minimal `sys.dm_exec_sessions` / `sys.dm_exec_requests` surface and are removed
 on request completion or socket close.
