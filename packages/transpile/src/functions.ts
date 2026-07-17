@@ -112,14 +112,13 @@ const handlers: Record<string, Handler> = {
   len: (call, render) =>
     `length(rtrim(${arg(call, render, 0)}))`,
   datalength: fixed('mssqlite_datalength'),
-  substring: fixed('substr'),
+  substring: fixed('mssqlite_substring'),
   charindex: (call, render) =>
     call.args.length <= 2 ?
       `instr(${arg(call, render, 1)}, ${arg(call, render, 0)})` :
       `mssqlite_charindex(${args(call, render).join(', ')})`,
   patindex: fixed('mssqlite_patindex'),
-  left: (call, render) =>
-    `substr(${arg(call, render, 0)}, 1, ${arg(call, render, 1)})`,
+  left: fixed('mssqlite_left'),
   right: fixed('mssqlite_right'),
   ltrim: fixed('ltrim'),
   rtrim: fixed('rtrim'),
@@ -139,8 +138,7 @@ const handlers: Record<string, Handler> = {
   nchar: fixed('char'),
   ascii: fixed('unicode'),
   unicode: fixed('unicode'),
-  quotename: (call, render) =>
-    `('[' || replace(${arg(call, render, 0)}, ']', ']]') || ']')`,
+  quotename: fixed('mssqlite_quotename'),
   isnumeric: fixed('mssqlite_isnumeric'),
   // Math.
   abs: fixed('abs'),

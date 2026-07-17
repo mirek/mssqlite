@@ -81,6 +81,11 @@ The language pipeline lives in three packages:
   fixed-scale strings with scaled-BigInt casts and arithmetic, SQL Server
   operator precision/scale formulas (including the precision-38 reduction
   rules), half-away-from-zero rounding, and 8115/8134 errors.
+- String boundary functions use dedicated UDFs where SQLite differs:
+  SUBSTRING starts before one by shortening the returned prefix, negative
+  LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
+  return NULL, and QUOTENAME accepts the documented delimiter pairs, doubles
+  closing delimiters, and returns NULL for input longer than 128 characters.
 - SET NOCOUNT takes effect at statement execution time: ON suppresses the
   affected-row value in TDS DONE-family tokens but does not change execution or
   `@@ROWCOUNT`. A nested procedure, trigger, or dynamic batch inherits the
