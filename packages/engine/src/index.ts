@@ -5,7 +5,9 @@ export { bindings, globalOf } from './bind.ts'
 export {
   evaluate,
   executeBatch,
+  executeBatchAsync,
   executeSql,
+  executeSqlAsync,
   type Count,
   type Item,
   type Message,
@@ -13,6 +15,10 @@ export {
   type Rows,
   type SqlResult
 } from './execute.ts'
+export {
+  CancellationError,
+  type ExecutionControl
+} from './cancellation.ts'
 export { registerFunctions } from './udf.ts'
 export {
   abortBulkLoad,

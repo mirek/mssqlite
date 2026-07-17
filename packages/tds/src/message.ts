@@ -4,7 +4,9 @@ import * as Packet from './packet.ts'
 /** Complete client message reassembled from one or more packets. */
 export type Message = {
   readonly type: number,
-  readonly payload: Uint8Array
+  readonly payload: Uint8Array,
+  /** The client canceled this message before it finished sending. */
+  readonly ignore: boolean
 }
 
 export type t =
@@ -96,10 +98,8 @@ export const push =
       }
       pending = pending.subarray(length)
       if ((status & Packet.Status.eom) !== 0) {
-        // A message flagged IGNORE (client canceled mid-send) must be
-        // discarded, not executed; the client follows with an Attention.
-        if (!ignore && !streamed) {
-          messages.push({ type, payload: Encode.concat(...payloads) })
+        if (!streamed) {
+          messages.push({ type, payload: Encode.concat(...payloads), ignore })
         }
         payloads = []
         type = undefined

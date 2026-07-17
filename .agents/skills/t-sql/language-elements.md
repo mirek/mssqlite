@@ -251,6 +251,10 @@ WHILE boolean_expression
 - BREAK: exits innermost loop.
 - CONTINUE: restarts from condition check.
 - Nestable. Inner BREAK exits to next outer loop.
+- mssqlite's server execution yields and checks its AbortSignal before the
+  condition/body on every interpreted iteration. Attention therefore exits a
+  long loop without emitting accumulated batch output; synchronous direct
+  engine execution retains its original non-yielding behavior.
 
 ### BEGIN...END
 ```sql

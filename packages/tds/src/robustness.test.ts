@@ -87,11 +87,15 @@ test('oversized non-max value fails instead of wrapping the length prefix', () =
   expect(() => Value.encode(TypeInfo.nvarchar('max'), 'y'.repeat(40000))).not.toThrow()
 })
 
-test('message push discards a message flagged IGNORE on EOM', () => {
+test('message push preserves IGNORE for cancellation dispatch', () => {
   const first = Packet.split(Packet.Type.sqlBatch, Hex.of('01 02'))[0] ?? new Uint8Array(0)
   // Flip the status byte to EOM | IGNORE.
   const ignored = Uint8Array.from(first)
   ignored[1] = Packet.Status.eom | Packet.Status.ignore
   const { messages } = Message.push(Message.initial, ignored)
-  expect(messages).toHaveLength(0)
+  expect(messages).toEqual([ {
+    type: Packet.Type.sqlBatch,
+    payload: Hex.of('01 02'),
+    ignore: true
+  } ])
 })

@@ -36,6 +36,10 @@ const items = executeBatch(s, `
   515 not null, 102 syntax, 137 undeclared variable, …).
 - `executeSql(session, sql, parameters)` — `sp_executesql` semantics:
   parameters bind as scoped variables, OUTPUT values return.
+- `executeBatchAsync(session, sql, control)` / `executeSqlAsync(session, sql,
+  parameters, control)` — AbortSignal-aware server execution. These APIs yield
+  at statement and interpreted control-flow boundaries; cancellation throws
+  `CancellationError` without turning it into a SQL error item.
 - `evaluate(session, expression)` — scalar evaluation used for DECLARE
   initializers, SET, IF/WHILE conditions and PRINT.
 - `prepareBulkLoad` / `beginBulkLoad` / `writeBulkRows` /
@@ -72,10 +76,15 @@ const items = executeBatch(s, `
   `nvarchar(max)` column. PATH supports dotted nesting and nested JSON
   subqueries; AUTO supports a single source or one root/child join level.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
-  proper signal propagation.
+  proper signal propagation. Cooperative execution checks cancellation before
+  statements and on every loop iteration, so unbounded interpreted loops do
+  not monopolize the event loop.
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
   outermost pair touches SQLite. ROLLBACK unwinds everything; SAVE TRAN
-  maps to savepoints; `ROLLBACK TRAN name` targets a savepoint first.
+  maps to savepoints; `ROLLBACK TRAN name` targets a savepoint first. Attention
+  does not implicitly roll back an explicit user transaction: statements that
+  completed before cancellation remain in that transaction for the client to
+  commit or roll back.
 - **Bulk load** — `INSERT BULK` setup batches resolve one-, two-, or three-part
   targets and validate every selected column before packet data is accepted.
   Rows convert against catalog TYPE_INFO, enforce integer/decimal and declared

@@ -281,6 +281,12 @@ test('MARS multiplexes readers, writes, errors, transactions, attention and tear
   sendSql(wire, sibling, 'SELECT 8 AS after_cancel')
   expect(await response(wire, sibling.id)).not.toContain(Token.Token.error)
 
+  sendTds(wire, sibling, Packet.Type.attention, new Uint8Array(0))
+  expect(await response(wire, sibling.id))
+    .toEqual(Token.done(Token.Status.attention, 0, 0n))
+  sendSql(wire, sibling, 'SELECT 9 AS after_completed_attention')
+  expect(await response(wire, sibling.id)).not.toContain(Token.Token.error)
+
   await closeSession(wire, canceled)
   await closeSession(wire, writer)
   await closeSession(wire, sibling)

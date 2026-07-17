@@ -47,8 +47,8 @@ new Connection({
 
 | tedious call | Wire | mssqlite handling |
 |---|---|---|
-| `execSql(request)` without params | SQL batch (0x01) | `engine.executeBatch` |
-| `execSql(request)` with params | RPC `sp_executesql` (by name) | `engine.executeSql` |
+| `execSql(request)` without params | SQL batch (0x01) | `engine.executeBatchAsync` |
+| `execSql(request)` with params | RPC `sp_executesql` (by name) | `engine.executeSqlAsync` |
 | `callProcedure(request)` | RPC by procedure name | system/user procedure dispatch, result sets + return status |
 | `prepare(request)` / `execute(request, params)` | RPC `sp_prepare` (0xFFFF + id 11) / `sp_execute` (12) | handle map in `server/connection.ts` |
 | `beginTransaction/commitTransaction/rollbackTransaction` | Transaction manager (0x0E) types 5/7/8 | engine transactions + ENVCHANGE 8/9/10 |
@@ -98,6 +98,12 @@ connection.execSql(request)
   without a separate Attention; cancellation after send uses Attention.
   Unlike `freebcp -b`, tedious sends one type-7 request for the supplied row
   iterable, so a server-side row failure rolls back that complete request.
+- `Request.cancel()` has two wire paths. While the request payload is still
+  streaming, tedious terminates it with IGNORE and expects one normal response;
+  after EOM it sends Attention, consumes the original request's response, then
+  reads a separate response until DONE_ATTN. If the server sends only one
+  DONE_ATTN message, the first reader consumes it and SentAttention eventually
+  fails with `ETIMEOUT`. A successful cancel callback receives `ECANCEL`.
 
 ## Testing patterns
 
@@ -143,6 +149,10 @@ connection.execSql(request)
   Separately run a .NET SqlClient reader plus concurrent command on one
   `MultipleActiveResultSets=True` connection to catch implementation-specific
   sequence/window assumptions.
+- Attention e2e tests should cancel a long interpreted loop after EOM, assert
+  `ECANCEL` and no row events, verify completed work remains inside an explicit
+  transaction, roll it back, then cancel immediately after `execSql` to cover
+  IGNORE. Run another query after each path to prove connection reuse.
 - User-function e2e tests should cover a scalar declared return type (BIGINT
   arrives as IntN(8) and a string) and an inline TVF used as an ordinary FROM
   source. CREATE FUNCTION definitions must be sent in their own request/batch.

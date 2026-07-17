@@ -739,6 +739,43 @@ test('transactions via tedious api', async () => {
   expect(result.rows).toEqual([ { n: 0 } ])
 })
 
+test('tedious Attention cancels queued and running work while preserving transactions', async () => {
+  await query('CREATE TABLE attention_rows (id INT PRIMARY KEY)')
+  await new Promise<void>((resolve, reject) => {
+    connection.beginTransaction(error => error ? reject(error) : resolve())
+  })
+  let leakedRows = 0
+  const running = await new Promise<Error | undefined>(resolve => {
+    const request = new Request(`
+      INSERT INTO attention_rows VALUES (1)
+      DECLARE @i INT = 0
+      WHILE @i < 1000000 SET @i += 1
+      SELECT @i AS leaked
+    `, error => resolve(error ?? undefined))
+    request.on('row', () => leakedRows++)
+    connection.execSql(request)
+    setTimeout(() => request.cancel(), 10)
+  })
+  expect(running).toMatchObject({ code: 'ECANCEL' })
+  expect(leakedRows).toBe(0)
+  expect((await query('SELECT COUNT(*) AS count FROM attention_rows')).rows)
+    .toEqual([ { count: 1 } ])
+  await new Promise<void>((resolve, reject) => {
+    connection.rollbackTransaction(error => error ? reject(error) : resolve())
+  })
+  expect((await query('SELECT COUNT(*) AS count FROM attention_rows')).rows)
+    .toEqual([ { count: 0 } ])
+
+  const queued = await new Promise<Error | undefined>(resolve => {
+    const request = new Request(
+      'SELECT 99 AS never_returned', error => resolve(error ?? undefined))
+    connection.execSql(request)
+    request.cancel()
+  })
+  expect(queued).toMatchObject({ code: 'ECANCEL' })
+  expect((await query('SELECT 7 AS reusable')).rows).toEqual([ { reusable: 7 } ])
+})
+
 test('functions over the wire', async () => {
   const result = await query(`
     SELECT

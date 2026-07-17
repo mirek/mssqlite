@@ -298,3 +298,8 @@ Rules:
 - Server acknowledges with DONE token having DONE_ATTN flag (0x0020)
 - Client must read and discard all server data until attention acknowledgement
 - There might be a DONE with DONE_MORE clear prior to the DONE with DONE_ATTN
+- In mssqlite the canceled request is closed with final DONE, then exact
+  `FD 20 00 00 00 00 00 00 00 00 00 00 00` is sent as its own response
+  message. This preserves the message boundary expected by `tedious`.
+- Cancellation before request EOM is different: the client sets packet IGNORE,
+  sends no Attention, and waits for one ordinary final DONE.

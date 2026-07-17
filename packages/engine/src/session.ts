@@ -534,3 +534,18 @@ export const withCursorScope =
       }
     }
   }
+
+/** Async variant used by cooperative server execution. */
+export const withCursorScopeAsync =
+  async <T>(session_: Session, run: () => Promise<T>): Promise<T> => {
+    const existing = new Set(session_.cursors.keys())
+    try {
+      return await run()
+    } finally {
+      for (const [ name, cursor ] of session_.cursors) {
+        if (cursor.scope === 'local' && !existing.has(name)) {
+          session_.cursors.delete(name)
+        }
+      }
+    }
+  }

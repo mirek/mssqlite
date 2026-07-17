@@ -4,9 +4,10 @@ import {
   SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
 import {
-  abortBulkLoad, BatchError, beginBulkLoad, closeSession, errorOf, executeBatch, executeSql,
-  finishBulkLoad, MssqlError, prepareBulkLoad, session, syncSession, useDatabase, writeBulkRows,
-  type BulkLoader, type BulkPlan, type Parameter, type Server, type Session, type Value
+  abortBulkLoad, BatchError, beginBulkLoad, CancellationError, closeSession, errorOf, executeBatch,
+  executeBatchAsync, executeSqlAsync, finishBulkLoad, MssqlError, prepareBulkLoad,
+  session, syncSession, useDatabase, writeBulkRows, type BulkLoader, type BulkPlan, type Parameter,
+  type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
 import createTlsTransport, { type Transport as TlsTransport } from './tls-transport.ts'
@@ -37,7 +38,8 @@ type LogicalSession = {
   receiveSequence: number,
   sendWindow: number,
   receiveWindow: number,
-  readonly outgoing: Uint8Array[]
+  readonly outgoing: Uint8Array[],
+  cancellation: AbortController | undefined
 }
 
 const logicalSession =
@@ -50,7 +52,8 @@ const logicalSession =
     receiveSequence: 0,
     sendWindow: window,
     receiveWindow: 4,
-    outgoing: []
+    outgoing: [],
+    cancellation: undefined
   })
 
 /** Per-physical-connection state. */
@@ -69,6 +72,7 @@ type Connection = {
   smp: Smp.State,
   readonly logicalSessions: Map<number, LogicalSession>,
   nextOutputSession: number,
+  execution: Promise<void>,
   packetSize: number,
   /** Prepared statement handles for sp_prepare / sp_execute. */
   readonly prepared: Map<number, string>,
@@ -77,6 +81,38 @@ type Connection = {
 }
 
 const productVersion = { major: 15, minor: 0, build: 2000 }
+
+const schedule =
+  (
+    connection: Connection,
+    logical: LogicalSession,
+    run: (signal: AbortSignal) => Promise<void> | void
+  ): void => {
+    const request = logical
+    const cancellation = new AbortController()
+    request.cancellation = cancellation
+    const execute = async (): Promise<void> => {
+      try {
+        await run(cancellation.signal)
+      } catch (error) {
+        if (error instanceof CancellationError) {
+          request.outgoing.length = 0
+          // The client is already reading the canceled request's response.
+          // Finish that message before sending the Attention acknowledgement
+          // as its own response message.
+          respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
+          respond(connection, Token.done(Token.Status.attention, 0, 0n), logical)
+        } else {
+          respond(connection, errorResponse(errorOf(error), connection.engine.serverName), logical)
+        }
+      } finally {
+        if (request.cancellation === cancellation) {
+          request.cancellation = undefined
+        }
+      }
+    }
+    connection.execution = connection.execution.then(execute, execute)
+  }
 
 const flushMars =
   (connection: Connection): void => {
@@ -267,12 +303,13 @@ const onLogin =
   }
 
 const onSqlBatch =
-  (
+  async (
     connection: Connection,
     logical: LogicalSession,
     session_: Session,
-    payload: Uint8Array
-  ): void => {
+    payload: Uint8Array,
+    signal: AbortSignal
+  ): Promise<void> => {
     const request = logical
     const batch = SqlBatch.decode(payload)
     if (batch === undefined) {
@@ -281,6 +318,9 @@ const onSqlBatch =
       return
     }
     try {
+      if (signal.aborted) {
+        throw new CancellationError()
+      }
       const bulkPlan = prepareBulkLoad(session_, batch.sql)
       if (bulkPlan !== undefined) {
         if (request.bulkPlan !== undefined || request.bulk !== undefined) {
@@ -290,9 +330,12 @@ const onSqlBatch =
         respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
         return
       }
-      const items = executeBatch(session_, batch.sql)
+      const items = await executeBatchAsync(session_, batch.sql, { signal })
       respond(connection, batchResponse(items, connection.engine.serverName), logical)
     } catch (error) {
+      if (error instanceof CancellationError) {
+        throw error
+      }
       const mapped = errorOf(error)
       respond(connection, error instanceof BatchError ?
         batchResponse(error.items, connection.engine.serverName) :
@@ -407,12 +450,13 @@ const parameterValues =
     }))
 
 const onRpc =
-  (
+  async (
     connection: Connection,
     logical: LogicalSession,
     session_: Session,
-    payload: Uint8Array
-  ): void => {
+    payload: Uint8Array,
+    signal: AbortSignal
+  ): Promise<void> => {
     const rpc = Rpc.decode(payload)
     if (rpc === undefined) {
       respond(connection,
@@ -421,12 +465,16 @@ const onRpc =
     }
     const procedure = typeof rpc.procedure === 'string' ? rpc.procedure.toLowerCase() : rpc.procedure
     try {
+      if (signal.aborted) {
+        throw new CancellationError()
+      }
       switch (procedure) {
         case Rpc.ProcId.executeSql:
         case 'sp_executesql': {
           const [ statement, , ...rest ] = rpc.parameters
           const sql = typeof statement?.value === 'string' ? statement.value : ''
-          const result = executeSql(session_, sql, parameterValues(rest))
+          const result = await executeSqlAsync(
+            session_, sql, parameterValues(rest), { signal })
           respond(connection, rpcResponse(
             result.items, connection.engine.serverName, result.outputs), logical)
           return
@@ -451,7 +499,8 @@ const onRpc =
           if (sql === undefined) {
             throw errorOf(new Error(`Prepared handle ${handle} not found.`))
           }
-          const result = executeSql(session_, sql, parameterValues(rest))
+          const result = await executeSqlAsync(
+            session_, sql, parameterValues(rest), { signal })
           respond(connection, rpcResponse(
             result.items, connection.engine.serverName, result.outputs), logical)
           return
@@ -479,13 +528,16 @@ const onRpc =
           })
           const argumentList = rendered.length > 0 ? ` ${rendered.join(', ')}` : ''
           const sql = `EXEC ${name}${argumentList}`
-          const result = executeSql(session_, sql, parameters)
+          const result = await executeSqlAsync(session_, sql, parameters, { signal })
           respond(connection, rpcResponse(
             result.items, connection.engine.serverName, result.outputs, session_.lastReturnStatus), logical)
           return
         }
       }
     } catch (error) {
+      if (error instanceof CancellationError) {
+        throw error
+      }
       const mapped = errorOf(error)
       respond(connection, error instanceof BatchError ?
         rpcResponse(error.items, connection.engine.serverName) :
@@ -551,6 +603,14 @@ const onTransactionManager =
 const onMessage =
   (connection: Connection, logical: LogicalSession, message: Message.t): void => {
     const request = logical
+    if (message.ignore) {
+      clearBulk(logical)
+      // Cancellation before the request was fully sent uses IGNORE instead
+      // of Attention. Do not execute its partial payload; close the request
+      // with an ordinary response so the client can become reusable.
+      respond(connection, Token.done(Token.Status.final, 0, 0n), logical)
+      return
+    }
     if (logical.id !== undefined &&
       (message.type === Packet.Type.prelogin || message.type === Packet.Type.login7)) {
       throw new Error('Login messages are forbidden inside SMP sessions.')
@@ -565,7 +625,11 @@ const onMessage =
       case Packet.Type.attention:
         clearBulk(logical)
         request.outgoing.length = 0
-        respond(connection, Token.done(Token.Status.attention, 0, 0n), logical)
+        if (request.cancellation === undefined) {
+          respond(connection, Token.done(Token.Status.attention, 0, 0n), logical)
+        } else {
+          request.cancellation.abort()
+        }
         return
       default:
         break
@@ -577,13 +641,16 @@ const onMessage =
     }
     switch (message.type) {
       case Packet.Type.sqlBatch:
-        onSqlBatch(connection, logical, session_, message.payload)
+        schedule(connection, logical, signal =>
+          onSqlBatch(connection, logical, session_, message.payload, signal))
         return
       case Packet.Type.rpc:
-        onRpc(connection, logical, session_, message.payload)
+        schedule(connection, logical, signal =>
+          onRpc(connection, logical, session_, message.payload, signal))
         return
       case Packet.Type.transactionManager:
-        onTransactionManager(connection, logical, session_, message.payload)
+        schedule(connection, logical, () =>
+          onTransactionManager(connection, logical, session_, message.payload))
         return
       default:
         respond(connection, errorResponse(
@@ -653,6 +720,7 @@ const closeMarsSession =
     if (packet.sequence !== logical.receiveSequence) {
       throw new Error(`Out-of-sequence SMP FIN for session ${packet.sessionId}.`)
     }
+    logical.cancellation?.abort()
     clearBulk(logical)
     smpControl(connection, logical, Smp.Type.fin)
     connection.logicalSessions.delete(packet.sessionId)
@@ -724,6 +792,7 @@ export const attach =
       smp: Smp.initial,
       logicalSessions: new Map(),
       nextOutputSession: 0,
+      execution: Promise.resolve(),
       packetSize: Packet.defaultPacketSize,
       prepared: new Map(),
       nextHandle: 1,
@@ -740,8 +809,10 @@ export const attach =
     socket.on('end', () => connection.tls?.end())
     socket.on('error', () => socket.destroy())
     socket.once('close', () => {
+      connection.defaultSession.cancellation?.abort()
       clearBulk(connection.defaultSession)
       for (const logical of connection.logicalSessions.values()) {
+        logical.cancellation?.abort()
         clearBulk(logical)
       }
       if (connection.session !== undefined) {

@@ -66,6 +66,13 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   row-boundary EOM without a client DONE; incomplete rows still fail.
   An IGNORE-terminated request receives a normal completion because clients
   canceling before message completion do not necessarily send Attention.
+- Attention after request EOM is a distinct path. Finish/discard the active
+  request response first, then send the acknowledgement as a separate tabular
+  response containing exactly `FD 20 00 00 00 00 00 00 00 00 00 00 00`
+  (DONE + DONE_ATTN, command/count zero). `tedious` is already reading the
+  original response when it enters SentAttention and waits for the next message;
+  combining the acknowledgement with the original response causes its cancel
+  timer to expire.
 - **RPC OptionFlags is 2 bytes** (USHORT). The example 4.8 prose lists a
   single `00` byte, but the packet length arithmetic (47 total) only
   works with two flag bytes.

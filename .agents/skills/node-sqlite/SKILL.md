@@ -23,6 +23,13 @@ Status: Release Candidate (Stability 1.2). Added in Node.js v22.5.0; refined in 
 
 All APIs are **synchronous** — there is no Promise-returning variant. The single async surface is `backup()`.
 
+`DatabaseSync` does not expose SQLite's `sqlite3_interrupt()` (verified through
+Node 26.4). An application cannot safely preempt an already-entered statement;
+it must treat that call as atomic and implement cancellation around statement
+boundaries. mssqlite's async engine path therefore yields between statements
+and on interpreted loop iterations, but never closes or mutates the database
+handle to force cancellation.
+
 ## Reference Files
 
 - [database.md](database.md) — `DatabaseSync` class: constructor, all open/path forms, options (readOnly, foreign keys, timeout, readBigInts, returnArrays, allowBareNamedParameters, defensive, limits), `exec` / `prepare` / `open` / `close` / `isOpen` / `isTransaction` / `location` / `loadExtension` / `enableLoadExtension` / `enableDefensive` / `Symbol.dispose`

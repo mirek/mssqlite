@@ -145,7 +145,15 @@ because LOGIN7 password scrambling is not transport encryption.
   (its SqlBulkCopy-style API), and the equivalent BCP token stream. Each type-7
   request is atomic; `freebcp -b` sends separate requests, so an earlier batch
   remains committed if a later batch fails.
-- **Attention (0x06)** — acknowledged with DONE_ATTN.
+- **Attention (0x06)** — aborts the active SQL/RPC execution at its next
+  cooperative boundary, drops unsent output, closes the canceled response,
+  then sends a separate DONE_ATTN acknowledgement. A pre-EOM cancellation uses
+  the packet IGNORE bit instead: its payload is never executed and receives one
+  ordinary final DONE. Completed statements in an explicit transaction remain
+  pending, and the connection is reusable after either path. The synchronous
+  `node:sqlite` API has no interruption method, so one already-entered SQLite
+  statement remains atomic; interpreted loops and statement sequences are
+  promptly cancelable.
 - **MARS / SMP** — after a MARS-enabled login, SYN opens independent logical
   request streams and every TDS packet travels in a sequenced SMP DATA frame.
   Packet reassembly, bulk state, errors, Attention, and teardown are isolated
