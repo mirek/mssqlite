@@ -56,7 +56,7 @@ export const expandOutputStars =
         throw new MssqlError('OUTPUT * must be qualified with the INSERTED or DELETED pseudo-table.', 102, 15)
       }
       const columns = session.db
-        .prepare(`PRAGMA table_info(${Transpile.Quote.objectName(target)})`)
+        .prepare(Transpile.Quote.pragmaTableInfo(target))
         .all() as { name: string }[]
       return columns.map(column => ({
         kind: 'expression' as const,

@@ -8,6 +8,7 @@ import {
 } from './rowversion.ts'
 import { functionKey } from './session.ts'
 import type { Ast } from '@mssqlite/tsql'
+import { stateForName } from './database.ts'
 import type { Session, TableVariable } from './session.ts'
 
 const resolveName =
@@ -197,9 +198,10 @@ const sourceColumns =
         ...column.collate === undefined ? {} : { collation: column.collate }
       }))
     }
-    const objectId = Catalog.objectIdOf(session.db, name)
+    const catalog = stateForName(session, name).db
+    const objectId = Catalog.objectIdOf(catalog, name)
     if (objectId !== undefined) {
-      return Catalog.tableColumns(session.db, objectId).map(column => {
+      return Catalog.tableColumns(catalog, objectId).map(column => {
         const type = typeNameOf(column)
         return {
           name: column.name,
@@ -216,12 +218,7 @@ const sourceColumns =
 /** Declared source columns for an already resolved table name. */
 export const columnsOfTable =
   (session: Session, name: Ast.QualifiedName): readonly Ast.SourceColumn[] => {
-    const table = Transpile.Quote.objectName(name)
-    const tableName = name[name.length - 1] ?? ''
-    const pragma = tableName.startsWith('#') ?
-      `PRAGMA temp.table_info(${Transpile.Quote.identifier(tableName)})` :
-      `PRAGMA table_info(${table})`
-    return sourceColumns(session, name, pragma)
+    return sourceColumns(session, name, Transpile.Quote.pragmaTableInfo(name))
   }
 
 type Substitutions =

@@ -57,7 +57,7 @@ export const bytesOf =
 /** Atomically reserves one database-wide rowversion value. */
 export const nextRowversionValue =
   (server: Server): Uint8Array => {
-    const state = server.rowversion
+    const state = server.current?.allocationDatabaseState?.rowversion ?? server.rowversion
     if (state.current >= maximum) {
       throw new MssqlError('The database timestamp counter has reached its maximum value.', 2739, 16)
     }
@@ -69,12 +69,14 @@ export const nextRowversionValue =
 /** Writes dirty allocation state once no user transaction can roll it back. */
 export const flushRowversion =
   (server: Server): void => {
-    const state = server.rowversion
-    if (server.db.isTransaction || !state.dirty) {
-      return
+    for (const database of server.databases.values()) {
+      const state = database.rowversion
+      if (database.db.isTransaction || !state.dirty) {
+        continue
+      }
+      Catalog.updateRowversionValue(database.db, state.current.toString())
+      state.dirty = false
     }
-    Catalog.updateRowversionValue(server.db, state.current.toString())
-    state.dirty = false
   }
 
 /** @returns the current @@DBTS value without allocating a new version. */

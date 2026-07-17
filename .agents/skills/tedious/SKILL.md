@@ -90,6 +90,9 @@ connection.execSql(request)
   plaintext rejection, and the higher-level `mssql` client.
 - One shared connection in `beforeAll` keeps tests fast; open a second
   connection inside a test to check session isolation.
+- Multiple-database e2e tests should switch only the second connection with
+  `USE`, verify DB_NAME()/DB_ID() and local metadata there, then query the same
+  object through a three-part name on the still-master first connection.
 - Wrap Request in a promise helper collecting rows + rowCount (see
   `server.test.ts`).
 - Keep a table variable's declaration and all references in one SQL-batch

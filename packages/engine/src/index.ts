@@ -15,12 +15,22 @@ export {
 } from './execute.ts'
 export { registerFunctions } from './udf.ts'
 export {
+  closeServer,
+  createDatabase,
+  dropDatabase,
+  renameDatabase,
+  setDatabaseAccess,
+  stateOf as databaseStateOf,
+  useDatabase
+} from './database.ts'
+export {
   closeSession,
   procedureKey,
   functionKey,
   server,
   session,
   syncSession,
+  type DatabaseState,
   type Procedure,
   type Server,
   type Session,

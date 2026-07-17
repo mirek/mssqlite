@@ -62,6 +62,8 @@ session cursors with LOCAL/GLOBAL lifetime, scroll fetches, INTO assignment,
 and `@@FETCH_STATUS`,
 cataloged sequences with atomic NEXT VALUE FOR allocation, bounds/cycling,
 restart persistence, and rollback-independent consumption,
+multiple persistent databases with CREATE/ALTER/DROP DATABASE, real USE,
+isolated catalogs and three-part cross-database queries/procedure calls,
 database-wide ROWVERSION/TIMESTAMP generation with `@@DBTS`, automatic
 insert/update stamping, rollback gaps, and binary(8) wire metadata,
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,

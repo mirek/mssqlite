@@ -1,5 +1,7 @@
 import { createServer, type AddressInfo, type Server as NetServer } from 'node:net'
-import { server as engineServer, type Server as EngineServer } from '@mssqlite/engine'
+import {
+  closeServer, server as engineServer, type Server as EngineServer
+} from '@mssqlite/engine'
 import { attach } from './connection.ts'
 import { createSecureContext, type SecureContextOptions } from 'node:tls'
 
@@ -70,7 +72,7 @@ export const listen =
           close: () =>
             new Promise(resolveClose => {
               net.close(() => {
-                engine.db.close()
+                closeServer(engine)
                 resolveClose()
               })
             })

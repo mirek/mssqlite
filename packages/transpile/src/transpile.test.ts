@@ -20,7 +20,8 @@ test('select basics', () => {
 test('sys and schema-qualified names', () => {
   // Flattened names get a bare-table alias so qualified column refs still resolve.
   expect(sqlOf('SELECT * FROM sys.tables')).toBe('SELECT * FROM "sys.tables" AS "tables"')
-  expect(sqlOf('SELECT * FROM master.sys.Tables')).toBe('SELECT * FROM "sys.tables" AS "Tables"')
+  expect(sqlOf('SELECT * FROM master.sys.Tables'))
+    .toBe('SELECT * FROM "mssqlite_6d6173746572"."sys.tables" AS "Tables"')
   expect(sqlOf('SELECT * FROM app.users')).toBe('SELECT * FROM "app.users" AS "users"')
   expect(sqlOf('SELECT * FROM #tmp')).toBe('SELECT * FROM temp."#tmp" AS "#tmp"')
   expect(sqlOf('SELECT * FROM dbo.users')).toBe('SELECT * FROM "users"')
@@ -35,8 +36,9 @@ test('schema-qualified table keeps qualified column refs working', () => {
 })
 
 test('db..table shorthand resolves to the same table as db.dbo.table', () => {
-  expect(sqlOf('SELECT * FROM mydb..orders')).toBe('SELECT * FROM "orders"')
-  expect(sqlOf('SELECT * FROM mydb.dbo.orders')).toBe('SELECT * FROM "orders"')
+  const expected = 'SELECT * FROM "mssqlite_6d796462"."orders" AS "orders"'
+  expect(sqlOf('SELECT * FROM mydb..orders')).toBe(expected)
+  expect(sqlOf('SELECT * FROM mydb.dbo.orders')).toBe(expected)
 })
 
 test('top and offset become limit', () => {

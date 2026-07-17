@@ -4,11 +4,14 @@ import * as Result from './result.ts'
 import typeName from './type-name.ts'
 import {
   alterTable,
+  alterDatabase,
   columnDefinition,
   createIndex,
+  createDatabase,
   createTable,
   createView,
   drop,
+  dropDatabase,
   dropIndex,
   tableConstraint
 } from './ddl.ts'
@@ -722,6 +725,8 @@ export const statement: Parser.t<Ast.Statement> =
     merge,
     createSequence,
     alterSequence,
+    createDatabase,
+    alterDatabase,
     createTable,
     createIndex,
     createView,
@@ -730,6 +735,7 @@ export const statement: Parser.t<Ast.Statement> =
     createFunction,
     alterTable,
     dropIndex,
+    dropDatabase,
     drop,
     truncate,
     declareCursor,

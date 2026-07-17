@@ -60,7 +60,10 @@ const queryArrays =
           resolve({ rows, columns })
         }
       })
-      request.on('row', row => rows.push(row.map((column: { value: unknown }) => column.value)))
+      request.on('row', row => rows.push(
+        (Array.isArray(row) ? row : Object.values(row))
+          .map((column: { value: unknown }) => column.value)
+      ))
       request.on('columnMetadata', metadata => {
         columns = Object.values(metadata).map(column => ({
           name: column.colName,
@@ -148,6 +151,35 @@ afterAll(async () => {
 
 test('login handshake succeeded', () => {
   expect(connection.state.name).toBe('LoggedIn')
+})
+
+test('multiple sessions switch databases and query three-part names independently', async () => {
+  await query(`
+    CREATE DATABASE wire_sales
+    CREATE TABLE wire_sales.dbo.orders (id INT, label NVARCHAR(20))
+    INSERT INTO wire_sales.dbo.orders VALUES (1, N'first')
+  `)
+  const selected = await connect(listening.port, false)
+  try {
+    await queryArrays(selected, 'USE wire_sales')
+    const context = await queryArrays(selected,
+      'SELECT DB_NAME() AS database_name, DB_ID() AS database_id')
+    expect(context.rows).toEqual([ [ 'wire_sales', 5 ] ])
+    const local = await queryArrays(selected, 'SELECT id, label FROM dbo.orders')
+    expect(local.rows).toEqual([ [ 1, 'first' ] ])
+    expect(local.columns.map(column => column.type)).toEqual([ 'IntN', 'NVarChar' ])
+
+    const original = await queryArrays(connection, 'SELECT DB_NAME() AS database_name')
+    expect(original.rows).toEqual([ [ 'master' ] ])
+    const cross = await queryArrays(connection,
+      'SELECT id, label FROM wire_sales.dbo.orders')
+    expect(cross.rows).toEqual([ [ 1, 'first' ] ])
+
+    await queryArrays(selected, 'USE master')
+    await query('DROP DATABASE wire_sales')
+  } finally {
+    selected.close()
+  }
 })
 
 test('select constants', async () => {

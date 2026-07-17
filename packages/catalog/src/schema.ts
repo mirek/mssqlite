@@ -279,6 +279,12 @@ export const tables: readonly string[] = [
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     name TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS "sys._database_files" (
+    database_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    location TEXT NOT NULL,
+    engine_owned INTEGER NOT NULL DEFAULT 1
+  )`,
   `CREATE TABLE IF NOT EXISTS "sys.sequence_state" (
     object_id INTEGER PRIMARY KEY,
     system_type_id INTEGER NOT NULL,

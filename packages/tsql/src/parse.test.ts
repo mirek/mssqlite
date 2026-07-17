@@ -501,6 +501,24 @@ test('drop / create index / views / alter table', () => {
   })
 })
 
+test('database lifecycle DDL', () => {
+  expect(parseStatement('CREATE DATABASE sales')).toEqual({
+    kind: 'createDatabase', name: 'sales'
+  })
+  expect(parseStatement('ALTER DATABASE sales MODIFY NAME = archive')).toEqual({
+    kind: 'alterDatabase', name: 'sales', action: { kind: 'rename', name: 'archive' }
+  })
+  expect(parseStatement('ALTER DATABASE archive SET READ_ONLY')).toEqual({
+    kind: 'alterDatabase', name: 'archive', action: { kind: 'setAccess', readOnly: true }
+  })
+  expect(parseStatement('ALTER DATABASE archive SET READ_WRITE')).toEqual({
+    kind: 'alterDatabase', name: 'archive', action: { kind: 'setAccess', readOnly: false }
+  })
+  expect(parseStatement('DROP DATABASE IF EXISTS archive')).toEqual({
+    kind: 'dropDatabase', name: 'archive', ifExists: true
+  })
+})
+
 test('sequence DDL and NEXT VALUE FOR parse', () => {
   expect(parseStatement(`
     CREATE SEQUENCE dbo.order_ids AS INT

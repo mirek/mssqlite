@@ -77,6 +77,8 @@ const statements = parse(`
   DROP TRIGGER [IF EXISTS].
   CREATE/ALTER/DROP SEQUENCE supports integer types, start/restart, increment,
   bounds, cycle and cache options; NEXT VALUE FOR is a scalar expression.
+  CREATE DATABASE, ALTER DATABASE with MODIFY NAME or
+  READ_ONLY/READ_WRITE, and DROP DATABASE [IF EXISTS] have lifecycle AST nodes.
 - **Procedural** — scalar DECLARE with initializers and
   `DECLARE @t TABLE (...)` with column/table constraints, SET @x
   (compound operators),

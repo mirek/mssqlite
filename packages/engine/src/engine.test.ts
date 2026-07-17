@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { DataType, SqlVariant } from '@mssqlite/tds'
 import {
-  BatchError, closeSession, executeBatch, executeSql, MssqlError, server, session, syncSession
+  BatchError, closeServer, closeSession, executeBatch, executeSql, MssqlError, server, session, syncSession
 } from './index.ts'
 import type { Item, Rows } from './execute.ts'
 
@@ -1578,6 +1578,162 @@ test('use and session options', () => {
   expect(s.options.get('nocount')).toBe('on')
   executeBatch(s, 'USE tempdb')
   expect(s.database).toBe('tempdb')
+})
+
+test('databases isolate catalogs and state while supporting cross-database work', () => {
+  const server_ = server()
+  const master = session(server_)
+  const selected = session(server_)
+  try {
+    executeBatch(master, `
+      CREATE DATABASE sales
+      CREATE DATABASE analytics
+      CREATE TABLE sales.dbo.items (id INT, label NVARCHAR(20))
+      CREATE TABLE analytics.dbo.items (id INT, label NVARCHAR(20))
+      INSERT INTO sales.dbo.items VALUES (1, N'sale')
+      INSERT INTO analytics.dbo.items VALUES (1, N'analysis')
+      CREATE PROCEDURE sales.dbo.list_items AS SELECT label FROM dbo.items
+      CREATE SEQUENCE sales.dbo.item_ids AS INT START WITH 10
+    `)
+    expect(() => executeBatch(master, 'ALTER DATABASE master MODIFY NAME = root'))
+      .toThrow(/system database/)
+
+    expect(rowsOf(executeBatch(master, `
+      SELECT s.label, a.label
+      FROM sales.dbo.items s CROSS JOIN analytics.dbo.items a
+    `)).rows).toEqual([ [ 'sale', 'analysis' ] ])
+    expect(rowsOf(executeBatch(master, `
+      SELECT COUNT(*) FROM sales.sys.tables WHERE name = N'items'
+    `)).rows).toEqual([ [ 1 ] ])
+    expect(rowsOf(executeBatch(master, `
+      SELECT COUNT(*) FROM analytics.sys.tables WHERE name = N'items'
+    `)).rows).toEqual([ [ 1 ] ])
+    expect(rowsOf(executeBatch(master, 'EXEC sales.dbo.list_items')).rows)
+      .toEqual([ [ 'sale' ] ])
+    expect(rowsOf(executeBatch(master,
+      'SELECT NEXT VALUE FOR sales.dbo.item_ids AS id')).rows).toEqual([ [ 10 ] ])
+
+    executeBatch(master, `
+      BEGIN TRAN
+      INSERT INTO sales.dbo.items VALUES (2, N'rolled back')
+      INSERT INTO analytics.dbo.items VALUES (2, N'rolled back')
+      ROLLBACK
+    `)
+    expect(rowsOf(executeBatch(master, `
+      SELECT (SELECT COUNT(*) FROM sales.dbo.items),
+        (SELECT COUNT(*) FROM analytics.dbo.items)
+    `)).rows).toEqual([ [ 1, 1 ] ])
+
+    executeBatch(selected, 'USE sales')
+    expect(rowsOf(executeBatch(selected,
+      'SELECT DB_NAME() AS name, DB_ID() AS id')).rows).toEqual([ [ 'sales', 5 ] ])
+    expect(rowsOf(executeBatch(master, `
+      SELECT database_id FROM sys.dm_exec_sessions WHERE session_id = ${selected.spid}
+    `)).rows).toEqual([ [ 5 ] ])
+    executeBatch(master, 'ALTER DATABASE sales MODIFY NAME = commerce')
+    expect(selected.database).toBe('commerce')
+    expect(rowsOf(executeBatch(selected, 'SELECT DB_NAME() AS name')).rows)
+      .toEqual([ [ 'commerce' ] ])
+    expect(rowsOf(executeBatch(master, 'SELECT label FROM commerce.dbo.items')).rows)
+      .toEqual([ [ 'sale' ] ])
+
+    executeBatch(master, 'ALTER DATABASE commerce SET READ_ONLY')
+    expect(() => executeBatch(master,
+      'INSERT INTO commerce.dbo.items VALUES (3, N\'blocked\')')).toThrow(/read-only/)
+    expect(() => executeBatch(master, 'DROP DATABASE commerce')).toThrow(/currently in use/)
+    executeBatch(selected, 'USE master')
+    executeBatch(master, 'ALTER DATABASE commerce SET READ_WRITE; DROP DATABASE commerce')
+    expect(() => executeBatch(master, 'SELECT * FROM commerce.dbo.items'))
+      .toThrow(/does not exist/)
+  } finally {
+    closeSession(master)
+    closeSession(selected)
+    closeServer(server_)
+  }
+})
+
+test('database creation cleans up after the SQLite attachment limit', () => {
+  const server_ = server()
+  const s = session(server_)
+  try {
+    for (let index = 0; index < 7; index++) {
+      executeBatch(s, `CREATE DATABASE db_${index}`)
+    }
+    expect(server_.databases.size).toBe(11)
+    expect(() => executeBatch(s, 'CREATE DATABASE overflow_database')).toThrow()
+    expect(server_.databases.has('overflow_database')).toBe(false)
+    expect(rowsOf(executeBatch(s,
+      'SELECT COUNT(*) AS n FROM sys.databases')).rows).toEqual([ [ 11 ] ])
+  } finally {
+    closeSession(s)
+    closeServer(server_)
+  }
+})
+
+test('database lifecycle and independent stores persist across server restart', () => {
+  const path = join(tmpdir(), `mssqlite-databases-${process.pid}-${Date.now()}.sqlite`)
+  try {
+    const firstServer = server({ path })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE DATABASE durable
+      CREATE TABLE durable.dbo.values_ (value INT)
+      INSERT INTO durable.dbo.values_ VALUES (42)
+      CREATE PROCEDURE durable.dbo.read_value AS SELECT value FROM dbo.values_
+      ALTER DATABASE durable SET READ_ONLY
+    `)
+    closeSession(first)
+    closeServer(firstServer)
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    expect(rowsOf(executeBatch(second, 'SELECT value FROM durable.dbo.values_')).rows)
+      .toEqual([ [ 42 ] ])
+    expect(rowsOf(executeBatch(second, 'EXEC durable.dbo.read_value')).rows)
+      .toEqual([ [ 42 ] ])
+    expect(() => executeBatch(second, 'DELETE FROM durable.dbo.values_'))
+      .toThrow(/read-only/)
+    executeBatch(second, 'ALTER DATABASE durable SET READ_WRITE; DROP DATABASE durable')
+    closeSession(second)
+    closeServer(secondServer)
+
+    const thirdServer = server({ path })
+    expect(thirdServer.databases.has('durable')).toBe(false)
+    closeServer(thirdServer)
+  } finally {
+    rmSync(path, { force: true })
+    rmSync(path.replace(/\.sqlite$/, '.db2.sqlite'), { force: true })
+    rmSync(path.replace(/\.sqlite$/, '.db3.sqlite'), { force: true })
+    rmSync(path.replace(/\.sqlite$/, '.db4.sqlite'), { force: true })
+  }
+})
+
+test('an initial user database rename becomes the persisted default context', () => {
+  const path = join(tmpdir(), `mssqlite-database-rename-${process.pid}-${Date.now()}.sqlite`)
+  try {
+    const firstServer = server({ path, databaseName: 'tenant' })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE TABLE retained (value INT)
+      INSERT INTO retained VALUES (9)
+      ALTER DATABASE tenant MODIFY NAME = archive
+    `)
+    expect(first.database).toBe('archive')
+    closeSession(first)
+    closeServer(firstServer)
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    expect(second.database).toBe('archive')
+    expect(rowsOf(executeBatch(second, 'SELECT value FROM retained')).rows).toEqual([ [ 9 ] ])
+    closeSession(second)
+    closeServer(secondServer)
+  } finally {
+    rmSync(path, { force: true })
+    for (let id = 1; id <= 4; id++) {
+      rmSync(path.replace(/\.sqlite$/, `.db${id}.sqlite`), { force: true })
+    }
+  }
 })
 
 test('NOCOUNT captures count visibility per statement without changing @@ROWCOUNT', () => {

@@ -46,6 +46,61 @@ the engine:
 
 ## Key decisions
 
+### Multiple-database ownership and resolution
+
+- **One SQLite store and primary handle per SQL database** — `Server.databases`
+  owns database id, SQL name, stable internal attachment alias, backing filename,
+  `DatabaseSync`, catalog, module/sequence registries, and rowversion state.
+  Every primary handle attaches every other store, so operations in the selected
+  database use its store as SQLite `main` while three-part names reach an
+  attachment. In-memory servers use named shared-cache `file:` URIs; file-backed
+  child databases use deterministic sibling files. The initial database owns the
+  server manifest, and `sys.databases` lifecycle rows are mirrored into every
+  database catalog.
+- **Encoded aliases isolate SQLite's namespace** — every handle attaches every
+  other store under a deterministic hex-encoded SQL
+  database name such as `mssqlite_73616c6573`. Prefixing avoids `main`/`temp`
+  collisions and lets the transpiler resolve a three-part name without mutable
+  global context. `ALTER DATABASE … MODIFY NAME` detaches the old alias and
+  reattaches the same store under the newly encoded alias. `CREATE DATABASE` bootstraps
+  its independent catalog before attaching it everywhere; `DROP DATABASE`
+  detaches it from all surviving handles, closes the owner, removes manifest
+  rows, and deletes only an engine-owned child file. Partial CREATE attachment
+  failures detach and remove the new store before surfacing the error. The
+  bundled SQLite limit of ten attachments caps one server at eleven logical
+  databases, including the four system databases.
+- **Object-position names resolve before transpilation** — the engine localizes
+  explicit references to the selected database onto SQLite `main`, preserves
+  other three-part database names, validates their target, and rewrites their
+  database part to a stable attachment alias. Schema flattening remains unchanged
+  inside that SQLite schema: `sales.dbo.orders` becomes
+  `"mssqlite_73616c6573"."orders"`, and `sales.app.orders` becomes
+  `"mssqlite_73616c6573"."app.orders"`. Column qualifiers are not database names and
+  are left untouched. Four-part linked-server names remain unsupported.
+- **Catalog and executable state are database-scoped** — DDL writes physical SQL
+  through the selected session handle and updates the target database's primary
+  catalog handle. Procedure/function/trigger/sequence maps and rowversion counters
+  live on that database state, allowing identical schema/object names in different
+  databases. A three-part procedure call temporarily executes under its owner
+  database and restores the caller context afterward.
+- **Transaction boundary follows SQLite attachments** — cross-database DML in one
+  explicit transaction uses a single primary handle and therefore commits or
+  rolls back together under SQLite's attached-database rules. Crash-atomicity
+  across files requires a disk-backed `main` database and non-WAL journaling;
+  SQLite cannot guarantee it when `main` is in-memory or WAL is enabled. Database
+  lifecycle statements and cross-database DDL are rejected inside an active user
+  transaction because catalog maintenance may require another primary handle.
+  Statement-level interpreted triggers fire for DML issued in their selected
+  database; firing a target database's triggers from a cross-database DML
+  statement is deferred because transition temp tables and trigger-body name
+  resolution cannot safely move between SQLite primary handles mid-transaction.
+- **Session switching and temporary objects** — `USE` validates an online database,
+  switches `Session.db`/database state immediately, synchronizes DMV database ids,
+  and is rejected while a transaction is active. SQLite temp schemas belong to a
+  handle, so local table variables/cursors remain scoped and cleaned by the engine,
+  but user `#temp` objects created before `USE` are intentionally not visible from
+  a different database handle. MARS remains separately unsupported.
+
 - **TLS is full-session or absent** — supplying `listen({ tls: { key, cert } })`
   requires encryption by default and advertises `ENCRYPT_REQ`; optional mode
   encrypts TLS-capable clients but accepts explicit `ENCRYPT_NOT_SUP` as
