@@ -435,6 +435,15 @@ the engine:
   consistently to equality/range/IN/LIKE, ordering, uniqueness, and expression
   indexes. Catalog rows retain the SQL name and TDS TYPE_INFO derives matching
   LCID/flag/version/sort-id bytes. Conflicting implicit names raise 468.
+- **Unique keys make NULL an ordinary key component** — SQLite normally treats
+  every NULL as distinct. CREATE TABLE UNIQUE declarations retain their native
+  constraint and gain a reserved supplemental expression index; explicit
+  unique indexes render directly as expression indexes. Every logical key
+  component expands to `(key IS NULL), ifnull(key, 0)`, so the null flag makes
+  the sentinel collision-free while collation and datetimeoffset key UDFs stay
+  in the comparison path. Reserved constraint indexes map failures to 2627;
+  user index names map to 2601. SQLite enforces the same indexes for ordinary
+  DML, MERGE, triggers, bulk load, filtered indexes, and transaction rollback.
 
 ## Extension points
 
@@ -477,8 +486,7 @@ the engine:
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
 The current differential backlog includes collation behavior, date/JSON
-validation, aggregate and
-CAST semantics, UNIQUE NULL handling, LIKE classes, and static result metadata.
+validation and static result metadata.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

@@ -7,7 +7,6 @@ work is complete.
 ## Semantics and type fidelity
 
 - [IDENTITY semantics](todo/identity-semantics.md) — Honor seed/increment, explicit-insert protection, and rollback-independent allocation.
-- [Unique NULL semantics](todo/unique-null-semantics.md) — Treat repeated NULL-containing keys as duplicates in unique constraints and indexes.
 - [SELECT INTO type preservation](todo/select-into-type-preservation.md) — Preserve expression type, width, nullability, and eligible identity properties.
 - [Scalar result metadata](todo/scalar-result-metadata.md) — Emit exact TDS types and sizes for literals, casts, operators, and functions.
 - [String comparison padding](todo/string-comparison-padding.md) — Match SQL Server trailing-space comparison behavior across collations.

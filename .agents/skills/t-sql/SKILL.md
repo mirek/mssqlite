@@ -276,8 +276,10 @@ AT TIME ZONE, ALTER TABLE ALTER COLUMN.
 ### Compatibility audit findings
 
 The live TDS audit at commit `bcad53b` found additional semantic gaps now
-tracked in [`todo/`](../../../todo): unique keys permit repeated NULLs, and
-SELECT INTO loses expression types. IDENTITY allocation findings from that
+tracked in [`todo/`](../../../todo). Unique constraints and explicit unique
+indexes now treat repeated NULL-containing tuples as duplicates, preserving
+collation keys and reporting 2627/2601 by origin. SELECT INTO still loses
+expression types. IDENTITY allocation findings from that
 audit are implemented with database-owned counters, custom signed definitions,
 rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
 confirmed general APPLY lowering and strict OPENJSON paths, while VALUES-derived

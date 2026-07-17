@@ -69,6 +69,12 @@ export const of =
       return new MssqlError(`Invalid column name '${column}'.`, 207, 16)
     }
     if (message.includes('UNIQUE constraint failed')) {
+      const index = /UNIQUE constraint failed: index '([^']+)'/.exec(message)?.[1]
+      if (index !== undefined && !/^__mssqlite_.+_(?:unique|collation)_\d+$/.test(index)) {
+        return new MssqlError(
+          `Cannot insert duplicate key row in object with unique index '${index}'. ${message}`,
+          2601, 14, 1, { statementTerminating: true })
+      }
       return new MssqlError(`Violation of UNIQUE KEY constraint. ${message}`, 2627, 14, 1, {
         statementTerminating: true
       })

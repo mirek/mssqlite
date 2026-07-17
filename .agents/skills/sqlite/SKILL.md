@@ -143,6 +143,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   identical key, preserving CI/CS, AI/AS and BIN2 behavior. Accent-insensitive
   keys use Unicode NFD with combining marks removed; trailing spaces are
   ignored as in SQL text comparison.
+- SQLite UNIQUE indexes treat NULLs as distinct, unlike SQL Server. mssqlite
+  expands each nullable logical key `k` to `(k IS NULL), ifnull(k, 0)` in a
+  unique expression index. The flag separates real values from the arbitrary
+  sentinel, while `k` may itself be a collation, exact-decimal, or temporal key
+  expression. CREATE TABLE constraints keep their native definition plus a
+  reserved supplemental index (2627); explicit unique indexes use the expanded
+  key directly (2601). Partial-index WHERE predicates remain unchanged.
 - SQLite has no ROLLUP, CUBE, GROUPING SETS, or GROUPING function. mssqlite
   expands them into one ordinary GROUP BY query per grouping set joined by
   UNION ALL, replacing omitted keys with NULL and GROUPING calls with branch
@@ -213,6 +220,5 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 
 Native SQLite shortcuts that still leak through the T-SQL compatibility
 boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
-2025 differentials cover text width/collation, UNIQUE NULLs, LIKE classes,
-date/JSON validation, numeric casts/aggregates, scalar function contracts,
-and result metadata.
+2025 differentials cover text comparison/collation, date/JSON validation,
+scalar function contracts, and result metadata.

@@ -431,6 +431,26 @@ test('collation comparisons, uniqueness and catalog metadata cross tedious', asy
   expect(catalog.rows).toEqual([ { collation_name: 'Latin1_General_100_CI_AI' } ])
 })
 
+test('NULL-containing unique keys and error origins cross tedious', async () => {
+  await query(`
+    CREATE TABLE wire_unique_constraint (id INT PRIMARY KEY, value INT UNIQUE);
+    INSERT INTO wire_unique_constraint VALUES (1, NULL);
+    CREATE TABLE wire_unique_index (id INT PRIMARY KEY, value INT NULL, active BIT NOT NULL);
+    CREATE UNIQUE INDEX ux_wire_unique_null ON wire_unique_index (value) WHERE active = 1;
+    INSERT INTO wire_unique_index VALUES (1, NULL, 1), (2, NULL, 0), (3, NULL, 0);
+  `)
+  await expect(query('INSERT INTO wire_unique_constraint VALUES (2, NULL)'))
+    .rejects.toMatchObject({ number: 2627, class: 14, state: 1 })
+  await expect(query('INSERT INTO wire_unique_index VALUES (4, NULL, 1)'))
+    .rejects.toMatchObject({ number: 2601, class: 14, state: 1 })
+  const counts = await query(`
+    SELECT
+      (SELECT COUNT(*) FROM wire_unique_constraint) AS constraint_rows,
+      (SELECT COUNT(*) FROM wire_unique_index) AS index_rows
+  `)
+  expect(counts.rows).toEqual([ { constraint_rows: 1, index_rows: 3 } ])
+})
+
 test('parameterized query via sp_executesql rpc', async () => {
   const result = await query('SELECT name FROM users WHERE age > @age', [
     { name: 'age', type: TYPES.Int, value: 18 }

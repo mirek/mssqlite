@@ -104,6 +104,22 @@ test('bulk failure and explicit cancellation roll back every row in the request'
     .toMatchObject({ rows: [ [ 0 ] ] })
 })
 
+test('bulk load enforces SQL Server uniqueness for repeated NULL keys', () => {
+  const active = setup()
+  executeBatch(active, 'CREATE TABLE bulk_unique_null (value INT UNIQUE)')
+  const plan = requiredPlan(prepareBulkLoad(active,
+    'INSERT BULK bulk_unique_null ([value] int)'))
+  const columns: readonly TdsBulkLoad.Column[] = [
+    { name: 'value', userType: 0, flags: Token.Flags.nullable, typeInfo: TypeInfo.intN(4) }
+  ]
+  const loader = beginBulkLoad(plan, columns)
+  expect(() => writeBulkRows(loader, [ [ null ], [ null ] ]))
+    .toThrowError(/UNIQUE constraint/)
+  abortBulkLoad(loader)
+  expect(executeBatch(active, 'SELECT COUNT(*) AS count FROM bulk_unique_null')[0])
+    .toMatchObject({ rows: [ [ 0 ] ] })
+})
+
 test('bulk metadata, identity, null/default, conversion, and length invariants are enforced', () => {
   const active = setup()
   const plan = requiredPlan(prepareBulkLoad(active, sql))

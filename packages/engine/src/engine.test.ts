@@ -321,6 +321,126 @@ test('collation-aware uniqueness rejects case and accent equivalents', () => {
   )`)).toThrowError(expect.objectContaining({ number: 448 }) as Error)
 })
 
+test('unique constraints and indexes treat NULL keys as duplicate values', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE unique_single (id INT PRIMARY KEY, value INT UNIQUE);
+    INSERT INTO unique_single VALUES (1, NULL), (2, 1);
+    CREATE TABLE unique_composite (
+      id INT PRIMARY KEY,
+      a INT NULL,
+      b NVARCHAR(20) COLLATE Latin1_General_100_CI_AI NULL,
+      CONSTRAINT uq_composite UNIQUE (a, b)
+    );
+    INSERT INTO unique_composite VALUES
+      (1, NULL, N'café'), (2, NULL, N'other'), (3, 1, NULL), (4, NULL, NULL);
+  `)
+
+  expect(() => executeBatch(s, 'INSERT INTO unique_single VALUES (3, NULL)'))
+    .toThrowError(expect.objectContaining({ number: 2627, severity: 14, state: 1 }) as Error)
+  expect(() => executeBatch(s, 'UPDATE unique_single SET value = NULL WHERE id = 2'))
+    .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT id, value FROM unique_single ORDER BY id')).rows)
+    .toEqual([ [ 1, null ], [ 2, 1 ] ])
+
+  for (const values of [
+    '(5, NULL, N\'CAFE\')',
+    '(6, 1, NULL)',
+    '(7, NULL, NULL)'
+  ]) {
+    expect(() => executeBatch(s, `INSERT INTO unique_composite VALUES ${values}`))
+      .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+  }
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS count FROM unique_composite')).rows)
+    .toEqual([ [ 4 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE unique_filtered (id INT PRIMARY KEY, a INT NULL, b INT NULL, active BIT NOT NULL);
+    CREATE UNIQUE INDEX ux_filtered_nulls ON unique_filtered (a, b) WHERE active = 1;
+    INSERT INTO unique_filtered VALUES
+      (1, NULL, NULL, 0), (2, NULL, NULL, 0), (3, NULL, NULL, 1);
+  `)
+  expect(() => executeBatch(s, 'INSERT INTO unique_filtered VALUES (4, NULL, NULL, 1)'))
+    .toThrowError(expect.objectContaining({ number: 2601, severity: 14, state: 1 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS count FROM unique_filtered')).rows)
+    .toEqual([ [ 3 ] ])
+
+  const caughtConstraint = rowsOf(executeBatch(s, `
+    BEGIN TRY
+      INSERT INTO unique_single VALUES (5, NULL)
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS number
+    END CATCH
+  `))
+  expect(caughtConstraint.rows).toEqual([ [ 2627 ] ])
+  const caughtIndex = rowsOf(executeBatch(s, `
+    BEGIN TRY
+      INSERT INTO unique_filtered VALUES (5, NULL, NULL, 1)
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS number
+    END CATCH
+  `))
+  expect(caughtIndex.rows).toEqual([ [ 2601 ] ])
+
+  const doomed = rowsOf(executeBatch(s, `
+    SET XACT_ABORT ON
+    BEGIN TRANSACTION
+    BEGIN TRY
+      INSERT INTO unique_single VALUES (6, NULL)
+    END TRY
+    BEGIN CATCH
+      SELECT XACT_STATE() AS state
+    END CATCH
+  `))
+  expect(doomed.rows).toEqual([ [ -1 ] ])
+  executeBatch(s, 'ROLLBACK; SET XACT_ABORT OFF')
+})
+
+test('NULL-safe uniqueness covers MERGE, triggers and multiple sessions atomically', () => {
+  const shared = server()
+  const first = session(shared)
+  const second = session(shared)
+  try {
+    executeBatch(first, `
+      CREATE TABLE session_unique (id INT PRIMARY KEY, value INT UNIQUE);
+      INSERT INTO session_unique VALUES (1, NULL);
+    `)
+    expect(() => executeBatch(second, 'INSERT INTO session_unique VALUES (2, NULL)'))
+      .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+
+    executeBatch(first, `
+      CREATE TABLE merge_unique (id INT PRIMARY KEY, value INT UNIQUE);
+      INSERT INTO merge_unique VALUES (1, NULL);
+    `)
+    expect(() => executeBatch(first, `
+      MERGE merge_unique AS target
+      USING (VALUES (2, NULL), (3, 3)) AS source (id, value)
+        ON target.id = source.id
+      WHEN NOT MATCHED THEN INSERT (id, value) VALUES (source.id, source.value);
+    `)).toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+    expect(rowsOf(executeBatch(first, 'SELECT id, value FROM merge_unique')).rows)
+      .toEqual([ [ 1, null ] ])
+
+    executeBatch(first, `
+      CREATE TABLE trigger_source (id INT PRIMARY KEY);
+      CREATE TABLE trigger_unique (value INT UNIQUE);
+      INSERT INTO trigger_unique VALUES (NULL);
+      CREATE TRIGGER dbo.trigger_null_duplicate ON trigger_source AFTER INSERT AS
+        INSERT INTO trigger_unique SELECT NULL FROM inserted;
+    `)
+    expect(() => executeBatch(first, 'INSERT INTO trigger_source VALUES (1), (2)'))
+      .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+    expect(rowsOf(executeBatch(first, 'SELECT COUNT(*) AS count FROM trigger_source')).rows)
+      .toEqual([ [ 0 ] ])
+  } finally {
+    closeSession(second)
+    closeSession(first)
+    closeServer(shared)
+  }
+})
+
 test('variables, set and select assignment', () => {
   const s = open()
   executeBatch(s, 'DECLARE @x INT = 1 SET @x = @x + 10')

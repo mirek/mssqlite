@@ -43,8 +43,13 @@ const { sql, variables } = statement(parseStatement(
   columns. Generated expression mode uses deterministic checked numeric UDFs.
 - **Collations** — supported column and expression COLLATE names lower to
   deterministic Unicode normalization keys used by comparisons, LIKE/IN,
-  ordering and indexes. CREATE TABLE emits supplemental key-based unique
-  indexes where a declared collation must exceed BINARY/NOCASE behavior.
+  ordering and indexes.
+- **Unique NULLs** — every logical component of a unique key expands to a NULL
+  flag plus a collision-safe value expression. CREATE TABLE constraints keep
+  native SQLite enforcement and add a reserved supplemental index; explicit
+  unique indexes use the expanded expression key directly. This gives SQL
+  Server's repeated-NULL behavior without losing collation or temporal keys,
+  and preserves filtered-index predicates.
 
 Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
 operands execute once and the engine can enforce divide-by-zero/overflow and
