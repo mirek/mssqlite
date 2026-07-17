@@ -9,6 +9,8 @@ Complete reference for the Tabular Data Stream (TDS) protocol used by Microsoft 
 
 Source: [MS-TDS Specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/b46a581a-39de-4745-b076-ec4dbb7d13ec)
 
+MARS transport source: [MC-SMP Specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/MC-SMP/04c8edde-371d-4af5-bb33-a39b3948f0af)
+
 ## Reference Files
 
 - [packet-framing.md](packet-framing.md) — Protocol overview, TDS versions, connection flow, packet header format
@@ -28,6 +30,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 | Spec area | Module |
 |---|---|
 | Packet header, splitting, reassembly | `packet.ts`, `message.ts` |
+| MARS Session Multiplex Protocol framing | `smp.ts` |
 | PreLogin request/response and encryption negotiation | `prelogin.ts` |
 | Login7 + password descrambling + FeatureExt | `login7.ts` |
 | SQL-login authentication + generic 18456 failure | `server/authentication.ts`, `server/connection.ts` |
@@ -44,6 +47,14 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   the final server record has drained; Node's server-side `secure` event can
   fire just before that write, so switching to raw records in the event handler
   loses the client at the framing boundary.
+- MARS is negotiated only when the client requests PRELOGIN MARS=1. LOGIN7 and
+  its response remain ordinary TDS; SMP begins with client SYN afterward.
+  SMP's 16-byte header is entirely little-endian after signature `0x53`; the
+  first DATA sequence is 1, SYN is 0, and FIN reuses the last DATA sequence.
+  Each DATA frame carries exactly one complete TDS packet. The server starts
+  with four-packet credit, advertises `receiveSequence + 4`, acknowledges near
+  the window edge, rejects backward windows/out-of-order DATA, and schedules
+  eligible response packets round-robin across SIDs.
 - Password authentication is applied only after full LOGIN7 decode and before
   session/database allocation. Required TLS protects the descrambled secret;
   uniform 18456/state 1 failures close the connection after ERROR + DONE_ERROR.

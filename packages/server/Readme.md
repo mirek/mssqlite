@@ -107,7 +107,7 @@ because LOGIN7 password scrambling is not transport encryption.
 ## Protocol support
 
 - **Handshake** — PRELOGIN (version, OFF/ON/NOT_SUP/REQ encryption
-  negotiation, MARS off), TDS 7.4 TLS handshake records wrapped in PRELOGIN
+  negotiation and opt-in MARS), TDS 7.4 TLS handshake records wrapped in PRELOGIN
   packets, then full-session encrypted transport; LOGIN7 decode with explicit
   insecure or scrypt-backed SQL-login validation, login response with ENVCHANGE
   database/collation/language/packet size and LOGINACK (TDS 7.4,
@@ -146,10 +146,18 @@ because LOGIN7 password scrambling is not transport encryption.
   request is atomic; `freebcp -b` sends separate requests, so an earlier batch
   remains committed if a later batch fails.
 - **Attention (0x06)** — acknowledged with DONE_ATTN.
+- **MARS / SMP** — after a MARS-enabled login, SYN opens independent logical
+  request streams and every TDS packet travels in a sequenced SMP DATA frame.
+  Packet reassembly, bulk state, errors, Attention, and teardown are isolated
+  by SID; prepared handles, database context, and transactions remain shared by
+  the physical connection. Sliding windows bound each stream and a round-robin
+  writer lets an unblocked sibling progress when another reader stops consuming.
+  FIN aborts only its logical request and receives a matching FIN.
 - Packet-size negotiation from LOGIN7; responses split across packets.
 
-Each connection gets its own engine session (selected database, variables,
-transactions, `@@`-state). CREATE/ALTER/DROP DATABASE, USE, and three-part
+Each physical connection gets one engine session (selected database, variables,
+transactions, `@@`-state); MARS logical sessions share it while retaining their
+own wire/request state. CREATE/ALTER/DROP DATABASE, USE, and three-part
 names operate across database-scoped SQLite stores shared by those sessions.
 Authenticated connections and in-flight requests are visible through the
 minimal `sys.dm_exec_sessions` / `sys.dm_exec_requests` surface and are removed

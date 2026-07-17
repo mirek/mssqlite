@@ -79,7 +79,10 @@ comparison and exact TDS round trips, and declared case/accent/BIN2 collation
 semantics. Embedded listeners support scrypt-hashed, hot-rotatable SQL logins
 over required TLS, with explicit insecure mode reserved for development. TDS
 bulk-load streams interoperate with `tedious` and node-mssql bulk-copy APIs,
-decode rows incrementally, and commit or roll back each load atomically.
+decode rows incrementally, and commit or roll back each load atomically. MARS
+negotiation and SMP multiplexing support concurrent readers and writes on one
+physical connection with per-request errors, cancellation, and fair packet
+flow control.
 
 What's still missing is tracked in [TODO.md](TODO.md).
 
