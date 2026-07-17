@@ -316,3 +316,14 @@ ERROR + DONE(DONE_ERROR | DONE_FINAL)
 ```
 
 Server may also send DONE followed by closing the connection for fatal auth failures.
+
+### mssqlite authentication policy
+
+Mssqlite validates decoded SQL-login user/password fields before allocating an
+engine session or resolving the requested database. Password mode requires
+required full-session TLS; LOGIN7's nibble-swap/XOR password scrambling alone
+is not confidentiality. Every failed SQL login returns ERROR 18456 with state
+1 and class 14 followed by DONE_ERROR, then closes the transport. The message
+is generic for unknown users, wrong/missing passwords, malformed names, and
+credential-provider failures. Integrated-security/SSPI and federated feature
+extensions are outside the implemented authentication scope.

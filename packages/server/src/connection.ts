@@ -3,13 +3,15 @@ import {
   Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
 import {
-  BatchError, closeSession, errorOf, executeBatch, executeSql, session, syncSession,
+  BatchError, closeSession, errorOf, executeBatch, executeSql, MssqlError, session, syncSession,
+  useDatabase,
   type Parameter, type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
 import createTlsTransport, { type Transport as TlsTransport } from './tls-transport.ts'
 import type { Socket } from 'node:net'
 import type { SecureContext, TLSSocket } from 'node:tls'
+import type { Authenticator } from './authentication.ts'
 
 export type EncryptionOptions = {
   readonly context: SecureContext,
@@ -24,6 +26,7 @@ type Connection = {
   stream: Socket | TLSSocket,
   readonly engine: Server,
   readonly encryption?: EncryptionOptions,
+  readonly authenticate: Authenticator,
   phase: 'prelogin' | 'tls' | 'plaintext' | 'encrypted',
   tls: TlsTransport | undefined,
   session: Session | undefined,
@@ -132,12 +135,29 @@ const onLogin =
       connection.network.destroy()
       return
     }
+    const userName = connection.authenticate(login.userName, login.password)
+    if (userName === undefined) {
+      respond(connection, errorResponse(
+        new MssqlError('Login failed.', 18456, 14, 1), connection.engine.serverName))
+      connection.stream.end()
+      return
+    }
     const session_ = session(connection.engine)
-    session_.userName = login.userName === '' ? 'sa' : login.userName
+    session_.userName = userName
     session_.applicationName = login.appName
     session_.hostName = login.hostName
+    const previousDatabase = session_.database
     if (login.database !== '') {
-      session_.database = login.database
+      try {
+        useDatabase(session_, login.database)
+      } catch {
+        closeSession(session_)
+        respond(connection, errorResponse(new MssqlError(
+          `Cannot open database "${login.database}" requested by the login.`, 4060, 11, 1
+        ), connection.engine.serverName))
+        connection.stream.end()
+        return
+      }
     }
     syncSession(session_)
     connection.session = session_
@@ -145,7 +165,7 @@ const onLogin =
       connection.packetSize = login.packetSize
     }
     respond(connection, Encode.concat(
-      Token.EnvChange.database(session_.database, 'master'),
+      Token.EnvChange.database(session_.database, previousDatabase),
       Token.EnvChange.collation(Collation.encode(Collation.default_)),
       Token.EnvChange.language('us_english'),
       Token.loginAck({
@@ -377,12 +397,18 @@ const consume =
 
 /** Attaches TDS protocol handling to an accepted socket. */
 export const attach =
-  (socket: Socket, engine: Server, encryption?: EncryptionOptions): void => {
+  (
+    socket: Socket,
+    engine: Server,
+    encryption: EncryptionOptions | undefined,
+    authenticate: Authenticator
+  ): void => {
     const connection: Connection = {
       network: socket,
       stream: socket,
       engine,
       ...encryption === undefined ? {} : { encryption },
+      authenticate,
       phase: 'prelogin',
       tls: undefined,
       session: undefined,

@@ -30,6 +30,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 | Packet header, splitting, reassembly | `packet.ts`, `message.ts` |
 | PreLogin request/response and encryption negotiation | `prelogin.ts` |
 | Login7 + password descrambling + FeatureExt | `login7.ts` |
+| SQL-login authentication + generic 18456 failure | `server/authentication.ts`, `server/connection.ts` |
 | ALL_HEADERS, SQL batch, RPC, transaction manager | `all-headers.ts`, `sql-batch.ts`, `rpc.ts`, `transaction-manager.ts` |
 | TYPE_INFO + TYPE_VARBYTE values incl. PLP | `type-info.ts`, `value.ts` |
 | Collation, GUID, decimal, date/time wire formats | `collation.ts`, `guid.ts`, `decimal.ts`, `date-time.ts` |
@@ -42,6 +43,9 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   the final server record has drained; Node's server-side `secure` event can
   fire just before that write, so switching to raw records in the event handler
   loses the client at the framing boundary.
+- Password authentication is applied only after full LOGIN7 decode and before
+  session/database allocation. Required TLS protects the descrambled secret;
+  uniform 18456/state 1 failures close the connection after ERROR + DONE_ERROR.
 - **RPC OptionFlags is 2 bytes** (USHORT). The example 4.8 prose lists a
   single `00` byte, but the packet length arithmetic (47 total) only
   works with two flag bytes.
