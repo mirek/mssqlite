@@ -78,7 +78,10 @@ The language pipeline lives in three packages:
   raise 8115. SUM defaults to SQL Server's int-width accumulator; explicitly
   casting its argument to BIGINT selects a 64-bit accumulator. Both ARITHABORT
   OFF and ANSI_WARNINGS OFF are required to turn an arithmetic failure into NULL;
-  otherwise the error is catchable and honors XACT_ABORT. DECIMAL/NUMERIC uses
+  otherwise the error is catchable and honors XACT_ABORT. Integer AVG shares
+  the checked accumulator, truncates the quotient toward zero, ignores NULLs,
+  and retains int/bigint result width; COUNT_BIG always retains bigint metadata.
+  DECIMAL/NUMERIC uses
   fixed-scale strings with scaled-BigInt casts and arithmetic, SQL Server
   operator precision/scale formulas (including the precision-38 reduction
   rules), half-away-from-zero rounding, and 8115/8134 errors.

@@ -258,6 +258,14 @@ test('function mappings', () => {
   expect(scalarOf('CHOOSE(n, \'a\', \'b\')')).toBe('(CASE "n" WHEN 1 THEN \'a\' WHEN 2 THEN \'b\' END)')
   expect(scalarOf('COUNT(DISTINCT x)')).toBe('count(DISTINCT "x")')
   expect(scalarOf('COUNT(*)')).toBe('count(*)')
+  expect(scalarOf('AVG(CAST(x AS int))'))
+    .toBe('mssqlite_avg(mssqlite_cast_integer("x", \'int\', 0, 0, \'\'))')
+  expect(scalarOf('AVG(DISTINCT CAST(x AS bigint))'))
+    .toBe('mssqlite_avg_bigint(DISTINCT mssqlite_cast_integer("x", \'bigint\', 0, 0, \'\'))')
+  expect(scalarOf('AVG(CAST(x AS int)) OVER (ORDER BY x)'))
+    .toBe('mssqlite_avg(mssqlite_cast_integer("x", \'int\', 0, 0, \'\')) OVER (ORDER BY "x")')
+  expect(statement(parseStatement('SELECT COUNT_BIG(*) AS value')).columns)
+    .toEqual([ { name: 'value', type: { name: 'bigint', args: [] }, nullable: false } ])
 })
 
 test('window functions', () => {

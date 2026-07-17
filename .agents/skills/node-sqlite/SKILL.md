@@ -89,7 +89,9 @@ isolated T-SQL function scope and supports recursive calls up to 32 levels.
 Exact DECIMAL/NUMERIC callbacks accept and return canonical TEXT values so
 node:sqlite never converts them through JavaScript `number`. `db.aggregate()`
 states serialize scaled BigInts as strings for SUM/AVG/MIN/MAX; scalar UDFs
-provide casts, arithmetic, comparisons, and sortable keys.
+provide casts, arithmetic, comparisons, and sortable keys. Checked integer AVG
+also serializes exact sum/count state and registers `inverse`; Node requires
+that callback before a user-defined aggregate can execute with `OVER`.
 Character coercion callbacks return TEXT after Windows-1252 or UTF-16LE
 length enforcement. Storage callbacks throw `MssqlError` 2628 synchronously;
 node:sqlite propagates it to the engine's statement rollback and TRY/CATCH

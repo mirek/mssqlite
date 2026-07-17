@@ -108,9 +108,12 @@ const items = executeBatch(s, `
   tinyint/smallint/int/bigint projections retain their declared TDS widths.
 - **Checked arithmetic** — integer `+ - * / %` preserves NULL and integer-
   division semantics while raising 8134 for zero divisors and 8115 for inferred
-  int/bigint overflow. SUM checks int width, or bigint width when its argument
-  is explicitly cast. With both ARITHABORT and ANSI_WARNINGS OFF failures return
-  NULL; otherwise they follow TRY/CATCH, continuation, and XACT_ABORT rules.
+  int/bigint overflow. SUM checks its int/bigint accumulator width; integer AVG
+  uses the same checked sum, ignores NULLs, and truncates toward zero for
+  ordinary, DISTINCT, windowed, PIVOT, and grouping-set aggregates. COUNT_BIG
+  and AVG(bigint) retain eight-byte result metadata even for small or empty
+  results. With both ARITHABORT and ANSI_WARNINGS OFF failures return NULL;
+  otherwise they follow TRY/CATCH, continuation, and XACT_ABORT rules.
 - **Implicit conversion** — declared column, variable, procedure, and RPC
   parameter types participate in T-SQL precedence. The same strict conversion
   path is applied to predicates, CASE/IN/BETWEEN, set operations, VALUES, and

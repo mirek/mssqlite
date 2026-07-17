@@ -1149,6 +1149,54 @@ test('SUM checks int width and explicit bigint widens the accumulator', () => {
   `)).rows).toEqual([ [ 2147483648 ] ])
 })
 
+test('integer AVG truncates and COUNT_BIG retains bigint width', () => {
+  // Compatibility vector checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE integer_aggregate_values (grp int, value int, big_value bigint)
+    INSERT INTO integer_aggregate_values VALUES
+      (1, 1, 1), (1, 2, 2), (1, 2, 2), (2, NULL, NULL)
+  `)
+  const aggregate = rowsOf(executeBatch(s, `
+    SELECT AVG(value) AS average, AVG(DISTINCT value) AS distinct_average,
+      AVG(big_value) AS big_average, COUNT_BIG(*) AS big_count
+    FROM integer_aggregate_values
+  `))
+  expect(aggregate.rows).toEqual([ [ 1, 1, 1, 4 ] ])
+  expect(aggregate.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 4, 8, 8 ])
+  expect(aggregate.columns.map(column => column.nullable)).toEqual([ true, true, true, false ])
+
+  const empty = rowsOf(executeBatch(s, `
+    SELECT AVG(value) AS average, AVG(big_value) AS big_average,
+      COUNT_BIG(*) AS big_count
+    FROM integer_aggregate_values WHERE 1 = 0
+  `))
+  expect(empty.rows).toEqual([ [ null, null, 0 ] ])
+  expect(empty.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 8, 8 ])
+
+  expect(rowsOf(executeBatch(s, `
+    SELECT value, AVG(value) OVER (ORDER BY value) AS running_average
+    FROM integer_aggregate_values WHERE grp = 1 ORDER BY value
+  `)).rows).toEqual([ [ 1, 1 ], [ 2, 1 ], [ 2, 1 ] ])
+
+  const grouped = rowsOf(executeBatch(s, `
+    SELECT grp, AVG(value) AS average, COUNT_BIG(*) AS big_count,
+      GROUPING(grp) AS subtotal
+    FROM integer_aggregate_values
+    GROUP BY GROUPING SETS ((grp), ())
+    ORDER BY subtotal, grp
+  `))
+  expect(grouped.rows).toEqual([ [ 1, 1, 3, 0 ], [ 2, null, 1, 0 ], [ null, 1, 4, 1 ] ])
+  expect(grouped.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 4, 8, 1 ])
+
+  executeBatch(s, `
+    CREATE TABLE integer_average_overflow (value int)
+    INSERT INTO integer_average_overflow VALUES (2147483647), (2147483647)
+  `)
+  expect(() => executeBatch(s, 'SELECT AVG(value) FROM integer_average_overflow'))
+    .toThrowError(expect.objectContaining({ number: 8115 }) as Error)
+})
+
 test('decimal casts and arithmetic stay exact with SQL precision and scale metadata', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, `
@@ -1795,6 +1843,15 @@ test('pivot and unpivot expose generated values and metadata', () => {
   expect(pivot.columns.map(column => column.name)).toEqual([ 'region', 'Q1', 'Q2', 'Q3' ])
   expect(pivot.columns.slice(1).map(column => column.typeInfo.type))
     .toEqual([ DataType.DataType.intN, DataType.DataType.intN, DataType.DataType.intN ])
+
+  const averagePivot = rowsOf(executeBatch(s, `
+    SELECT region, [Q1], [Q2]
+    FROM transform_sales
+    PIVOT (AVG(amount) FOR quarter IN ([Q1], [Q2])) result
+    ORDER BY region
+  `))
+  expect(averagePivot.rows).toEqual([ [ 'east', 7, null ], [ 'west', null, 7 ] ])
+  expect(averagePivot.columns.slice(1).map(column => column.typeInfo.maxLength)).toEqual([ 4, 4 ])
 
   executeBatch(s, `
     CREATE TABLE transform_labels (bucket NVARCHAR(2), label NVARCHAR(12));

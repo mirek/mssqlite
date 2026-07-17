@@ -851,6 +851,29 @@ test('integer cast coercion crosses literals, empty text, and decimal RPC input'
     .rejects.toMatchObject({ number: 8115 })
 })
 
+test('integer AVG and COUNT_BIG retain values and widths over tedious', async () => {
+  const result = await query(`
+    CREATE TABLE tedious_integer_aggregates (value int, big_value bigint)
+    INSERT INTO tedious_integer_aggregates VALUES (1, 1), (2, 2), (NULL, NULL)
+    SELECT AVG(value) AS average, AVG(big_value) AS big_average,
+      COUNT_BIG(*) AS big_count
+    FROM tedious_integer_aggregates
+  `)
+  expect(result.rows).toEqual([ { average: 1, big_average: '1', big_count: '3' } ])
+  expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 8 ], [ 'IntN', 8 ]
+  ])
+
+  const empty = await query(`
+    SELECT AVG(value) AS average, COUNT_BIG(*) AS big_count
+    FROM tedious_integer_aggregates WHERE 1 = 0
+  `)
+  expect(empty.rows).toEqual([ { average: null, big_count: '0' } ])
+  expect(empty.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 8 ]
+  ])
+})
+
 test('implicit type precedence crosses predicates, RPC parameters and result metadata', async () => {
   const result = await query(`
     SELECT

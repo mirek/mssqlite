@@ -195,8 +195,13 @@ export const pivot =
     validateUnique([ ...grouping, ...source.values ])
     const key = render(ctx, { kind: 'column', name: source.pivotColumn })
     const value = render(ctx, source.aggregate.expression)
+    const valueColumn = sourceMetadata(source.source)?.find(column =>
+      column.name.toLowerCase() === valueName)
+    const aggregateName = aggregate === 'avg' && valueColumn?.type !== undefined &&
+      [ 'tinyint', 'smallint', 'int', 'bigint' ].includes(valueColumn.type.name) ?
+      valueColumn.type.name === 'bigint' ? 'mssqlite_avg_bigint' : 'mssqlite_avg' : aggregate
     const aggregates = source.values.map(name =>
-      `${aggregate}(CASE WHEN ${key} = ${Quote.string(name)} THEN ${value} END) AS ${Quote.identifier(name)}`)
+      `${aggregateName}(CASE WHEN ${key} = ${Quote.string(name)} THEN ${value} END) AS ${Quote.identifier(name)}`)
     const items = [ ...grouping.map(Quote.identifier), ...aggregates ]
     const groupBy = grouping.length === 0 ? '' : ` GROUP BY ${grouping.map(Quote.identifier).join(', ')}`
     return `(SELECT ${items.join(', ')} FROM ${renderSource(ctx, source.source)}${groupBy}) ` +

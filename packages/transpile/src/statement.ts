@@ -455,6 +455,7 @@ const groupingSelect =
     if (select_.from !== undefined && select_.from.kind !== 'join') {
       const name = `__mssqlite_grouping_${ctx.nextSource++}`
       const where = select_.where === undefined ? '' : ` WHERE ${expression(ctx, select_.where)}`
+      const sourceColumns = declaredSourceColumns(select_.from)
       definitions.push(
         `${Quote.identifier(name)} AS MATERIALIZED (SELECT * FROM ${tableSource(ctx, select_.from)}${where})`)
       const alias = sourceAlias(select_.from)
@@ -464,6 +465,7 @@ const groupingSelect =
         from: {
           kind: 'table',
           name: [ name ],
+          ...sourceColumns === undefined ? {} : { columns: sourceColumns },
           ...alias === undefined ? {} : { alias }
         }
       }
@@ -514,6 +516,10 @@ const coercedSet =
     }
     return linked(0)
   }
+
+const declaredSourceColumns =
+  (source: Ast.TableSource): readonly Ast.SourceColumn[] | undefined =>
+    source.kind === 'table' ? source.columns : undefined
 
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =

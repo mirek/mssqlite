@@ -128,6 +128,29 @@ export const typeOf =
         ])
       case 'call': {
         const name = value.name[value.name.length - 1]?.toLowerCase()
+        if (name === 'count') {
+          return { name: 'int', args: [] }
+        }
+        if (name === 'count_big') {
+          return { name: 'bigint', args: [] }
+        }
+        if ([ 'sum', 'avg', 'min', 'max' ].includes(name ?? '')) {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          if (input === undefined || [ 'min', 'max' ].includes(name ?? '')) {
+            return input
+          }
+          if ([ 'tinyint', 'smallint', 'int' ].includes(input.name)) {
+            return { name: 'int', args: [] }
+          }
+          if ([ 'decimal', 'numeric' ].includes(input.name)) {
+            const scale = typeof input.args[1] === 'number' ? input.args[1] : 0
+            return { name: 'decimal', args: [ 38, name === 'avg' ? Math.max(6, scale) : scale ] }
+          }
+          if ([ 'real', 'float' ].includes(input.name)) {
+            return { name: 'float', args: [] }
+          }
+          return input
+        }
         if (name === 'isnull') {
           return value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0]) ??
             (value.args[1] === undefined ? undefined : typeOf(ctx, value.args[1]))
@@ -334,7 +357,7 @@ export const coerce =
 
 const derived =
   (value: Ast.Expression): boolean =>
-    [ 'binaryOp', 'case', 'cast', 'convert' ].includes(value.kind)
+    [ 'binaryOp', 'call', 'case', 'cast', 'convert' ].includes(value.kind)
 
 /** @returns metadata hints for projections whose common result type is known. */
 export const selectHints =
@@ -351,11 +374,14 @@ export const selectHints =
         if (type === undefined) {
           return undefined
         }
+        const callName = item.expression.kind === 'call' ?
+          item.expression.name[item.expression.name.length - 1]?.toLowerCase() : undefined
         return {
           name: item.alias ?? (item.expression.kind === 'column' ?
             item.expression.name[item.expression.name.length - 1] ?? '' : ''),
           type,
-          nullable: item.expression.kind === 'null'
+          nullable: item.expression.kind === 'null' ||
+            (callName !== undefined && ![ 'count', 'count_big' ].includes(callName))
         }
       })
       return !hasDerived || hints.some(hint => hint === undefined) ?

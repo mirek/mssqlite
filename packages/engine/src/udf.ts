@@ -344,6 +344,44 @@ const sumResult =
     return state.startsWith('f:') ? Number(state.slice(2)) : Number(BigInt(state.slice(2)))
   }
 
+const averageState =
+  (state: string): readonly [ sum: bigint, count: bigint ] => {
+    if (state === 'empty') {
+      return [ 0n, 0n ]
+    }
+    const [ sum = '0', count = '0' ] = state.slice(2).split(':')
+    return [ BigInt(sum), BigInt(count) ]
+  }
+
+const averageStep =
+  (state: string, value: Argument, direction: 1 | -1): string => {
+    if (value === null) {
+      return state
+    }
+    const [ sum, count ] = averageState(state)
+    const nextCount = count + BigInt(direction)
+    const delta = BigInt(value as number | bigint) * BigInt(direction)
+    return nextCount === 0n ? 'empty' : `i:${sum + delta}:${nextCount}`
+  }
+
+const averageResult =
+  (server: Server, state: string, bits: 32 | 64): Argument => {
+    if (state === 'empty') {
+      return null
+    }
+    const [ sum, count ] = averageState(state)
+    const minimum = bits === 32 ? -2147483648n : -9223372036854775808n
+    const maximum = bits === 32 ? 2147483647n : 9223372036854775807n
+    if (sum < minimum || sum > maximum) {
+      const target = bits === 32 ? 'int' : 'bigint'
+      return arithmeticError(server, new MssqlError(
+        `Arithmetic overflow error converting expression to data type ${target}.`,
+        8115, 16, 2, { statementTerminating: true }))
+    }
+    const result = sum / count
+    return result >= Number.MIN_SAFE_INTEGER && result <= Number.MAX_SAFE_INTEGER ? Number(result) : result
+  }
+
 /**
  * Registers all `mssqlite_*` SQL functions the transpiler emits. Session
  * scoped functions read `server.current`, set by the engine per batch.
@@ -485,6 +523,20 @@ export const registerFunctions =
       start: 'empty' as string,
       step: (state, value) => sumStep(String(state), value as Argument, 64),
       result: state => sumResult(server, String(state)),
+      deterministic: false
+    })
+    db.aggregate('mssqlite_avg', {
+      start: 'empty' as string,
+      step: (state, value) => averageStep(String(state), value as Argument, 1),
+      inverse: (state, value) => averageStep(String(state), value as Argument, -1),
+      result: state => averageResult(server, String(state), 32),
+      deterministic: false
+    })
+    db.aggregate('mssqlite_avg_bigint', {
+      start: 'empty' as string,
+      step: (state, value) => averageStep(String(state), value as Argument, 1),
+      inverse: (state, value) => averageStep(String(state), value as Argument, -1),
+      result: state => averageResult(server, String(state), 64),
       deterministic: false
     })
     define('mssqlite_cast_integer', (value, type, try_, numeric, variable) =>
