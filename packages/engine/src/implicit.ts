@@ -9,9 +9,26 @@ const conversion =
         `Conversion failed when converting the value '${String(value)}' to data type ${target}.`,
       number, 16, 1, { statementTerminating: true })
 
+const truncatedDecimal =
+  (source: string): bigint | undefined => {
+    const match = /^([+-]?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i.exec(source)
+    if (match === null) {
+      return undefined
+    }
+    const sign = match[1] === '-' ? '-' : ''
+    const whole = match[2] ?? ''
+    const fraction = match[3] ?? ''
+    const decimalAt = whole.length + Number(match[4] ?? 0)
+    if (decimalAt <= 0) {
+      return 0n
+    }
+    const digits = `${whole}${fraction}`.slice(0, decimalAt).padEnd(decimalAt, '0')
+    return BigInt(`${sign}${digits || '0'}`)
+  }
+
 /** @returns strict bounded SQL integer conversion. */
 export const integer =
-  (value: Value, target: string): Value => {
+  (value: Value, target: string, numericSource = false): Value => {
     if (value === null) {
       return null
     }
@@ -20,8 +37,16 @@ export const integer =
       result = value
     } else if (typeof value === 'number' && Number.isFinite(value)) {
       result = BigInt(Math.trunc(value))
+    } else if (typeof value === 'string' && value.trim() === '') {
+      result = 0n
     } else if (typeof value === 'string' && /^[+-]?\d+$/.test(value.trim())) {
       result = BigInt(value.trim())
+    } else if (typeof value === 'string' && numericSource) {
+      const truncated = truncatedDecimal(value.trim())
+      if (truncated === undefined) {
+        throw conversion(value, target)
+      }
+      result = truncated
     } else if (value instanceof Uint8Array) {
       return binaryInteger(value, target)
     } else {

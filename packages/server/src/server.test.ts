@@ -823,6 +823,34 @@ test('ASCII and CHAR expose Windows-1252 values and varchar metadata over tediou
   ])
 })
 
+test('integer cast coercion crosses literals, empty text, and decimal RPC input', async () => {
+  const result = await query(`
+    SELECT CAST(1.9 AS int) AS positive_value,
+      CAST(-1.9 AS int) AS negative_value,
+      CAST('' AS smallint) AS empty_value,
+      CAST('   ' AS bigint) AS spaces_value,
+      TRY_CAST('bad' AS int) AS attempted
+  `)
+  expect(result.rows).toEqual([ {
+    positive_value: 1,
+    negative_value: -1,
+    empty_value: 0,
+    spaces_value: '0',
+    attempted: null
+  } ])
+  expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'IntN', 2 ], [ 'IntN', 8 ], [ 'IntN', 4 ]
+  ])
+
+  const rpc = await query('SELECT CAST(@value AS int) AS value', [ {
+    name: 'value', type: TYPES.Decimal, value: 9.9,
+    options: { precision: 2, scale: 1 }
+  } ])
+  expect(rpc.rows).toEqual([ { value: 9 } ])
+  await expect(query('SELECT CAST(2147483648 AS int) AS value'))
+    .rejects.toMatchObject({ number: 8115 })
+})
+
 test('implicit type precedence crosses predicates, RPC parameters and result metadata', async () => {
   const result = await query(`
     SELECT

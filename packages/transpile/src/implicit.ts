@@ -334,7 +334,7 @@ export const coerce =
 
 const derived =
   (value: Ast.Expression): boolean =>
-    [ 'binaryOp', 'case' ].includes(value.kind)
+    [ 'binaryOp', 'case', 'cast', 'convert' ].includes(value.kind)
 
 /** @returns metadata hints for projections whose common result type is known. */
 export const selectHints =

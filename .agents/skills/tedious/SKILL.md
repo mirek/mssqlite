@@ -66,7 +66,10 @@ RPC parameter TYPE_INFO is semantically significant, not only a decoder hint:
 the server maps it to the scoped variable's T-SQL declaration so mixed-type
 predicates and assignments use SQL Server precedence. E2E tests should include
 a typed character parameter compared with a numeric expression and assert both
-the successful result and error 245 for invalid numeric text.
+the successful result and error 245 for invalid numeric text. Decimal RPC
+parameters cast to integer must use their declared numeric source type so the
+engine truncates toward zero; explicit bigint result metadata makes tedious
+surface even a small value such as zero as a string.
 
 ## Request API and events
 

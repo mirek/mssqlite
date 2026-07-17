@@ -195,7 +195,7 @@ test('plus resolves to add, concat or dynamic dispatch', () => {
   expect(scalarOf('name + \'x\'')).toBe('mssqlite_add("name", \'x\')')
   // A literal number + literal string is numeric addition in T-SQL, not concat.
   expect(scalarOf('3 + \'5\'')).toBe(
-    'mssqlite_arithmetic(\'+\', 3, mssqlite_cast_integer(\'5\', \'int\', 0), 32)')
+    'mssqlite_arithmetic(\'+\', 3, mssqlite_cast_integer(\'5\', \'int\', 0, 0, \'\'), 32)')
   expect(scalarOf('a + b')).toBe('mssqlite_add("a", "b")')
   expect(scalarOf('LEN(a) + 1')).toBe(
     'mssqlite_arithmetic(\'+\', length(rtrim("a")), 1, 32)')
@@ -273,7 +273,8 @@ test('catalog function rewrites', () => {
 })
 
 test('cast and convert', () => {
-  expect(scalarOf('CAST(x AS int)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
+  expect(scalarOf('CAST(x AS int)')).toBe('mssqlite_cast_integer("x", \'int\', 0, 0, \'\')')
+  expect(scalarOf('CAST(1.9 AS int)')).toBe('mssqlite_cast_integer(\'1.9\', \'int\', 0, 1, \'\')')
   expect(scalarOf('CAST(x AS nvarchar(50))'))
     .toBe('mssqlite_cast_character("x", \'nvarchar\', 50, 0)')
   expect(scalarOf('CAST(x AS varchar)'))
@@ -282,7 +283,7 @@ test('cast and convert', () => {
   expect(scalarOf('CAST(x AS bit)')).toBe('(CAST("x" AS NUMERIC) <> 0)')
   expect(scalarOf('CONVERT(varchar(10), d, 120)'))
     .toBe('mssqlite_cast_character(strftime(\'%Y-%m-%d %H:%M:%S\', "d"), \'varchar\', 10, 0)')
-  expect(scalarOf('CONVERT(int, x)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
+  expect(scalarOf('CONVERT(int, x)')).toBe('mssqlite_cast_integer("x", \'int\', 0, 0, \'\')')
   expect(scalarOf('DATALENGTH(CAST(x AS varchar(3)))'))
     .toBe('mssqlite_datalength(mssqlite_cast_character("x", \'varchar\', 3, 0), \'varchar\')')
   expect(scalarOf('ISNULL(CAST(NULL AS varchar(3)), \'abcdef\')'))

@@ -102,8 +102,10 @@ const items = executeBatch(s, `
   compile/name-resolution, THROW, severity 20+, and unsupported errors abort.
   XACT_ABORT ON rolls back and aborts qualifying runtime errors; RAISERROR
   ignores it. TRY/CATCH remains the inner interception boundary.
-  Integer CAST/CONVERT is strict (245 conversion, 8115 overflow), with TRY
-  variants returning NULL.
+  Integer CAST/CONVERT truncates finite numeric inputs toward zero, maps empty
+  character input to zero, and remains strict for invalid text (245) and range
+  overflow (8115); TRY variants return NULL only for those failures. Explicit
+  tinyint/smallint/int/bigint projections retain their declared TDS widths.
 - **Checked arithmetic** — integer `+ - * / %` preserves NULL and integer-
   division semantics while raising 8134 for zero divisors and 8115 for inferred
   int/bigint overflow. SUM checks int width, or bigint width when its argument

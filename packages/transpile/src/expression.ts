@@ -104,8 +104,12 @@ const cast =
       return Character.cast(inner, expression_.type, expression_.try_)
     }
     if (Type.category(expression_.type) === 'integer') {
+      const inferredSource = Implicit.typeOf(ctx, expression_.expression)
+      const numeric = [ 'integer', 'real', 'decimal', 'bit' ].includes(
+        Type.category(inferredSource ?? { name: '', args: [] }) ?? '')
+      const variable = expression_.expression.kind === 'variable' ? expression_.expression.name : ''
       return `mssqlite_cast_integer(${inner}, ${Quote.string(expression_.type.name)}, ` +
-        `${expression_.try_ ? 1 : 0})`
+        `${expression_.try_ ? 1 : 0}, ${numeric ? 1 : 0}, ${Quote.string(variable)})`
     }
     if (expression_.type.name === 'datetimeoffset') {
       const scale = typeof expression_.type.args[0] === 'number' ? expression_.type.args[0] : 7

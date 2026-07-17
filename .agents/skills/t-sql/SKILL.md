@@ -70,8 +70,9 @@ The language pipeline lives in three packages:
   `@@ROWCOUNT` is 0 after it. XACT_ABORT ON rolls back and aborts for qualifying
   runtime errors, but—as on SQL Server—does not change RAISERROR behavior.
   TRY/CATCH intercepts errors before this outer classification.
-  Integer CAST/CONVERT validates text and type bounds (245/8115); TRY variants
-  convert either failure to NULL.
+  Integer CAST/CONVERT truncates numeric/decimal inputs toward zero and treats
+  empty or whitespace-only character input as zero. Other invalid text and type
+  bounds retain 245/8115; TRY variants convert either failure to NULL.
 - Integer `+ - * / %` uses checked evaluation: NULL propagates, integer division
   truncates toward zero, zero divisors raise 8134, and inferred int/bigint bounds
   raise 8115. SUM defaults to SQL Server's int-width accumulator; explicitly
