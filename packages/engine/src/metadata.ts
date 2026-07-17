@@ -1,6 +1,7 @@
 import { objectIdOf, tableColumns, TypeRow, type ColumnRow } from '@mssqlite/catalog'
-import { Collation, TypeInfo } from '@mssqlite/tds'
+import { Collation, DataType, TypeInfo } from '@mssqlite/tds'
 import type { ColumnHint } from '@mssqlite/transpile'
+import type { TypeName } from '@mssqlite/tsql'
 import type { TableVariable, Value } from './session.ts'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 
@@ -14,6 +15,85 @@ export type Column = {
 
 export type t =
   Column
+
+const length =
+  (value: number | undefined, unicode = false): number | 'max' =>
+    value === undefined || value === TypeInfo.plpMarker ? 'max' : unicode ? value / 2 : value
+
+/** @returns a declared SQL type reconstructed from result metadata. */
+export const typeNameOfColumn =
+  (column: Column): TypeName.t => {
+    const info = column.typeInfo
+    switch (info.type) {
+      case DataType.DataType.int1:
+        return { name: 'tinyint', args: [] }
+      case DataType.DataType.int2:
+        return { name: 'smallint', args: [] }
+      case DataType.DataType.int4:
+        return { name: 'int', args: [] }
+      case DataType.DataType.int8:
+        return { name: 'bigint', args: [] }
+      case DataType.DataType.intN:
+        return { name: ({ 1: 'tinyint', 2: 'smallint', 4: 'int', 8: 'bigint' } as const)[
+          info.maxLength as 1 | 2 | 4 | 8] ?? 'int', args: [] }
+      case DataType.DataType.bit:
+      case DataType.DataType.bitN:
+        return { name: 'bit', args: [] }
+      case DataType.DataType.float4:
+        return { name: 'real', args: [] }
+      case DataType.DataType.float8:
+      case DataType.DataType.floatN:
+        return { name: info.maxLength === 4 ? 'real' : 'float', args: [] }
+      case DataType.DataType.decimalN:
+      case DataType.DataType.numericN:
+        return { name: 'decimal', args: [ info.precision ?? 18, info.scale ?? 0 ] }
+      case DataType.DataType.money4:
+        return { name: 'smallmoney', args: [] }
+      case DataType.DataType.money:
+      case DataType.DataType.moneyN:
+        return { name: info.maxLength === 4 ? 'smallmoney' : 'money', args: [] }
+      case DataType.DataType.datetime4:
+        return { name: 'smalldatetime', args: [] }
+      case DataType.DataType.datetime:
+      case DataType.DataType.datetimeN:
+        return { name: info.maxLength === 4 ? 'smalldatetime' : 'datetime', args: [] }
+      case DataType.DataType.dateN:
+        return { name: 'date', args: [] }
+      case DataType.DataType.timeN:
+        return { name: 'time', args: [ info.scale ?? 7 ] }
+      case DataType.DataType.datetime2N:
+        return { name: 'datetime2', args: [ info.scale ?? 7 ] }
+      case DataType.DataType.datetimeOffsetN:
+        return { name: 'datetimeoffset', args: [ info.scale ?? 7 ] }
+      case DataType.DataType.guid:
+        return { name: 'uniqueidentifier', args: [] }
+      case DataType.DataType.bigVarchar:
+      case DataType.DataType.text:
+        return { name: 'varchar', args: [ length(info.maxLength) ] }
+      case DataType.DataType.bigChar:
+        return { name: 'char', args: [ length(info.maxLength) ] }
+      case DataType.DataType.nvarchar:
+      case DataType.DataType.ntext:
+        return { name: 'nvarchar', args: [ length(info.maxLength, true) ] }
+      case DataType.DataType.nchar:
+        return { name: 'nchar', args: [ length(info.maxLength, true) ] }
+      case DataType.DataType.bigVarbinary:
+      case DataType.DataType.image:
+        return { name: 'varbinary', args: [ length(info.maxLength) ] }
+      case DataType.DataType.bigBinary:
+        return { name: 'binary', args: [ length(info.maxLength) ] }
+      case DataType.DataType.sqlVariant:
+        return { name: 'sql_variant', args: [] }
+      case DataType.DataType.xml:
+        return { name: 'xml', args: [] }
+      case DataType.DataType.json:
+        return { name: 'json', args: [] }
+      case DataType.DataType.udt:
+        return { name: info.udt?.name ?? 'varbinary', args: [] }
+      default:
+        return { name: 'nvarchar', args: [ 'max' ] }
+    }
+  }
 
 /** @returns TDS TYPE_INFO of a sys.columns catalog row. */
 export const typeInfoOfCatalogRow =

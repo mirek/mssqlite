@@ -235,4 +235,5 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 Native SQLite shortcuts that still leak through the T-SQL compatibility
 boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
 2025 differentials cover text comparison/collation and result metadata; the
-OPENJSON path and scalar JSON contracts from that audit are implemented.
+OPENJSON path, scalar JSON, and typed SELECT INTO contracts from that audit are
+implemented.

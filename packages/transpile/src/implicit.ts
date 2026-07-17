@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Collation from './collation.ts'
 import * as Type from './type.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
@@ -392,6 +393,101 @@ const nullable =
       default:
         return true
     }
+  }
+
+const selectIntoNullable =
+  (ctx: Context.t, value: Ast.Expression): boolean => {
+    switch (value.kind) {
+      case 'null':
+        return true
+      case 'number':
+      case 'string':
+      case 'binary':
+        return false
+      case 'column':
+        return Context.columnNullable(ctx, value.name) ?? true
+      case 'collate':
+        return selectIntoNullable(ctx, value.expression)
+      case 'cast':
+      case 'convert':
+      case 'unary':
+        return true
+      case 'binaryOp': {
+        const type = typeOf(ctx, value)
+        return value.operator === '+' &&
+          [ 'text', 'ntext' ].includes(Type.category(type ?? { name: '', args: [] }) ?? '') ?
+          selectIntoNullable(ctx, value.left) || selectIntoNullable(ctx, value.right) : true
+      }
+      case 'case':
+        return value.else_ === undefined ||
+          value.whens.some(when => selectIntoNullable(ctx, when.then)) ||
+          selectIntoNullable(ctx, value.else_)
+      case 'call': {
+        const name = value.name[value.name.length - 1]?.toLowerCase()
+        if ([ 'isnull', 'coalesce' ].includes(name ?? '')) {
+          return value.args.every(argument => selectIntoNullable(ctx, argument))
+        }
+        return true
+      }
+      default:
+        return true
+    }
+  }
+
+type IntoProjection = {
+  readonly name: string,
+  readonly type: TypeName.t,
+  readonly nullable: boolean,
+  readonly collation?: string
+}
+
+const intoTerm =
+  (select: Ast.Select): readonly IntoProjection[] | undefined => {
+    const ctx = Context.of()
+    return Context.withSourceTypes(ctx, select.from, () => {
+      const columns = select.items.map(item => {
+        if (item.kind !== 'expression') {
+          return undefined
+        }
+        const type = item.expression.kind === 'null' ? { name: 'int', args: [] } :
+          typeOf(ctx, item.expression)
+        if (type === undefined) {
+          return undefined
+        }
+        const collation = Collation.ofExpression(ctx, item.expression)
+        return {
+          name: item.alias ?? (item.expression.kind === 'column' ?
+            item.expression.name[item.expression.name.length - 1] ?? '' : ''),
+          type,
+          nullable: selectIntoNullable(ctx, item.expression),
+          ...collation === undefined ? {} : { collation }
+        }
+      })
+      return columns.some(column => column === undefined) ?
+        undefined : columns as readonly IntoProjection[]
+    })
+  }
+
+/** @returns typed target columns for SELECT INTO, including set-operation widening. */
+export const selectIntoHints =
+  (select: Ast.Select): readonly ColumnHint[] | undefined => {
+    const terms: Ast.Select[] = []
+    for (let term: Ast.Select | undefined = select; term !== undefined; term = term.union?.select) {
+      terms.push(term)
+    }
+    const projected = terms.map(intoTerm)
+    const first = projected[0]
+    if (first === undefined || projected.some(columns => columns === undefined || columns.length !== first.length)) {
+      return undefined
+    }
+    return first.map((column, index): ColumnHint => ({
+      name: column.name,
+      type: commonTypes(projected.flatMap(columns => columns?.[index]?.type ?? [])) ?? column.type,
+      nullable: projected.some(columns => columns?.[index]?.nullable !== false),
+      ...projected.flatMap(columns => columns?.[index]?.collation ?? [])[0] === undefined ? {} : {
+        collation: projected.flatMap(columns => columns?.[index]?.collation ?? [])[0]
+      }
+    }))
   }
 
 /** @returns metadata hints for projections whose common result type is known. */

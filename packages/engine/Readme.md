@@ -157,7 +157,11 @@ const items = executeBatch(s, `
   names query attached stores, and three-part procedure calls execute in the
   procedure's database. Catalogs, modules, sequences, rowversion, and settings
   are database-scoped; `sys.databases` remains server-wide and mirrored.
-- **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.
+- **SELECT INTO** — derives the target schema before row execution, preserving
+  expression names, SQL types/widths, nullability, collation, and eligible
+  direct-source identity seed/increment. The typed target is registered before
+  insertion, so an out-of-transaction row failure leaves the documented empty
+  table while an explicit rollback removes both schema and rows.
 - **VALUES table sources** — shape/name validation preserves errors 8155,
   8156, 8158, 8159 and 10709 before execution. Resolved variables and each
   column's SQL-precedence common type/nullability feed coercion and exact TDS
