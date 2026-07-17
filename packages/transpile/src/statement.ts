@@ -28,6 +28,8 @@ const sourceQualifiers =
         return new Set([ (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase() ])
       case 'derived':
         return new Set([ source.alias.toLowerCase() ])
+      case 'values':
+        return new Set([ source.alias.toLowerCase() ])
       case 'function':
         return new Set([ (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase() ])
       case 'pivot':
@@ -206,6 +208,21 @@ const topOneApply =
     return `${left} ${outer ? 'LEFT' : 'INNER'} JOIN ${right} ON ${expression(ctx, on)}`
   }
 
+const valuesSource =
+  (ctx: Context.t, source: Ast.TableSource & { kind: 'values' }): string => {
+    const names = source.columns ?? source.rows[0]?.map((_value, index) => `column${index + 1}`) ?? []
+    const rows = source.rows.map(row => `(${row.map((value, index) => {
+      const from = Implicit.typeOf(ctx, value)
+      const to = source.columnMetadata?.[index]?.type
+      const coerced = from === undefined || to === undefined || Implicit.same(from, to) ?
+        value : Implicit.coerce(value, from, to)
+      return expression(ctx, coerced)
+    }).join(', ')})`).join(', ')
+    const columns = names.map((name, index) =>
+      `column${index + 1} AS ${Quote.identifier(name)}`).join(', ')
+    return `(SELECT ${columns} FROM (VALUES ${rows})) AS ${Quote.identifier(source.alias)}`
+  }
+
 const tableSource =
   (ctx: Context.t, source: Ast.TableSource): string => {
     switch (source.kind) {
@@ -226,6 +243,8 @@ const tableSource =
         return TableFunction.source(ctx, source, expression)
       case 'derived':
         return `(${select(ctx, source.select)}) AS ${Quote.identifier(source.alias)}`
+      case 'values':
+        return valuesSource(ctx, source)
       case 'pivot':
         return TableTransform.pivot(ctx, source, tableSource, expression)
       case 'unpivot':
@@ -237,6 +256,9 @@ const tableSource =
             return source.right.select.top === undefined ?
               simpleDerivedApply(ctx, source.left, source.right, source.join === 'outerApply') :
               topOneApply(ctx, source.left, source.right, source.join === 'outerApply')
+          }
+          if (source.right.kind === 'values') {
+            return `${left} CROSS JOIN ${tableSource(ctx, source.right)}`
           }
           if (source.right.kind !== 'function') {
             return unsupported('APPLY requires a supported TVF or correlated SELECT TOP (1).')
@@ -426,6 +448,7 @@ const sourceAlias =
       case 'function':
         return source.alias ?? source.name[source.name.length - 1]
       case 'derived':
+      case 'values':
       case 'pivot':
       case 'unpivot':
         return source.alias
@@ -519,7 +542,8 @@ const coercedSet =
 
 const declaredSourceColumns =
   (source: Ast.TableSource): readonly Ast.SourceColumn[] | undefined =>
-    source.kind === 'table' ? source.columns : undefined
+    source.kind === 'table' ? source.columns :
+      source.kind === 'values' ? source.columnMetadata : undefined
 
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =

@@ -17,6 +17,7 @@ const database =
         operator === '/' ? a / b : a % b
     })
     db.function('mssqlite_decimal_cast', (value, _precision, _scale, _try) => value)
+    db.function('mssqlite_cast_character', (value, _type, _length, _try) => value)
     db.function('mssqlite_substring', (value, start, length) => {
       const source = String(value)
       const at = Number(start)
@@ -137,6 +138,20 @@ test('joins, subqueries and ctes execute', () => {
     WITH big AS (SELECT team_id FROM users GROUP BY team_id HAVING COUNT(*) > 1)
     SELECT name FROM teams WHERE id IN (SELECT team_id FROM big)
   `)).toEqual([ { name: 'red' } ])
+})
+
+test('values table sources execute in queries and joins', () => {
+  const db = database()
+  expect(all(db, `
+    SELECT source.value FROM (VALUES (1), (NULL), (2)) AS source(value)
+    ORDER BY source.value
+  `)).toEqual([ { value: null }, { value: 1 }, { value: 2 } ])
+  expect(all(db, `
+    SELECT left_.id, right_.label
+    FROM (VALUES (1), (2)) AS left_(id)
+    JOIN (VALUES (2, 'two'), (3, 'three')) AS right_(id, label)
+      ON right_.id = left_.id
+  `)).toEqual([ { id: 2, label: 'two' } ])
 })
 
 test('table-valued functions execute against real SQLite', () => {

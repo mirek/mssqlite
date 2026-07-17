@@ -328,6 +328,12 @@ const substituteSource =
         }
       case 'derived':
         return { ...source, select: substituteSelect(source.select, values) }
+      case 'values':
+        return {
+          ...source,
+          rows: source.rows.map(row =>
+            row.map(value => substituteExpression(value, values)))
+        }
       case 'pivot':
         return {
           ...source,
@@ -445,8 +451,58 @@ const inlineFunctionSource =
     }
   }
 
+const definitelyNotNull =
+  (value: Ast.Expression): boolean =>
+    [ 'number', 'string', 'binary' ].includes(value.kind)
+
+const resolveValuesSource =
+  (
+    session: Session,
+    source: Ast.TableSource & { kind: 'values' },
+    visible?: Ast.TableSource
+  ): Ast.TableSource => {
+    const width = source.rows[0]?.length ?? 0
+    if (source.rows.some(row => row.length !== width)) {
+      throw new MssqlError(
+        'The number of columns for each row in a table value constructor must be the same.',
+        10709, 16)
+    }
+    if (source.columns === undefined) {
+      throw new MssqlError(
+        `No column name was specified for column 1 of '${source.alias}'.`, 8155, 16, 2)
+    }
+    if (width > source.columns.length) {
+      throw new MssqlError(
+        `'${source.alias}' has more columns than were specified in the column list.`, 8158, 16)
+    }
+    if (width < source.columns.length) {
+      throw new MssqlError(
+        `'${source.alias}' has fewer columns than were specified in the column list.`, 8159, 16)
+    }
+    const names = new Set<string>()
+    for (const name of source.columns) {
+      if (names.has(name.toLowerCase())) {
+        throw new MssqlError(
+          `The column '${name}' was specified multiple times for '${source.alias}'.`, 8156, 16)
+      }
+      names.add(name.toLowerCase())
+    }
+    const rows = source.rows.map(row => row.map(value => resolveExpression(session, value)))
+    const ctx = Transpile.Context.of()
+    const columnMetadata = Transpile.Context.withSourceTypes(ctx, visible, () =>
+      source.columns?.map((name, index): Ast.SourceColumn => {
+        const values = rows.map(row => row[index] as Ast.Expression)
+        return {
+          name,
+          type: Transpile.Implicit.common(ctx, values) ?? { name: 'int', args: [] },
+          nullable: values.some(value => !definitelyNotNull(value))
+        }
+      }) ?? [])
+    return { ...source, rows, columnMetadata }
+  }
+
 const resolveTableSource =
-  (session: Session, source: Ast.TableSource): Ast.TableSource => {
+  (session: Session, source: Ast.TableSource, visible?: Ast.TableSource): Ast.TableSource => {
     switch (source.kind) {
       case 'table': {
         const transitionAlias = source.name.length === 1 &&
@@ -475,6 +531,8 @@ const resolveTableSource =
         }
       case 'derived':
         return { ...source, select: resolveSelect(session, source.select) }
+      case 'values':
+        return resolveValuesSource(session, source, visible)
       case 'pivot':
         return {
           ...source,
@@ -487,13 +545,16 @@ const resolveTableSource =
         }
       case 'unpivot':
         return { ...source, source: resolveTableSource(session, source.source) }
-      case 'join':
+      case 'join': {
+        const left = resolveTableSource(session, source.left, visible)
+        const right = resolveTableSource(session, source.right, left)
         return {
           ...source,
-          left: resolveTableSource(session, source.left),
-          right: resolveTableSource(session, source.right),
+          left,
+          right,
           ...source.on === undefined ? {} : { on: resolveExpression(session, source.on) }
         }
+      }
       default:
         return source
     }

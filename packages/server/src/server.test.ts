@@ -724,6 +724,28 @@ test('merge validation errors retain SQL Server TDS metadata and atomicity', asy
     .toEqual([ { id: 1, value: 10 } ])
 })
 
+test('values table sources preserve common wire types and conversion errors', async () => {
+  const result = await query(`
+    SELECT source.value, source.label
+    FROM (VALUES
+      (CAST(1 AS TINYINT), N'a'),
+      (@input, N'hello'),
+      (NULL, NULL)
+    ) AS source(value, label)
+    ORDER BY source.value
+  `, [ { name: 'input', type: TYPES.BigInt, value: 2 } ])
+  expect(result.rows.map(row => row.label)).toEqual([ null, 'a', 'hello' ])
+  expect(result.columns).toEqual([
+    { name: 'value', type: 'IntN', length: 8 },
+    { name: 'label', type: 'NVarChar', length: 10 }
+  ])
+  await expect(query(
+    'SELECT value FROM (VALUES (1), (\'not an int\')) AS source(value)'))
+    .rejects.toMatchObject({ number: 245, class: 16, state: 1 })
+  await expect(query('SELECT * FROM (VALUES (1)) AS source'))
+    .rejects.toMatchObject({ number: 8155, class: 16, state: 2 })
+})
+
 test('statement errors and successful rows stay ordered over tedious', async () => {
   await query('CREATE TABLE wire_error_order (id INT PRIMARY KEY); INSERT INTO wire_error_order VALUES (1)')
   const events = await new Promise<string[]>((resolve, reject) => {

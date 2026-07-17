@@ -138,6 +138,10 @@ const items = executeBatch(s, `
   procedure's database. Catalogs, modules, sequences, rowversion, and settings
   are database-scoped; `sys.databases` remains server-wide and mirrored.
 - **SELECT INTO** — `CREATE TABLE … AS SELECT` plus catalog registration.
+- **VALUES table sources** — shape/name validation preserves errors 8155,
+  8156, 8158, 8159 and 10709 before execution. Resolved variables and each
+  column's SQL-precedence common type/nullability feed coercion and exact TDS
+  metadata across FROM, joins/APPLY, nested queries, and MERGE.
 - **OUTPUT** — INSERT/DELETE (and inserted-only UPDATE) run the
   transpiled `RETURNING` and emit the rows as a result set. UPDATE
   reading `deleted.` values snapshots the affected rows into a temp

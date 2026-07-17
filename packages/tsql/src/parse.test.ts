@@ -239,6 +239,27 @@ test('derived tables and subqueries', () => {
   expect(parseExpression('EXISTS (SELECT 1 FROM t)')).toMatchObject({ kind: 'exists' })
 })
 
+test('values table sources preserve rows, aliases and expressions', () => {
+  expect(parseStatement(`
+    SELECT source.value, source.label
+    FROM (VALUES (1, N'a'), (@value + 1, NULL)) AS source(value, label)
+  `)).toMatchObject({
+    from: {
+      kind: 'values',
+      alias: 'source',
+      columns: [ 'value', 'label' ],
+      rows: [
+        [ { kind: 'number', value: '1' }, { kind: 'string', value: 'a' } ],
+        [ { kind: 'binaryOp' }, { kind: 'null' } ]
+      ]
+    }
+  })
+  expect(parseStatement('SELECT * FROM (VALUES (1, 2), (3)) AS source(a, b)'))
+    .toMatchObject({ from: { kind: 'values', rows: [ [ {}, {} ], [ {} ] ] } })
+  expect(() => parseStatement('SELECT * FROM (VALUES (1))')).toThrow(ParseError)
+  expect(() => parseStatement('SELECT * FROM (VALUES) AS source(value)')).toThrow(ParseError)
+})
+
 test('union all with order by applies to whole', () => {
   const statement = parseStatement('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n')
   expect(statement).toMatchObject({
@@ -921,7 +942,7 @@ test('merge with matched and not matched arms', () => {
   })
 })
 
-test('merge using values desugars to an aliased union chain', () => {
+test('merge reuses the values table-source form', () => {
   const statement = parseStatement(`
     MERGE t WITH (HOLDLOCK)
     USING (VALUES (1, N'a'), (2, N'b')) AS s (id, name)
@@ -932,16 +953,10 @@ test('merge using values desugars to an aliased union chain', () => {
     kind: 'merge',
     target: [ 't' ],
     source: {
-      kind: 'derived',
+      kind: 'values',
       alias: 's',
-      select: {
-        kind: 'select',
-        items: [
-          { kind: 'expression', expression: { kind: 'number', value: '1' }, alias: 'id' },
-          { kind: 'expression', expression: { kind: 'string', value: 'a' }, alias: 'name' }
-        ],
-        union: { kind: 'unionAll', select: { items: [ {}, {} ] } }
-      }
+      columns: [ 'id', 'name' ],
+      rows: [ [ { kind: 'number' }, { kind: 'string' } ], [ {}, {} ] ]
     },
     whens: [ { match: 'notMatchedByTarget', action: { kind: 'insert' } } ]
   })
@@ -1008,9 +1023,9 @@ test('merge rejects malformed arms', () => {
     'MERGE t USING s ON t.id = s.id WHEN MATCHED THEN DELETE'
   )).toThrow('A MERGE statement must be terminated by a semi-colon (;).')
   expect(() => parseStatement('MERGE t USING s ON t.id = s.id;')).toThrow(ParseError)
-  expect(() => parseStatement(
+  expect(parseStatement(
     'MERGE t USING (VALUES (1, 2)) AS s (a) ON t.a = s.a WHEN MATCHED THEN DELETE;'
-  )).toThrow(ParseError)
+  )).toMatchObject({ source: { kind: 'values', columns: [ 'a' ] } })
   expect(() => parseStatement(
     'MERGE t USING s ON t.id = s.id WHEN NOT MATCHED THEN DELETE'
   )).toThrow(ParseError)

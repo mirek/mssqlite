@@ -359,12 +359,35 @@ const derived =
   (value: Ast.Expression): boolean =>
     [ 'binaryOp', 'call', 'case', 'cast', 'convert' ].includes(value.kind)
 
+const containsValues =
+  (source: Ast.TableSource | undefined): boolean =>
+    source?.kind === 'values' ||
+    (source?.kind === 'join' && (containsValues(source.left) || containsValues(source.right)))
+
+const nullable =
+  (ctx: Context.t, value: Ast.Expression): boolean => {
+    switch (value.kind) {
+      case 'number':
+      case 'string':
+      case 'binary':
+        return false
+      case 'column':
+        return Context.columnNullable(ctx, value.name) ?? true
+      case 'call': {
+        const name = value.name[value.name.length - 1]?.toLowerCase()
+        return ![ 'count', 'count_big' ].includes(name ?? '')
+      }
+      default:
+        return true
+    }
+  }
+
 /** @returns metadata hints for projections whose common result type is known. */
 export const selectHints =
   (select: Ast.Select): readonly ColumnHint[] | undefined => {
     const ctx = Context.of()
     return Context.withSourceTypes(ctx, select.from, () => {
-      let hasDerived = false
+      let hasDerived = containsValues(select.from)
       const hints = select.items.map(item => {
         if (item.kind !== 'expression') {
           return undefined
@@ -374,14 +397,11 @@ export const selectHints =
         if (type === undefined) {
           return undefined
         }
-        const callName = item.expression.kind === 'call' ?
-          item.expression.name[item.expression.name.length - 1]?.toLowerCase() : undefined
         return {
           name: item.alias ?? (item.expression.kind === 'column' ?
             item.expression.name[item.expression.name.length - 1] ?? '' : ''),
           type,
-          nullable: item.expression.kind === 'null' ||
-            (callName !== undefined && ![ 'count', 'count_big' ].includes(callName))
+          nullable: nullable(ctx, item.expression)
         }
       })
       return !hasDerived || hints.some(hint => hint === undefined) ?

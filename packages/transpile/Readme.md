@@ -81,6 +81,10 @@ rendered statement reports the variables it binds.
   semantics, OUTER uses LEFT/NULL-extension semantics. Other TVFs, complex
   derived queries, and star projection over rewritten top-one sources fail
   cleanly rather than exposing helper columns or changing cardinality.
+- **VALUES table sources** — typed rows lower to native VALUES wrapped by a
+  naming SELECT, with explicit SQL-precedence coercions. The same
+  renderer covers FROM, joins, uncorrelated APPLY, CTE/subquery bodies, and
+  MERGE USING without depending on SQLite's generated `columnN` names.
 - **PIVOT / UNPIVOT** — PIVOT lowers to conditional aggregates grouped by
   every non-value/non-pivot input column. UNPIVOT materializes its source
   once and expands listed columns with `UNION ALL`, dropping NULL values.

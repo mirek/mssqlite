@@ -73,6 +73,8 @@ const sourceMetadata =
     switch (source.kind) {
       case 'table':
         return source.columns
+      case 'values':
+        return source.columnMetadata
       case 'derived': {
         const input = source.select.from === undefined ? [] : sourceMetadata(source.select.from)
         if (input === undefined) {
