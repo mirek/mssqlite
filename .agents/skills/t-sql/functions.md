@@ -200,9 +200,9 @@ All deterministic.
 | DATEDIFF | `DATEDIFF(part, start, end)` | int | Yes | Count datepart boundaries crossed. Can overflow (use DATEDIFF_BIG for bigint). |
 | DATEPART | `DATEPART(part, date)` | int | No | Integer value of datepart. weekday depends on DATEFIRST. |
 | DATENAME | `DATENAME(part, date)` | nvarchar | No | String name (month/weekday) or number as string. Language-dependent. |
-| DATEFROMPARTS | `DATEFROMPARTS(y, m, d)` | date | Yes | Construct date. Error if invalid. |
+| DATEFROMPARTS | `DATEFROMPARTS(y, m, d)` | date | Yes | NULL if any argument is NULL; invalid ranges raise 289 state 1. |
 | DATETIME2FROMPARTS | `DATETIME2FROMPARTS(y,m,d,h,mi,s,frac,prec)` | datetime2(prec) | Yes | All args required. |
-| DATETIMEFROMPARTS | `DATETIMEFROMPARTS(y,m,d,h,mi,s,ms)` | datetime | Yes | ms range 0-999. |
+| DATETIMEFROMPARTS | `DATETIMEFROMPARTS(y,m,d,h,mi,s,ms)` | datetime | Yes | NULL if any argument is NULL; invalid date/time or ms outside 0-999 raises 289 state 3. |
 
 For `datetimeoffset`, DATEADD modifies local civil fields and preserves the
 stored offset (it does not apply DST rules). DATEDIFF first accounts for the

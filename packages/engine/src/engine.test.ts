@@ -1656,6 +1656,67 @@ test('date and string udfs through full pipeline', () => {
   ])
 })
 
+test('date constructors and conversions validate civil values and retain metadata', () => {
+  const s = open()
+  const constructed = rowsOf(executeBatch(s, `
+    SELECT
+      DATEFROMPARTS(2024, 2, 29) AS date_value,
+      DATETIMEFROMPARTS(2024, 2, 29, 1, 2, 3, 4) AS datetime_value,
+      DATETIMEFROMPARTS(2024, 2, 29, 1, 2, 3, 999) AS rounded_datetime,
+      DATEFROMPARTS(NULL, 2, 1) AS null_date,
+      DATETIMEFROMPARTS(2024, 2, 1, NULL, 2, 3, 4) AS null_datetime
+  `))
+  expect(constructed.rows).toEqual([ [
+    '2024-02-29', '2024-02-29 01:02:03.003', '2024-02-29 01:02:04.000', null, null
+  ] ])
+  expect(constructed.columns.map(column => column.typeInfo)).toEqual([
+    { type: DataType.DataType.dateN },
+    { type: DataType.DataType.datetimeN, maxLength: 8 },
+    { type: DataType.DataType.datetimeN, maxLength: 8 },
+    { type: DataType.DataType.dateN },
+    { type: DataType.DataType.datetimeN, maxLength: 8 }
+  ])
+
+  expect(() => executeBatch(s, 'SELECT DATEFROMPARTS(2023, 2, 29)'))
+    .toThrowError(expect.objectContaining({ number: 289, severity: 16, state: 1 }) as Error)
+  expect(() => executeBatch(s, 'SELECT DATETIMEFROMPARTS(2024, 2, 30, 1, 2, 3, 4)'))
+    .toThrowError(expect.objectContaining({ number: 289, severity: 16, state: 3 }) as Error)
+  expect(() => executeBatch(s, 'SELECT DATETIMEFROMPARTS(1, 1, 1, 0, 0, 0, 0)'))
+    .toThrowError(expect.objectContaining({ number: 289, state: 3 }) as Error)
+  expect(() => executeBatch(s, 'SELECT DATETIMEFROMPARTS(9999, 12, 31, 23, 59, 59, 999)'))
+    .toThrowError(expect.objectContaining({ number: 289, state: 3 }) as Error)
+  expect(() => executeBatch(s, 'SELECT CAST(\'2023-02-29\' AS date)'))
+    .toThrowError(expect.objectContaining({ number: 241, severity: 16, state: 1 }) as Error)
+
+  const converted = rowsOf(executeBatch(s, `
+    SELECT
+      CAST('0001-01-01' AS date) AS minimum_date,
+      TRY_CAST('2023-02-29' AS date) AS attempted_date,
+      TRY_CONVERT(datetime2, '2024-13-01') AS attempted_datetime
+  `))
+  expect(converted.rows).toEqual([ [ '0001-01-01', null, null ] ])
+  expect(converted.columns.map(column => column.typeInfo.type)).toEqual([
+    DataType.DataType.dateN, DataType.DataType.dateN, DataType.DataType.datetime2N
+  ])
+
+  executeBatch(s, `
+    CREATE TABLE temporal_writes (
+      id INT PRIMARY KEY,
+      value DATE DEFAULT ('2023-02-29')
+    );
+    INSERT INTO temporal_writes VALUES (1, '2024-02-29');
+  `)
+  expect(() => executeBatch(s, 'INSERT INTO temporal_writes (id) VALUES (2)'))
+    .toThrowError(expect.objectContaining({ number: 241 }) as Error)
+  expect(() => executeBatch(s, 'UPDATE temporal_writes SET value = \'2023-02-29\' WHERE id = 1'))
+    .toThrowError(expect.objectContaining({ number: 241 }) as Error)
+  expect(() => executeSql(s, 'INSERT INTO temporal_writes VALUES (3, @value)', [
+    { name: '@value', value: '2023-02-29' }
+  ])).toThrowError(expect.objectContaining({ number: 241 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT id, value FROM temporal_writes')).rows)
+    .toEqual([ [ 1, '2024-02-29' ] ])
+})
+
 test('string udf edge cases match SQL Server values and errors', () => {
   const s = open()
   const values = rowsOf(executeBatch(s, `

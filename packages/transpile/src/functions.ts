@@ -102,11 +102,8 @@ const handlers: Record<string, Handler> = {
       `date(${arg(call, render, 0)}, 'start of month', '+1 month', '-1 day')` :
       `mssqlite_eomonth(${arg(call, render, 0)}, ${arg(call, render, 1)})`,
   datefromparts: (call, render) =>
-    `printf('%04d-%02d-%02d', ${args(call, render).join(', ')})`,
-  datetimefromparts: (call, render) => {
-    const [ year, month, day, hour, minute, second, millisecond ] = args(call, render)
-    return `printf('%04d-%02d-%02d %02d:%02d:%02d.%03d', ${year}, ${month}, ${day}, ${hour}, ${minute}, ${second}, ${millisecond})`
-  },
+    `mssqlite_datefromparts(${args(call, render).join(', ')})`,
+  datetimefromparts: fixed('mssqlite_datetimefromparts'),
   isdate: fixed('mssqlite_isdate'),
   // Strings.
   len: fixed('mssqlite_len'),

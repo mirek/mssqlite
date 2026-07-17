@@ -1085,6 +1085,36 @@ test('functions over the wire', async () => {
   ])
 })
 
+test('date validation and native constructor metadata cross tedious', async () => {
+  const values = await query(`
+    SELECT
+      DATEFROMPARTS(2024, 2, 29) AS date_value,
+      DATETIMEFROMPARTS(2024, 2, 29, 1, 2, 3, 4) AS datetime_value,
+      TRY_CAST('2023-02-29' AS date) AS attempted_value,
+      DATEFROMPARTS(NULL, 2, 1) AS null_value
+  `)
+  expect(values.columns.map(column => column.type)).toEqual([
+    'Date', 'DateTimeN', 'Date', 'Date'
+  ])
+  expect(values.rows[0]?.date_value).toBeInstanceOf(Date)
+  expect(values.rows[0]?.datetime_value).toBeInstanceOf(Date)
+  expect(values.rows[0]?.attempted_value).toBeNull()
+  expect(values.rows[0]?.null_value).toBeNull()
+
+  await expect(query('SELECT DATEFROMPARTS(2023, 2, 29)'))
+    .rejects.toMatchObject({ number: 289, class: 16, state: 1 })
+  await expect(query('SELECT DATETIMEFROMPARTS(2024, 2, 30, 1, 2, 3, 4)'))
+    .rejects.toMatchObject({ number: 289, class: 16, state: 3 })
+  await expect(query('SELECT CAST(\'2023-02-29\' AS date)'))
+    .rejects.toMatchObject({ number: 241, class: 16, state: 1 })
+
+  await query('CREATE TABLE wire_dates (id INT PRIMARY KEY, value DATE)')
+  await expect(query('INSERT INTO wire_dates VALUES (1, \'2023-02-29\')'))
+    .rejects.toMatchObject({ number: 241, class: 16, state: 1 })
+  expect((await query('SELECT COUNT(*) AS count FROM wire_dates')).rows)
+    .toEqual([ { count: 0 } ])
+})
+
 test('table-valued functions over the wire include empty inputs', async () => {
   const split = await query(`
     SELECT value, ordinal

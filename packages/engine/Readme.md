@@ -120,6 +120,12 @@ const items = executeBatch(s, `
   INSERT/UPDATE/MERGE assignments; conversion failures retain 245/241/8114/
   8169/8115 and incompatible operands raise 206/402 before SQLite affinity can
   change the comparison.
+- **Date/time validation** — ordinary temporal casts and declared storage use
+  proleptic civil-calendar validation instead of SQLite normalization. Invalid
+  CAST/default/variable/RPC/DML values raise 241, TRY_CAST/TRY_CONVERT return
+  NULL, and years 0001-9999 remain valid. DATEFROMPARTS and
+  DATETIMEFROMPARTS propagate any NULL component, validate all ranges with 289,
+  and expose native date/datetime result metadata.
 - **IDENTITY** — each database owns exact bigint-backed state hydrated from
   `sys.identity_columns`. INSERT, MERGE, table variables, and bulk load honor
   signed seed/increment definitions independently of SQLite rowid. Allocation

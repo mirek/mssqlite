@@ -614,6 +614,13 @@ export const registerFunctions =
     })
     define('mssqlite_cast_integer', (value, type, try_, numeric, variable) =>
       castInteger(server, value, type, try_, numeric, variable))
+    define('mssqlite_temporal_cast', (value, target, try_) =>
+      Implicit.tryTemporal(value, text(target), Number(try_) !== 0) as Argument)
+    define('mssqlite_datefromparts', (year, month, day) =>
+      Implicit.dateFromParts(year, month, day) as Argument)
+    define('mssqlite_datetimefromparts', (year, month, day, hour, minute, second, millisecond) =>
+      Implicit.datetimeFromParts(
+        year, month, day, hour, minute, second, millisecond) as Argument)
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]

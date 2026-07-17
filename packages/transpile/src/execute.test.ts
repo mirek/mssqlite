@@ -18,6 +18,16 @@ const database =
     })
     db.function('mssqlite_decimal_cast', (value, _precision, _scale, _try) => value)
     db.function('mssqlite_cast_character', (value, _type, _length, _try) => value)
+    db.function('mssqlite_temporal_cast', (value, _type, _try) => value)
+    db.function('mssqlite_datefromparts', (year, month, day) =>
+      year === null || month === null || day === null ? null :
+        `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+    db.function('mssqlite_datetimefromparts',
+      (year, month, day, hour, minute, second, millisecond) =>
+        [ year, month, day, hour, minute, second, millisecond ].some(value => value === null) ? null :
+          `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ` +
+          `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:` +
+          `${String(second).padStart(2, '0')}.${String(millisecond).padStart(3, '0')}`)
     db.function('mssqlite_substring', (value, start, length) => {
       const source = String(value)
       const at = Number(start)
