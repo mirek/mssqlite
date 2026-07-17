@@ -210,6 +210,7 @@ const nullable =
         return Context.columnNullable(ctx, value.name) ?? true
       case 'cast':
       case 'convert':
+        return true
       case 'collate':
         return nullable(ctx, value.expression)
       case 'call':

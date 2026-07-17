@@ -69,6 +69,12 @@ rendered statement reports the variables it binds.
   also carry static or variable-declaration source type into the UDF so numeric
   values truncate toward zero while decimal-looking character text still raises
   245; projection hints retain the requested integer wire width.
+- **Scalar projection descriptors** — literals, NULL, casts, CASE, common
+  operators, aggregates/window functions, and supported scalar built-ins share
+  one type/nullability/collation inference path. It preserves character and
+  binary widths, decimal precision/scale, temporal scale, fixed families, and
+  SQL Server's nullable-family metadata without allowing one specialized item
+  to describe an unrelated projection.
 - **SELECT INTO projection hints** — every named expression with a known type
   contributes its exact target descriptor; set-operation branches widen through
   the same precedence table and combine nullability before the engine creates

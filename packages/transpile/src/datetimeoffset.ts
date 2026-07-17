@@ -79,7 +79,8 @@ export const selectHints =
         return type === undefined ? undefined : {
           name: nameOf(item),
           type,
-          nullable: item.expression.kind === 'null'
+          nullable: item.expression.kind === 'null' ||
+            item.expression.kind === 'cast' || item.expression.kind === 'convert'
         }
       })
       return !hasDateTimeOffset || hints.some(hint => hint === undefined) ?

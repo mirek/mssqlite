@@ -112,7 +112,7 @@ export const numericType =
       case 'collate':
         return numericType(ctx, value.expression)
       case 'binaryOp': {
-        const common = Implicit.typeOf(ctx, value)
+        const common = Implicit.common(ctx, [ value.left, value.right ])
         const commonShape = common === undefined ? undefined : shapeOf(common)
         const left = numericType(ctx, value.left) ?? commonShape
         const right = numericType(ctx, value.right) ?? commonShape

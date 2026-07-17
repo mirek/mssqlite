@@ -27,9 +27,152 @@ test('select constants with metadata', () => {
   const result = rowsOf(executeBatch(s, 'SELECT 1 AS n, \'x\' AS t, 1.5 AS f, NULL AS z'))
   expect(result.columns.map(column => column.name)).toEqual([ 'n', 't', 'f', 'z' ])
   expect(result.columns[0]?.typeInfo.type).toBe(DataType.DataType.intN)
-  expect(result.columns[1]?.typeInfo.type).toBe(DataType.DataType.nvarchar)
+  expect(result.columns[1]?.typeInfo.type).toBe(DataType.DataType.bigVarchar)
   expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.decimalN)
   expect(result.rows).toEqual([ [ 1, 'x', '1.5', null ] ])
+})
+
+test('scalar projections retain exact SQL types, widths, scales and nullability', () => {
+  // Compatibility matrix checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const values = rowsOf(executeBatch(s, `
+    SELECT NULL AS null_value, 1 AS int_value, 2147483648 AS decimal_value,
+      1.25 AS decimal_fraction, N'ok' AS ntext_value, 'ok' AS text_value,
+      0x0102 AS binary_value, CAST(1 AS tinyint) AS tiny_value,
+      CAST(1 AS bigint) AS big_value, CAST(1 AS bit) AS bit_value,
+      CAST('x' AS char(3)) AS char_value, CAST(N'x' AS nchar(3)) AS nchar_value,
+      CAST('x' AS varchar(max)) AS max_value, CAST('2020-01-01' AS date) AS date_value,
+      CAST('12:00' AS time(3)) AS time_value,
+      CAST('2020-01-01' AS datetime2(4)) AS datetime2_value,
+      CAST('2020-01-01 +01:00' AS datetimeoffset(2)) AS offset_value,
+      CAST(NULL AS sql_variant) AS variant_value, CAST('<x/>' AS xml) AS xml_value
+  `))
+  expect(values.columns.map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength,
+    column.typeInfo.precision, column.typeInfo.scale, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.intN, 4, undefined, undefined, true ],
+    [ DataType.DataType.intN, 4, undefined, undefined, false ],
+    [ DataType.DataType.decimalN, 9, 10, 0, false ],
+    [ DataType.DataType.decimalN, 5, 3, 2, false ],
+    [ DataType.DataType.nvarchar, 4, undefined, undefined, false ],
+    [ DataType.DataType.bigVarchar, 2, undefined, undefined, false ],
+    [ DataType.DataType.bigVarbinary, 2, undefined, undefined, false ],
+    [ DataType.DataType.intN, 1, undefined, undefined, true ],
+    [ DataType.DataType.intN, 8, undefined, undefined, true ],
+    [ DataType.DataType.bitN, 1, undefined, undefined, true ],
+    [ DataType.DataType.bigChar, 3, undefined, undefined, true ],
+    [ DataType.DataType.nchar, 6, undefined, undefined, true ],
+    [ DataType.DataType.bigVarchar, 65535, undefined, undefined, true ],
+    [ DataType.DataType.dateN, undefined, undefined, undefined, true ],
+    [ DataType.DataType.timeN, undefined, undefined, 3, true ],
+    [ DataType.DataType.datetime2N, undefined, undefined, 4, true ],
+    [ DataType.DataType.datetimeOffsetN, undefined, undefined, 2, true ],
+    [ DataType.DataType.sqlVariant, 8016, undefined, undefined, true ],
+    [ DataType.DataType.xml, undefined, undefined, undefined, true ]
+  ])
+
+  const declared = rowsOf(executeBatch(s, `
+    SELECT CAST(1 AS smallint) AS small_value, CAST(1 AS real) AS real_value,
+      CAST(1 AS float) AS float_value, CAST(1 AS money) AS money_value,
+      CAST(1 AS smallmoney) AS smallmoney_value, CAST(0x01 AS binary(2)) AS binary_value,
+      CAST('2020-01-01' AS smalldatetime) AS smalldatetime_value,
+      CAST('2020-01-01' AS datetime) AS datetime_value,
+      CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier) AS guid_value
+  `))
+  expect(declared.columns.map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.intN, 2, true ],
+    [ DataType.DataType.floatN, 4, true ],
+    [ DataType.DataType.floatN, 8, true ],
+    [ DataType.DataType.moneyN, 8, true ],
+    [ DataType.DataType.moneyN, 4, true ],
+    [ DataType.DataType.bigBinary, 2, true ],
+    [ DataType.DataType.datetimeN, 4, true ],
+    [ DataType.DataType.datetimeN, 8, true ],
+    [ DataType.DataType.guid, 16, true ]
+  ])
+
+  const functions = rowsOf(executeBatch(s, `
+    SELECT GETDATE() AS getdate_value, SYSDATETIME() AS sysdatetime_value,
+      DATEADD(day, 1, CAST('2020-01-01' AS date)) AS dateadd_value,
+      EOMONTH('2020-01-01') AS eomonth_value,
+      DATENAME(month, '2020-01-01') AS datename_value, NEWID() AS guid_value,
+      ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS row_value,
+      ABS(CAST(-1.2 AS decimal(5,1))) AS abs_value,
+      CEILING(CAST(1.2 AS decimal(5,1))) AS ceiling_value,
+      SIGN(CAST(1.2 AS decimal(5,1))) AS sign_value, SQRT(4) AS sqrt_value,
+      ISNULL(CAST(NULL AS varchar(3)), 'x') AS isnull_value,
+      COALESCE(CAST(NULL AS varchar(3)), 'long') AS coalesce_value,
+      CONCAT('a', N'b') AS concat_value, QUOTENAME('x') AS quote_value
+  `))
+  expect(functions.columns.map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength,
+    column.typeInfo.precision, column.typeInfo.scale, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.datetimeN, 8, undefined, undefined, false ],
+    [ DataType.DataType.datetime2N, undefined, undefined, 7, false ],
+    [ DataType.DataType.dateN, undefined, undefined, undefined, true ],
+    [ DataType.DataType.dateN, undefined, undefined, undefined, true ],
+    [ DataType.DataType.nvarchar, 60, undefined, undefined, true ],
+    [ DataType.DataType.guid, 16, undefined, undefined, true ],
+    [ DataType.DataType.intN, 8, undefined, undefined, true ],
+    [ DataType.DataType.decimalN, 5, 5, 1, true ],
+    [ DataType.DataType.decimalN, 5, 5, 0, true ],
+    [ DataType.DataType.decimalN, 5, 5, 1, true ],
+    [ DataType.DataType.floatN, 8, undefined, undefined, true ],
+    [ DataType.DataType.bigVarchar, 3, undefined, undefined, false ],
+    [ DataType.DataType.bigVarchar, 4, undefined, undefined, false ],
+    [ DataType.DataType.nvarchar, 4, undefined, undefined, false ],
+    [ DataType.DataType.nvarchar, 516, undefined, undefined, true ]
+  ])
+
+  const logical = rowsOf(executeBatch(s, `
+    DECLARE @predicate bit = 1
+    SELECT IIF(@predicate = 1, 'x', 'long') AS iif_value,
+      CHOOSE(1, 'x', 'long') AS choose_value,
+      NULLIF(CAST(1 AS int), 2) AS nullif_value,
+      SERVERPROPERTY('EngineEdition') AS property_value,
+      OBJECT_DEFINITION(1) AS definition_value
+  `))
+  expect(logical.rows[0]?.slice(0, 3)).toEqual([ 'x', 'x', 1 ])
+  expect(SqlVariant.decode(logical.rows[0]?.[3] as Uint8Array).value).toBe(4)
+  expect(logical.columns.map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.bigVarchar, 4, false ],
+    [ DataType.DataType.bigVarchar, 4, true ],
+    [ DataType.DataType.intN, 4, true ],
+    [ DataType.DataType.sqlVariant, 8016, true ],
+    [ DataType.DataType.nvarchar, 65535, true ]
+  ])
+
+  const empty = rowsOf(executeBatch(s, `
+    SELECT 0x0102 AS binary_value, GETDATE() AS date_value, NEWID() AS guid_value,
+      ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS row_value
+    WHERE 1 = 0
+  `))
+  expect(empty.rows).toEqual([])
+  expect(empty.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ])).toEqual([
+    [ DataType.DataType.bigVarbinary, 2 ], [ DataType.DataType.datetimeN, 8 ],
+    [ DataType.DataType.guid, 16 ], [ DataType.DataType.intN, 8 ]
+  ])
+
+  executeBatch(s, `
+    CREATE TABLE scalar_collation (
+      value varchar(5) COLLATE Latin1_General_100_BIN2 NOT NULL
+    )
+    INSERT scalar_collation VALUES ('x')
+  `)
+  const collation = rowsOf(executeBatch(s, `
+    SELECT UPPER(CAST(value AS varchar(5))) AS value FROM scalar_collation
+  `))
+  expect(collation.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.bigVarchar,
+    maxLength: 5,
+    collation: Collation.ofName('Latin1_General_100_BIN2')
+  })
 })
 
 test('duplicate result labels preserve positional values and origin metadata', () => {
@@ -1285,7 +1428,7 @@ test('integer AVG truncates and COUNT_BIG retains bigint width', () => {
   `))
   expect(aggregate.rows).toEqual([ [ 1, 1, 1, 4 ] ])
   expect(aggregate.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 4, 8, 8 ])
-  expect(aggregate.columns.map(column => column.nullable)).toEqual([ true, true, true, false ])
+  expect(aggregate.columns.map(column => column.nullable)).toEqual([ true, true, true, true ])
 
   const empty = rowsOf(executeBatch(s, `
     SELECT AVG(value) AS average, AVG(big_value) AS big_average,
@@ -2586,8 +2729,9 @@ test('catalog queries work end to end', () => {
   expect(result.rows).toEqual([ [ 'users', 'id' ], [ 'users', 'name' ] ])
   expect(rowsOf(executeBatch(s, 'SELECT OBJECT_ID(\'users\') AS id')).rows[0]?.[0]).toBeGreaterThan(100000000)
   expect(rowsOf(executeBatch(s, 'SELECT DB_NAME() AS d')).rows).toEqual([ [ 'master' ] ])
-  expect(rowsOf(executeBatch(s, 'SELECT SERVERPROPERTY(\'ProductVersion\') AS v')).rows)
-    .toEqual([ [ '15.0.2000.5' ] ])
+  const property = rowsOf(executeBatch(s, 'SELECT SERVERPROPERTY(\'ProductVersion\') AS v'))
+  expect(SqlVariant.decode(property.rows[0]?.[0] as Uint8Array).value).toBe('15.0.2000.5')
+  expect(property.columns[0]?.typeInfo.type).toBe(DataType.DataType.sqlVariant)
 })
 
 test('expanded catalog views track live DDL definitions and constraints', () => {

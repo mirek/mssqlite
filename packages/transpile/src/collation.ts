@@ -36,9 +36,28 @@ export const sensitivity =
 
 /** @returns explicit or declared collation of an expression. */
 export const ofExpression =
-  (ctx: Context.t, value: Ast.Expression): string | undefined =>
-    value.kind === 'collate' ? key(value.collation) :
-      value.kind === 'column' ? Context.columnCollation(ctx, value.name) : undefined
+  (ctx: Context.t, value: Ast.Expression): string | undefined => {
+    switch (value.kind) {
+      case 'collate':
+        return key(value.collation)
+      case 'column':
+        return Context.columnCollation(ctx, value.name)
+      case 'cast':
+      case 'convert':
+        return ofExpression(ctx, value.expression)
+      case 'unary':
+        return ofExpression(ctx, value.operand)
+      case 'binaryOp':
+        return ofExpression(ctx, value.left) ?? ofExpression(ctx, value.right)
+      case 'case':
+        return value.whens.flatMap(when => ofExpression(ctx, when.then) ?? [])[0] ??
+          (value.else_ === undefined ? undefined : ofExpression(ctx, value.else_))
+      case 'call':
+        return value.args.flatMap(argument => ofExpression(ctx, argument) ?? [])[0]
+      default:
+        return undefined
+    }
+  }
 
 /** Renders the deterministic normalization key used by predicates and indexes. */
 export const expressionKey =

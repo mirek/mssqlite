@@ -306,7 +306,7 @@ test('function mappings', () => {
   expect(scalarOf('AVG(CAST(x AS int)) OVER (ORDER BY x)'))
     .toBe('mssqlite_avg(mssqlite_cast_integer("x", \'int\', 0, 0, \'\')) OVER (ORDER BY "x")')
   expect(statement(parseStatement('SELECT COUNT_BIG(*) AS value')).columns)
-    .toEqual([ { name: 'value', type: { name: 'bigint', args: [] }, nullable: false } ])
+    .toEqual([ { name: 'value', type: { name: 'bigint', args: [] }, nullable: true } ])
   expect(statement(parseStatement(`
     SELECT JSON_VALUE('{}', '$.a') AS value, JSON_QUERY('{}') AS fragment
   `)).columns).toEqual([

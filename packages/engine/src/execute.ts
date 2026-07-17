@@ -1057,7 +1057,7 @@ const openCursor =
       throw new MssqlError('Cursor query is not a SELECT statement.', 16907, 16)
     }
     const rendered = Transpile.statement(resolved)
-    const hints = rendered.columns ?? userFunctionHints(session, resolved) ?? []
+    const hints = userFunctionHints(session, resolved) ?? rendered.columns ?? []
     const result = query(session, rendered.sql, rendered.variables, hints)
     cursor.columns = result.columns
     cursor.rows = result.rows
@@ -1354,7 +1354,7 @@ const executeStatementInner =
           return undefined
         }
         const rendered = Transpile.statement(statement)
-        const hints = rendered.columns ?? userFunctionHints(session, statement) ?? []
+        const hints = userFunctionHints(session, statement) ?? rendered.columns ?? []
         items.push(query(session, rendered.sql, rendered.variables, hints))
         return undefined
       }
@@ -1835,21 +1835,30 @@ const defineTrigger =
 const userFunctionHints =
   (session: Session, select: Ast.Select): readonly Transpile.ColumnHint[] | undefined => {
     const hints: Transpile.ColumnHint[] = []
+    let found = false
     for (const item of select.items) {
-      if (item.kind !== 'expression' || item.expression.kind !== 'call') {
+      if (item.kind !== 'expression') {
         return undefined
       }
-      const function_ = session.server.functions.get(functionKey(item.expression.name))
-      if (function_?.returns.kind !== 'scalar') {
+      if (item.expression.kind === 'call') {
+        const function_ = session.server.functions.get(functionKey(item.expression.name))
+        if (function_?.returns.kind === 'scalar') {
+          found = true
+          hints.push({
+            name: item.alias ?? (item.expression.name[item.expression.name.length - 1] ?? ''),
+            type: function_.returns.type,
+            nullable: true
+          })
+          continue
+        }
+      }
+      const inferred = Transpile.Implicit.projectionHints({ ...select, items: [ item ] })?.[0]
+      if (inferred === undefined) {
         return undefined
       }
-      hints.push({
-        name: item.alias ?? (item.expression.name[item.expression.name.length - 1] ?? ''),
-        type: function_.returns.type,
-        nullable: true
-      })
+      hints.push(inferred)
     }
-    return hints
+    return found ? hints : undefined
   }
 
 const validateFunctionStatement =

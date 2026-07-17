@@ -422,6 +422,12 @@ the engine:
   the catalog for exact declared types. Computed-column types are inferred
   from base and earlier computed definitions before CREATE/ALTER rendering,
   then persisted in `sys.columns` for stable empty-result and TDS metadata.
+  Fully inferred scalar projections use `Implicit.projectionHints` before the
+  older expression-family fallbacks, so every item is described independently
+  with exact type arguments, nullability, and inherited collation. The engine
+  merges declared scalar-UDF returns with per-item descriptors for mixed UDF
+  results. SQL batch, sp_executesql, prepared RPC, procedure, cursor, and UDF
+  execution therefore feed the same descriptors into `Metadata.columnsOf`.
 - **Computed columns use SQLite generated columns** — non-PERSISTED definitions
   render VIRTUAL and PERSISTED definitions render STORED. Generated-expression
   mode selects deterministic checked-integer and exact-decimal UDFs; SQLite

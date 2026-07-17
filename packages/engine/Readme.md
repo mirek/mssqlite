@@ -245,18 +245,21 @@ const items = executeBatch(s, `
 
 ## Column metadata
 
-Result columns get TDS `TYPE_INFO` three ways: table-valued-function,
-PIVOT/UNPIVOT, advanced-grouping, and FOR JSON renderings provide declared hints before
-execution; `StatementSync.columns()`
+Result columns get TDS `TYPE_INFO` three ways: scalar projection descriptors and
+table-valued-function, PIVOT/UNPIVOT, advanced-grouping, and FOR JSON renderings
+provide declared hints before execution; `StatementSync.columns()`
 table/column origins resolve through the catalog or active table-variable
 definitions (exact declared types and nullability). Computed definitions have
 their type inferred before DDL and catalog
 registration, so VIRTUAL/STORED values retain declared metadata even for empty
 results and after restart. Direct writes and nondeterministic definitions map
 to SQL Server errors 271 and 4936.
-Exact decimal and datetimeoffset projections also provide expression-derived
-hints. Typed RPC datetimeoffset parameters retain their scale through direct
-SELECTs instead of falling back to inferred text metadata.
+The scalar descriptor covers literals, casts, operators, CASE/COALESCE/ISNULL,
+aggregates/window functions, and supported built-ins, retaining exact widths,
+precision/scale, collation, nullability, and special TDS families even for empty
+results. Typed RPC parameters retain their declared descriptor through direct
+SELECTs. Mixed scalar-UDF projections merge declared return types with ordinary
+expression descriptors instead of reverting the whole result to value inference.
 Client-facing statements enable node:sqlite positional rows, pairing each
 value with `StatementSync.columns()` by index. Duplicate aliases and repeated
 names from `SELECT *` joins therefore retain every value and origin type;

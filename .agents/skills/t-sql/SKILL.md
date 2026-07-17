@@ -96,6 +96,10 @@ The language pipeline lives in three packages:
   LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
   return NULL, and QUOTENAME accepts the documented delimiter pairs, doubles
   closing delimiters, and returns NULL for input longer than 128 characters.
+  Their result descriptors follow SQL Server width rules: literal
+  SUBSTRING/LEFT/RIGHT/SPACE counts narrow widths, REPLICATE multiplies and caps
+  them at 8,000 bytes, REPLACE/TRANSLATE/STRING_AGG expose their family maximum,
+  and STUFF accounts for removed and replacement widths.
 - Under every currently supported non-SC collation, LEN, UNICODE, NCHAR,
   SUBSTRING, LEFT, RIGHT, STUFF, and REVERSE count or manipulate UTF-16 code
   units. Supplementary characters therefore count as two; NCHAR accepts one
