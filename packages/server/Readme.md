@@ -129,7 +129,10 @@ because LOGIN7 password scrambling is not transport encryption.
   `@@ROWCOUNT`. FOR JSON PATH/AUTO returns the SQL Server magic-named
   `nvarchar(max)` JSON column and streams large values with PLP framing.
   Persisted scalar and inline table-valued user functions execute through the
-  same engine and expose their declared return/source metadata.
+  same engine and expose their declared return/source metadata. Ordinary scalar
+  projections carry the same exact TYPE_INFO (family, width, precision/scale,
+  temporal scale, collation, and nullability) through SQL batches, parameterized
+  RPCs, prepared handles, stored procedures, UDFs, empty results, and SELECT INTO.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
   handles, `sp_reset_connection`, user procedures, and the common system

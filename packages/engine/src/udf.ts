@@ -827,10 +827,15 @@ export const registerFunctions =
     define('mssqlite_user_name', () => 'dbo', { deterministic: false })
     define('mssqlite_host_name', () => server.current?.hostName ?? hostname(), { deterministic: false })
     define('mssqlite_app_name', () => server.current?.applicationName ?? '', { deterministic: false })
-    define('mssqlite_serverproperty', property =>
-      property === null ?
-        null :
-        serverProperties(server)[text(property).toLowerCase()] ?? null, { deterministic: false })
+    define('mssqlite_serverproperty', property => {
+      const value = property === null ? null :
+        serverProperties(server)[text(property).toLowerCase()] ?? null
+      if (value === null) {
+        return null
+      }
+      return SqlVariant.encode(typeof value === 'number' ? TypeInfo.intN(4) :
+        TypeInfo.nvarchar(Math.max(1, value.length)), value)
+    }, { deterministic: false })
     // ERROR_* read the CATCH-scoped error slot; NULL outside a CATCH block.
     define('mssqlite_error_number', () => server.current?.caughtError?.number ?? null, { deterministic: false })
     define('mssqlite_error_message', () => server.current?.caughtError?.message ?? null, { deterministic: false })

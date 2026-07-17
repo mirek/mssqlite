@@ -1,5 +1,6 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
+import * as Decimal from './decimal.ts'
 import * as Type from './type.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
@@ -69,6 +70,18 @@ const decimalLiteral =
     return { name: 'decimal', args: [ Math.max(1, integral + scale), scale ] }
   }
 
+const literalCount =
+  (value: Ast.Expression | undefined): number | undefined =>
+    value?.kind === 'number' && /^\d+$/.test(value.value) ? Number(value.value) : undefined
+
+const textWidth =
+  (type: TypeName.t, width: number | 'max'): TypeName.t =>
+    ({ ...type, args: [ width ] })
+
+const textLimit =
+  (type: TypeName.t): number =>
+    Type.category(type) === 'ntext' ? 4000 : 8000
+
 /** @returns the statically known SQL type of an expression. */
 export const typeOf =
   (ctx: Context.t, value: Ast.Expression): TypeName.t | undefined => {
@@ -105,6 +118,10 @@ export const typeOf =
           return undefined
         }
         {
+          const exact = Decimal.typeOf(ctx, value)
+          if (exact !== undefined) {
+            return { name: 'decimal', args: [ exact.precision, exact.scale ] }
+          }
           const result = common(ctx, [ value.left, value.right ])
           const category = result === undefined ? undefined : Type.category(result)
           if (value.operator !== '+' ||
@@ -129,17 +146,96 @@ export const typeOf =
         ])
       case 'call': {
         const name = value.name[value.name.length - 1]?.toLowerCase()
-        if (name === 'datefromparts') {
+        if ([ 'getdate', 'getutcdate', 'current_timestamp', 'datetimefromparts' ].includes(name ?? '')) {
+          return { name: 'datetime', args: [] }
+        }
+        if ([ 'sysdatetime', 'sysutcdatetime' ].includes(name ?? '')) {
+          return { name: 'datetime2', args: [ 7 ] }
+        }
+        if ([ 'datefromparts', 'eomonth' ].includes(name ?? '')) {
           return { name: 'date', args: [] }
         }
-        if (name === 'datetimefromparts') {
-          return { name: 'datetime', args: [] }
+        if (name === 'dateadd') {
+          return value.args[2] === undefined ? undefined : typeOf(ctx, value.args[2])
+        }
+        if ([
+          'datediff', 'datepart', 'year', 'month', 'day', 'isdate',
+          'len', 'charindex', 'patindex', 'ascii', 'unicode', 'isnumeric',
+          'db_id', 'object_id', 'schema_id', 'type_id',
+          'error_number', 'error_severity', 'error_state', 'error_line', 'xact_state', 'isjson'
+        ].includes(name ?? '')) {
+          return { name: 'int', args: [] }
+        }
+        if (name === 'datalength') {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          return { name: input?.args[0] === 'max' ? 'bigint' : 'int', args: [] }
+        }
+        if (name === 'datename') {
+          return { name: 'nvarchar', args: [ 30 ] }
+        }
+        if (name === 'char') {
+          return { name: 'varchar', args: [ 1 ] }
+        }
+        if (name === 'nchar') {
+          return { name: 'nchar', args: [ 1 ] }
+        }
+        if (name === 'space') {
+          return { name: 'varchar', args: [ Math.min(8000, literalCount(value.args[0]) ?? 8000) ] }
+        }
+        if (name === 'quotename') {
+          return { name: 'nvarchar', args: [ 258 ] }
+        }
+        if ([ 'ltrim', 'rtrim', 'trim', 'upper', 'lower', 'reverse' ].includes(name ?? '')) {
+          return value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+        }
+        if ([ 'substring', 'left', 'right' ].includes(name ?? '')) {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          if (input === undefined || input.args[0] === 'max') {
+            return input
+          }
+          const requested = literalCount(value.args[name === 'substring' ? 2 : 1])
+          return textWidth(input, requested === undefined ? input.args[0] as number :
+            Math.min(input.args[0] as number, requested))
+        }
+        if (name === 'replicate') {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          if (input === undefined || input.args[0] === 'max') {
+            return input
+          }
+          const count = literalCount(value.args[1])
+          return textWidth(input, Math.min(textLimit(input),
+            count === undefined ? textLimit(input) : (input.args[0] as number) * count))
+        }
+        if ([ 'replace', 'translate', 'string_agg' ].includes(name ?? '')) {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          return input === undefined || input.args[0] === 'max' ? input : textWidth(input, textLimit(input))
+        }
+        if (name === 'stuff') {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          const replacement = value.args[3] === undefined ? undefined : typeOf(ctx, value.args[3])
+          if (input === undefined || input.args[0] === 'max' || replacement?.args[0] === 'max') {
+            return input
+          }
+          const removed = literalCount(value.args[2]) ?? 0
+          const added = typeof replacement?.args[0] === 'number' ? replacement.args[0] : 0
+          return textWidth(input, Math.min(textLimit(input),
+            Math.max(0, (input.args[0] as number) - removed + added)))
+        }
+        if ([ 'concat', 'concat_ws' ].includes(name ?? '')) {
+          const offset = name === 'concat_ws' ? 1 : 0
+          const inputs = value.args.slice(offset).flatMap(argument => typeOf(ctx, argument) ?? [])
+          const result = commonTypes(inputs)
+          if (result === undefined) {
+            return undefined
+          }
+          const lengths = inputs.map(type => type.args[0])
+          const maximum = Type.category(result) === 'ntext' ? 4000 : 8000
+          const width = lengths.includes('max') ? 'max' : Math.min(maximum,
+            lengths.reduce<number>((sum, length) => sum + (typeof length === 'number' ? length : 0), 0))
+          return { ...result, args: [ width ] }
         }
         if (name === 'json_value' || name === 'json_query') {
           return { name: 'nvarchar', args: [ 4000 ] }
-        }
-        if (name === 'isjson') {
-          return { name: 'int', args: [] }
         }
         if (name === 'count') {
           return { name: 'int', args: [] }
@@ -164,12 +260,63 @@ export const typeOf =
           }
           return input
         }
+        if ([ 'row_number', 'rank', 'dense_rank', 'ntile' ].includes(name ?? '')) {
+          return { name: 'bigint', args: [] }
+        }
+        if ([ 'lag', 'lead', 'first_value', 'last_value' ].includes(name ?? '')) {
+          return value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+        }
+        if ([ 'abs', 'round', 'ceiling', 'floor', 'sign' ].includes(name ?? '')) {
+          const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+          return input === undefined || ![ 'ceiling', 'floor' ].includes(name ?? '') ||
+            ![ 'decimal', 'numeric' ].includes(input.name) ? input : {
+              ...input,
+              args: [ input.args[0] ?? 18, 0 ]
+            }
+        }
+        if ([
+          'power', 'sqrt', 'square', 'exp', 'log', 'log10', 'pi', 'rand', 'degrees',
+          'radians', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atn2'
+        ].includes(name ?? '')) {
+          return { name: 'float', args: [] }
+        }
+        if (name === 'newid') {
+          return { name: 'uniqueidentifier', args: [] }
+        }
+        if ([ 'scope_identity', 'ident_current' ].includes(name ?? '')) {
+          return { name: 'decimal', args: [ 38, 0 ] }
+        }
+        if (name === 'serverproperty') {
+          return { name: 'sql_variant', args: [] }
+        }
+        if (name === 'object_definition') {
+          return { name: 'nvarchar', args: [ 'max' ] }
+        }
+        if (name === 'error_message') {
+          return { name: 'nvarchar', args: [ 4000 ] }
+        }
+        if ([
+          'db_name', 'object_name', 'schema_name', 'type_name', 'suser_sname',
+          'system_user', 'session_user', 'current_user', 'user', 'user_name',
+          'host_name', 'app_name', 'error_procedure'
+        ].includes(name ?? '')) {
+          return { name: 'nvarchar', args: [ 128 ] }
+        }
         if (name === 'isnull') {
           return value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0]) ??
             (value.args[1] === undefined ? undefined : typeOf(ctx, value.args[1]))
         }
-        if ([ 'coalesce', 'iif', 'choose', 'min', 'max' ].includes(name ?? '')) {
+        if (name === 'nullif') {
+          return value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
+        }
+        if (name === 'coalesce') {
           return common(ctx, value.args)
+        }
+        if (name === 'iif') {
+          return common(ctx, value.args.slice(1))
+        }
+        if (name === 'choose') {
+          return common(ctx, value.args.slice(1))
         }
         return undefined
       }
@@ -395,6 +542,22 @@ const nullable =
     }
   }
 
+const callNullable =
+  (ctx: Context.t, value: Ast.Expression & { readonly kind: 'call' }): boolean => {
+    const name = value.name[value.name.length - 1]?.toLowerCase()
+    if ([
+      'getdate', 'getutcdate', 'current_timestamp', 'sysdatetime', 'sysutcdatetime',
+      'concat', 'concat_ws'
+    ].includes(name ?? '')) {
+      return false
+    }
+    if ([ 'isnull', 'coalesce' ].includes(name ?? '')) {
+      return value.args.every(argument => selectIntoNullable(ctx, argument))
+    }
+    return name === 'iif' ?
+      value.args.slice(1).some(argument => selectIntoNullable(ctx, argument)) : true
+  }
+
 const selectIntoNullable =
   (ctx: Context.t, value: Ast.Expression): boolean => {
     switch (value.kind) {
@@ -422,13 +585,8 @@ const selectIntoNullable =
         return value.else_ === undefined ||
           value.whens.some(when => selectIntoNullable(ctx, when.then)) ||
           selectIntoNullable(ctx, value.else_)
-      case 'call': {
-        const name = value.name[value.name.length - 1]?.toLowerCase()
-        if ([ 'isnull', 'coalesce' ].includes(name ?? '')) {
-          return value.args.every(argument => selectIntoNullable(ctx, argument))
-        }
-        return true
-      }
+      case 'call':
+        return callNullable(ctx, value)
       default:
         return true
     }
@@ -489,6 +647,10 @@ export const selectIntoHints =
       }
     }))
   }
+
+/** @returns exact metadata for any fully inferred scalar projection. */
+export const projectionHints =
+  selectIntoHints
 
 /** @returns metadata hints for projections whose common result type is known. */
 export const selectHints =

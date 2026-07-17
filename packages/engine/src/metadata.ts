@@ -150,9 +150,10 @@ export const typeInfoOfCatalogRow =
       case 239:
         return TypeInfo.nchar(row.max_length / 2, Collation.ofName(row.collation_name))
       case 165:
-      case 173:
       case 34:
         return TypeInfo.varbinary(row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length)
+      case 173:
+        return TypeInfo.binary(row.max_length)
       case 189:
         return row.is_nullable === 0 ? TypeInfo.binary(8) : TypeInfo.varbinary(8)
       case 240: {

@@ -12,7 +12,10 @@ type Row =
 type WireColumn = {
   readonly name: string,
   readonly type: string,
-  readonly length: number | undefined
+  readonly length: number | undefined,
+  readonly precision?: number | undefined,
+  readonly scale?: number | undefined,
+  readonly nullable?: boolean
 }
 
 type ProcedureResult = {
@@ -104,7 +107,7 @@ const query =
     type: (typeof TYPES)[keyof typeof TYPES],
     value: unknown,
     options?: { precision?: number, scale?: number }
-  }[] = []): Promise<{
+  }[] = [], detailed = false): Promise<{
     rows: Row[], rowCount: number, columns: WireColumn[], doneCounts: (number | undefined)[]
   }> =>
     new Promise((resolve, reject) => {
@@ -132,12 +135,74 @@ const query =
         columns = Object.values(metadata).map(column => ({
           name: column.colName,
           type: column.type.name,
-          length: column.dataLength
+          length: column.dataLength,
+          ...detailed ? {
+            precision: column.precision,
+            scale: column.scale,
+            nullable: (column.flags & 1) !== 0
+          } : {}
         }))
       })
       request.on('done', rowCount => doneCounts.push(rowCount))
       request.on('doneInProc', rowCount => doneCounts.push(rowCount))
       connection.execSql(request)
+    })
+
+const preparedQuery =
+  (sql: string, parameters: readonly {
+    readonly name: string,
+    readonly type: (typeof TYPES)[keyof typeof TYPES],
+    readonly value: unknown
+  }[] = []): Promise<{ rows: Row[], columns: WireColumn[] }> =>
+    new Promise((resolve, reject) => {
+      const rows: Row[] = []
+      let columns: WireColumn[] = []
+      let executionError: Error | undefined
+      let phase: 'prepare' | 'execute' | 'unprepare' = 'prepare'
+      const request = new Request(sql, error => {
+        if (phase === 'execute' && error !== undefined && error !== null) {
+          executionError = error
+        }
+      })
+      for (const parameter of parameters) {
+        request.addParameter(parameter.name, parameter.type)
+      }
+      request.on('prepared', () => {
+        phase = 'execute'
+        connection.execute(request, Object.fromEntries(
+          parameters.map(parameter => [ parameter.name, parameter.value ])))
+      })
+      request.on('error', reject)
+      request.on('row', rowColumns => {
+        const row: Row = {}
+        for (const [ name, column ] of Object.entries(rowColumns as Record<string, { value: unknown }>)) {
+          row[name] = column.value
+        }
+        rows.push(row)
+      })
+      request.on('columnMetadata', metadata => {
+        columns = Object.values(metadata).map(column => ({
+          name: column.colName,
+          type: column.type.name,
+          length: column.dataLength,
+          precision: column.precision,
+          scale: column.scale,
+          nullable: (column.flags & 1) !== 0
+        }))
+      })
+      request.on('requestCompleted', () => {
+        if (phase === 'execute') {
+          phase = 'unprepare'
+          connection.unprepare(request)
+        } else if (phase === 'unprepare') {
+          if (executionError === undefined) {
+            resolve({ rows, columns })
+          } else {
+            reject(executionError)
+          }
+        }
+      })
+      connection.prepare(request)
     })
 
 const bulk =
@@ -476,6 +541,72 @@ test('decimal parameters and exact expressions cross TDS with decimal metadata',
   } ])
   expect(result.rows).toEqual([ { amount: 123.46, rounded: 1.01 } ])
   expect(result.columns.map(column => column.type)).toEqual([ 'DecimalN', 'DecimalN' ])
+})
+
+test('scalar result descriptors stay exact across batch, RPC, prepare, procedure and UDF paths', async () => {
+  const shape = (columns: readonly WireColumn[]): readonly (readonly unknown[])[] =>
+    columns.map(column => [
+      column.type, column.length, column.precision, column.scale, column.nullable
+    ])
+
+  const batch = await query(`
+    SELECT NULL AS null_value, 2147483648 AS decimal_value,
+      CAST('x' AS varchar(5)) AS text_value, CAST(1 AS bit) AS bit_value,
+      GETDATE() AS date_value, CONCAT('a', N'b') AS concat_value,
+      SERVERPROPERTY('EngineEdition') AS property_value
+  `, [], true)
+  expect(batch.rows).toHaveLength(1)
+  expect(batch.rows[0]?.['property_value']).toBe(4)
+  expect(shape(batch.columns)).toEqual([
+    [ 'IntN', 4, undefined, undefined, true ],
+    [ 'DecimalN', 9, 10, 0, false ],
+    [ 'VarChar', 5, undefined, undefined, true ],
+    [ 'BitN', 1, undefined, undefined, true ],
+    [ 'DateTimeN', 8, undefined, undefined, false ],
+    [ 'NVarChar', 4, undefined, undefined, false ],
+    [ 'Variant', 8016, undefined, undefined, true ]
+  ])
+
+  const rpc = await query(`
+    SELECT @value AS value, CONCAT('x', @suffix) AS label
+  `, [
+    { name: 'value', type: TYPES.SmallInt, value: 7 },
+    { name: 'suffix', type: TYPES.VarChar, value: 'y' }
+  ], true)
+  expect(rpc.rows).toEqual([ { value: 7, label: 'xy' } ])
+  expect(shape(rpc.columns)).toEqual([
+    [ 'IntN', 2, undefined, undefined, true ],
+    [ 'VarChar', 2, undefined, undefined, false ]
+  ])
+
+  const prepared = await preparedQuery(`
+    SELECT CAST(@value AS bigint) AS value, N'ok' AS label
+  `, [ { name: 'value', type: TYPES.Int, value: 42 } ])
+  expect(prepared.rows).toEqual([ { value: '42', label: 'ok' } ])
+  expect(shape(prepared.columns)).toEqual([
+    [ 'IntN', 8, undefined, undefined, true ],
+    [ 'NVarChar', 4, undefined, undefined, false ]
+  ])
+
+  await query(`
+    CREATE PROCEDURE dbo.wire_scalar_metadata AS
+      SELECT CAST(1 AS tinyint) AS tiny_value, CAST('x' AS varchar(5)) AS text_value
+    CREATE FUNCTION dbo.wire_scalar_metadata_fn(@value int)
+    RETURNS bigint AS BEGIN RETURN @value * 2 END
+  `)
+  const procedure = await query('EXEC dbo.wire_scalar_metadata', [], true)
+  expect(shape(procedure.columns)).toEqual([
+    [ 'IntN', 1, undefined, undefined, true ],
+    [ 'VarChar', 5, undefined, undefined, true ]
+  ])
+  const udf = await query(`
+    SELECT dbo.wire_scalar_metadata_fn(21) AS value, N'ok' AS label
+  `, [], true)
+  expect(udf.rows).toEqual([ { value: '42', label: 'ok' } ])
+  expect(shape(udf.columns)).toEqual([
+    [ 'IntN', 8, undefined, undefined, true ],
+    [ 'NVarChar', 4, undefined, undefined, false ]
+  ])
 })
 
 test('datetime column values come back as dates', async () => {

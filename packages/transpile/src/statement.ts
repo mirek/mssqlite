@@ -971,7 +971,8 @@ export const statement =
     const columns = statement_.kind === 'select' ?
       ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
         TableTransform.selectHints(statement_) ??
-        Grouping.selectHints(statement_) ?? Character.selectHints(statement_) ??
+        Grouping.selectHints(statement_) ?? Implicit.projectionHints(statement_) ??
+        Character.selectHints(statement_) ??
         DateTimeOffset.selectHints(statement_) ??
         Decimal.selectHints(statement_) ?? Implicit.selectHints(statement_) :
       undefined
