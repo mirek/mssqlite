@@ -5,6 +5,7 @@ import * as Decimal from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import * as ForJson from './for-json.ts'
 import * as Grouping from './grouping.ts'
+import * as Implicit from './implicit.ts'
 import * as Output from './output.ts'
 import * as Quote from './quote.ts'
 import * as TableFunction from './table-function.ts'
@@ -474,6 +475,46 @@ const groupingSelect =
     return `${with_}${branches.join(' UNION ALL ')}${order}`
   }
 
+const coercedSet =
+  (ctx: Context.t, select_: Ast.Select): Ast.Select => {
+    const terms: Ast.Select[] = []
+    for (let term: Ast.Select | undefined = select_; term !== undefined; term = term.union?.select) {
+      terms.push(term)
+    }
+    const width = terms[0]?.items.length ?? 0
+    if (width === 0 || terms.some(term => term.items.length !== width ||
+      term.items.some(item => item.kind !== 'expression'))) {
+      return select_
+    }
+    const inferred = terms.map(term => Context.withSourceTypes(ctx, term.from, () =>
+      term.items.map(item => item.kind === 'expression' ? Implicit.typeOf(ctx, item.expression) : undefined)))
+    const targets = Array.from({ length: width }, (_unused, index) =>
+      Implicit.commonTypes(inferred.flatMap(types => types[index] ?? [])))
+    const converted = terms.map((term, termIndex) => ({
+      ...term,
+      items: term.items.map((item, index): Ast.SelectItem => {
+        const target = targets[index]
+        const source = inferred[termIndex]?.[index]
+        return item.kind !== 'expression' || target === undefined ||
+          (source !== undefined && Implicit.same(source, target)) ? item : {
+            ...item,
+            expression: source === undefined ? item.expression :
+              Implicit.coerce(item.expression, source, target)
+          }
+      })
+    }))
+    const linked = (index: number): Ast.Select => {
+      const term = converted[index] as Ast.Select
+      const { union: _discarded, ...bare } = term
+      const union = terms[index]?.union
+      return union === undefined ? bare : {
+        ...bare,
+        union: { ...union, select: linked(index + 1) }
+      }
+    }
+    return linked(0)
+  }
+
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => {
@@ -483,13 +524,14 @@ export const select =
     if (Grouping.requiresExpansion(select_)) {
       return groupingSelect(ctx, select_)
     }
+    const current = select_.union === undefined ? select_ : coercedSet(ctx, select_)
     const parts: string[] = []
-    if (select_.ctes !== undefined) {
-      parts.push(`WITH ${cteDefinitions(ctx, select_.ctes).join(', ')}`)
+    if (current.ctes !== undefined) {
+      parts.push(`WITH ${cteDefinitions(ctx, current.ctes).join(', ')}`)
     }
-    const inSet = select_.union !== undefined
-    parts.push(inSet ? setTerm(ctx, select_) : selectCore(ctx, select_))
-    for (let union = select_.union; union !== undefined; union = union.select.union) {
+    const inSet = current.union !== undefined
+    parts.push(inSet ? setTerm(ctx, current) : selectCore(ctx, current))
+    for (let union = current.union; union !== undefined; union = union.select.union) {
       const keyword = {
         union: 'UNION',
         unionAll: 'UNION ALL',
@@ -498,14 +540,14 @@ export const select =
       }[union.kind]
       parts.push(keyword, setTerm(ctx, union.select))
     }
-    if (select_.orderBy !== undefined) {
-      parts.push(orderBy(ctx, select_.orderBy, inSet ? undefined : select_))
+    if (current.orderBy !== undefined) {
+      parts.push(orderBy(ctx, current.orderBy, inSet ? undefined : current))
     }
-    if (select_.offset !== undefined) {
-      const fetch = select_.fetch === undefined ? '-1' : expression(ctx, select_.fetch)
-      parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, select_.offset)}`)
-    } else if (select_.top !== undefined && !inSet) {
-      parts.push(`LIMIT ${topLimit(ctx, select_)}`)
+    if (current.offset !== undefined) {
+      const fetch = current.fetch === undefined ? '-1' : expression(ctx, current.fetch)
+      parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, current.offset)}`)
+    } else if (current.top !== undefined && !inSet) {
+      parts.push(`LIMIT ${topLimit(ctx, current)}`)
     }
     return parts.join(' ')
   }
@@ -905,7 +947,7 @@ export const statement =
         TableTransform.selectHints(statement_) ??
         Grouping.selectHints(statement_) ?? Character.selectHints(statement_) ??
         DateTimeOffset.selectHints(statement_) ??
-        Decimal.selectHints(statement_) :
+        Decimal.selectHints(statement_) ?? Implicit.selectHints(statement_) :
       undefined
     return {
       sql,

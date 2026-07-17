@@ -50,9 +50,10 @@ the engine:
    `count`, `message`) render through `Tds.Token.*` encoders
    (`server/respond.ts`), split into packets, written back.
 5. **RPC** — tedious sends parameterized queries as `sp_executesql`;
-   parameters decode to JS values (`Tds.Value.decode`) and bind as scoped
-   variables (`engine.executeSql`), OUTPUT values return as RETURNVALUE
-   tokens.
+   parameters decode to JS values (`Tds.Value.decode`) and their TYPE_INFO is
+   mapped to the corresponding T-SQL declaration before they bind as scoped
+   variables (`engine.executeSql`). That declared type participates in
+   implicit precedence; OUTPUT values return as RETURNVALUE tokens.
 6. **Bulk load** — an `INSERT BULK` SQL batch prepares a catalog-validated
    engine plan. Subsequent type-7 fragments incrementally decode COLMETADATA,
    ROW/NULL/PLP values, and DONE; complete rows enter cached prepared INSERTs
@@ -179,6 +180,12 @@ the engine:
   casts truncate through a UDF, while target-column writes and bulk rows use a
   storage UDF that raises 2628 before SQLite can accept overlong TEXT. Fixed
   families pad on conversion, and inferred result hints preserve wire widths.
+- **T-SQL precedence is resolved before SQLite** — `transpile/implicit.ts`
+  chooses a common declared type for mixed arithmetic, comparisons,
+  BETWEEN/IN/CASE, compound SELECTs, and VALUES. Strict engine UDFs perform
+  integer/bit/float/temporal/GUID/binary conversions and raise SQL Server
+  errors; one storage-cast path also covers INSERT, UPDATE, and MERGE targets.
+  This avoids SQLite's storage-class ordering and conversion-to-zero behavior.
 - **Variables are SQLite parameters** — `@x` passes through (SQLite
   supports `@`-parameters natively); each rendered statement carries its
   used-variable list so the engine binds exactly those. Globals map to

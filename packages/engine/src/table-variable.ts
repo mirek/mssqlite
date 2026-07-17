@@ -39,10 +39,11 @@ const resolveExpression =
       case 'variable': {
         const type = session.variables.get(value.name.toLowerCase())?.type
         const character = type === undefined ? undefined : Character.normalize(type, 1)
-        return type !== undefined &&
-          ([ 'decimal', 'numeric', 'dec', 'money', 'smallmoney', 'datetimeoffset' ].includes(type.name) ||
-            character !== undefined) ?
-          { kind: 'cast', expression: value, type: character ?? type, try_: false } : value
+        const resolved = character ?? type
+        return resolved !== undefined &&
+          Transpile.Type.category(resolved) !== undefined &&
+          Transpile.Type.category(resolved) !== 'variant' ?
+          { kind: 'cast', expression: value, type: resolved, try_: false } : value
       }
       case 'unary':
         return { ...value, operand: resolveExpression(session, value.operand) }

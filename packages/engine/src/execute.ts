@@ -24,6 +24,8 @@ import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import * as CharacterExact from './character.ts'
+import * as ImplicitExact from './implicit.ts'
+import * as Storage from './storage.ts'
 import positionalRows from './positional-rows.ts'
 import * as SystemProcedures from './system-procedures.ts'
 import * as Databases from './database.ts'
@@ -234,9 +236,7 @@ const decimalType =
 const storedType =
   (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
     decimalType(type) ??
-    (CharacterExact.family(type) === undefined ? undefined : type) ??
-    ([ 'datetimeoffset', 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ]
-      .includes(type.name) ? type : undefined)
+    (Transpile.Type.category(type) === undefined ? undefined : type)
 
 const decimalShape =
   (type: Ast.ColumnDefinition['type']): readonly [ number, number ] | undefined => {
@@ -270,6 +270,23 @@ const coercedValue =
     }
     if (CharacterExact.family(type) !== undefined) {
       return CharacterExact.cast(value, type)
+    }
+    switch (Transpile.Type.category(type)) {
+      case 'integer':
+        return ImplicitExact.integer(value, type.name)
+      case 'bit':
+        return ImplicitExact.bit(value)
+      case 'real':
+        return ImplicitExact.real(value, type.name)
+      case 'date':
+      case 'time':
+        return ImplicitExact.temporal(value, type.name)
+      case 'datetime':
+        return type.name === 'datetimeoffset' ? value : ImplicitExact.temporal(value, type.name)
+      case 'guid':
+        return ImplicitExact.guid(value)
+      default:
+        break
     }
     const shape = decimalShape(type)
     return shape === undefined ? value :
@@ -313,27 +330,6 @@ const targetColumns =
     })
   }
 
-const storedCast =
-  (value: Ast.Expression, type: Ast.ColumnDefinition['type'], column = ''): Ast.Expression => {
-    if (value.kind === 'default') {
-      return value
-    }
-    if (CharacterExact.family(type) === undefined) {
-      return { kind: 'cast', expression: value, type, try_: false }
-    }
-    const width = CharacterExact.width(type, 1)
-    return {
-      kind: 'call',
-      name: [ 'mssqlite_store_character' ],
-      args: [
-        value,
-        { kind: 'string', value: type.name, national: false },
-        { kind: 'number', value: String(width) },
-        { kind: 'string', value: column, national: false }
-      ]
-    }
-  }
-
 const appendSelectItem =
   (select: Ast.Select, item: Ast.SelectItem): Ast.Select => ({
     ...select,
@@ -365,6 +361,13 @@ const resolveStoredDml =
           { name: '', args: [] })
       }))
       if (statement.source.kind === 'values') {
+        const context = Transpile.Context.of()
+        const common = Array.from({ length: Math.max(0, ...statement.source.rows.map(row => row.length)) },
+          (_unused, index) => Transpile.Implicit.common(context, statement.source.kind === 'values' ?
+            statement.source.rows.flatMap(row => {
+              const value = row[index]
+              return value === undefined || value.kind === 'default' ? [] : [ value ]
+            }) : []))
         const rows = statement.source.rows.map(row => row.map((value, index) => {
           if (index === rowversionAt) {
             if (value.kind !== 'default') {
@@ -373,7 +376,13 @@ const resolveStoredDml =
             return nextRowversionExpression()
           }
           const target = targets[index]
-          return target?.type === undefined ? value : storedCast(value, target.type, target.name)
+          const sourceType = common[index]
+          const inferred = value.kind === 'default' ? undefined :
+            Transpile.Implicit.typeOf(context, value)
+          const converted = sourceType === undefined || inferred === undefined ||
+            value.kind === 'default' || Transpile.Implicit.same(inferred, sourceType) ? value :
+            Transpile.Implicit.coerce(value, inferred, sourceType)
+          return target?.type === undefined ? converted : Storage.cast(converted, target.type, target.name)
         }))
         if (rowversion !== undefined && rowversionAt < 0) {
           names = [ ...names, rowversion.name ]
@@ -397,7 +406,7 @@ const resolveStoredDml =
           items: statement.source.select.items.map((item, index) => {
             const target = targets[index]
             return item.kind !== 'expression' || target?.type === undefined ? item :
-              { ...item, expression: storedCast(item.expression, target.type, target.name) }
+              { ...item, expression: Storage.cast(item.expression, target.type, target.name) }
           })
         }
         if (rowversion !== undefined) {
@@ -446,16 +455,16 @@ const resolveStoredDml =
           return assignment
         }
         if (assignment.operator === '=') {
-          return { ...assignment, value: storedCast(assignment.value, type, name) }
+          return { ...assignment, value: Storage.cast(assignment.value, type, name) }
         }
         return {
           ...assignment,
           operator: '=',
-          value: storedCast({
+          value: Storage.cast({
             kind: 'binaryOp',
             operator: assignment.operator.slice(0, -1),
-            left: storedCast(assignment.target, type, name),
-            right: storedCast(assignment.value, type, name)
+            left: Storage.cast(assignment.target, type, name),
+            right: Storage.cast(assignment.value, type, name)
           }, type, name)
         }
       })

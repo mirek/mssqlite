@@ -51,8 +51,14 @@ operands execute once and the engine can enforce divide-by-zero/overflow and
 session options. SUM renders a checked int aggregate, with an explicit BIGINT
 argument selecting its 64-bit variant. DECIMAL/NUMERIC literals, casts,
 arithmetic, comparisons, ordering, and aggregates render exact-decimal UDFs;
-operator results carry SQL Server-derived precision/scale hints to TDS.
-  Every rendered statement reports the variables it binds.
+operator results carry SQL Server-derived precision/scale hints to TDS. Every
+rendered statement reports the variables it binds.
+
+- **Implicit conversion** — one static precedence table selects common operand
+  types for arithmetic, comparisons, BETWEEN/IN, simple/result CASE, compound
+  SELECTs, and multi-row VALUES. Known incompatible pairs fail before SQLite;
+  strict conversion UDFs preserve SQL Server error numbers instead of using
+  SQLite storage-class comparison or permissive numeric casts.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.
 - **Table-valued functions** — `STRING_SPLIT` adapts a JSON-array UDF

@@ -4,6 +4,8 @@ import { bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { MssqlError } from './error.ts'
 import { stateForName } from './database.ts'
+import * as Storage from './storage.ts'
+import { typeNameOfCatalogRow } from './table-variable.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { Item } from './execute.ts'
 import { countVisibility, type Session } from './session.ts'
@@ -172,6 +174,27 @@ const hasIdentity =
       Catalog.tableColumns(catalog, objectId).some(column => column.is_identity === 1)
   }
 
+const storageColumns =
+  (session: Session, table: Ast.QualifiedName): readonly {
+    readonly name: string,
+    readonly type?: Ast.ColumnDefinition['type'],
+    readonly insertable: boolean
+  }[] => {
+    const catalog = catalogOf(session, table)
+    const objectId = Catalog.objectIdOf(catalog, table)
+    if (objectId === undefined) {
+      return []
+    }
+    return Catalog.tableColumns(catalog, objectId).map(column => {
+      const type = typeNameOfCatalogRow(column)
+      return {
+        name: column.name,
+        ...type === undefined ? {} : { type },
+        insertable: column.is_identity === 0 && column.is_computed === 0 && column.system_type_id !== 189
+      }
+    })
+  }
+
 /**
  * Snapshot SELECT computing, per source/target row pair, the chosen arm tag
  * and every arm's SET / INSERT values — all against the pre-merge state, as
@@ -180,7 +203,13 @@ const hasIdentity =
  * (`captureColumns`) as the DELETED pseudo-table's rows.
  */
 const snapshotSelect =
-  (statement: Merge, exposedTarget: string, hasBySource: boolean, captureColumns: readonly string[]): Ast.Select => {
+  (
+    session: Session,
+    statement: Merge,
+    exposedTarget: string,
+    hasBySource: boolean,
+    captureColumns: readonly string[]
+  ): Ast.Select => {
     const exposedSource = statement.source.kind === 'table' ?
       statement.source.alias ?? last(statement.source.name) :
       statement.source.kind === 'derived' ? statement.source.alias : ''
@@ -228,12 +257,28 @@ const snapshotSelect =
       { kind: 'expression', expression: targetRow, alias: '__mssqlite_tgt' },
       { kind: 'expression', expression: actionCase, alias: '__mssqlite_action' }
     ]
+    const targetColumns = storageColumns(session, statement.target)
+    const targetType = (name: string): Ast.ColumnDefinition['type'] | undefined =>
+      targetColumns.find(column => column.name.toLowerCase() === name.toLowerCase())?.type
     statement.whens.forEach((when, index) => {
-      const values = when.action.kind === 'update' ?
-        when.action.set.map(assignment => assignmentOf(assignment, exposedTarget).value) :
-        when.action.kind === 'insert' ?
-          when.action.values ?? [] :
-          []
+      const values = (() => {
+        if (when.action.kind === 'update') {
+          return when.action.set.map(assignment => {
+            const resolved = assignmentOf(assignment, exposedTarget)
+            const type = targetType(resolved.column)
+            return type === undefined ? resolved.value : Storage.cast(resolved.value, type, resolved.column)
+          })
+        }
+        if (when.action.kind !== 'insert') {
+          return []
+        }
+        const names = when.action.columns ?? targetColumns.filter(column => column.insertable).map(column => column.name)
+        return (when.action.values ?? []).map((value, position) => {
+          const name = names[position] ?? ''
+          const type = targetType(name)
+          return type === undefined ? value : Storage.cast(value, type, name)
+        })
+      })()
       values.forEach((value, position) => {
         if (value.kind === 'default') {
           throw new MssqlError('DEFAULT in MERGE INSERT values is not supported.', 40000, 16)
@@ -574,7 +619,8 @@ export const executeMerge =
     const outputRendered = output === undefined ?
       undefined :
       Transpile.statement(outputSelect(session, statement, output, targetColumns))
-    const snapshot = Transpile.statement(snapshotSelect(statement, exposedTarget, hasBySource, targetColumns))
+    const snapshot = Transpile.statement(
+      snapshotSelect(session, statement, exposedTarget, hasBySource, targetColumns))
     const implicit = session.transactionCount === 0
     session.db.exec(`DROP TABLE IF EXISTS ${SNAPSHOT}`)
     session.db.exec(`DROP TABLE IF EXISTS ${INSERTED}`)
