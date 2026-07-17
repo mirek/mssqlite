@@ -63,10 +63,12 @@ const items = executeBatch(s, `
   SQLite `json_each` and a streaming recursive CTE produce the rows. OPENJSON
   shares the source-spanned JSON reader with the scalar functions, including
   BIN2-like lax/strict root and column paths and exact JSON fragments.
-- **CROSS / OUTER APPLY** — supported for correlated two-argument
-  STRING_SPLIT, correlated OPENJSON, and simple correlated TOP (1) derived
-  queries. CROSS removes empty right sides; OUTER retains the left row with
-  NULL right columns.
+- **CROSS / OUTER APPLY** — arbitrary correlated or uncorrelated derived
+  SELECT and VALUES sources support zero/one/many rows, predicates,
+  aggregates, ordering/TOP, nesting, and stars. STRING_SPLIT, OPENJSON, and
+  GENERATE_SERIES remain lateral TVF adapters. CROSS removes empty right
+  sides; OUTER retains the left row with NULL right columns. Packed derived
+  execution is bounded to 100,000 right rows per left row.
 - **PIVOT / UNPIVOT** — source schemas are resolved before transpilation so
   conditional-aggregate PIVOT and materialized `UNION ALL` UNPIVOT rewrites
   can validate names and emit stable generated-column metadata. UNPIVOT

@@ -530,7 +530,15 @@ const resolveTableSource =
           args: source.args.map(argument => resolveExpression(session, argument))
         }
       case 'derived':
-        return { ...source, select: resolveSelect(session, source.select) }
+      {
+        const select = resolveSelect(session, source.select)
+        const columns = Transpile.Implicit.projectionHints(select, visible)
+        return {
+          ...source,
+          select,
+          ...columns === undefined ? {} : { columns }
+        }
+      }
       case 'values':
         return resolveValuesSource(session, source, visible)
       case 'pivot':

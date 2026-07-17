@@ -43,8 +43,9 @@ const statements = parse(`
   ORDER BY ASC/DESC, OFFSET/FETCH, UNION [ALL], EXCEPT,
   INTERSECT, CTEs (`WITH a AS (...)`), and table-valued functions in FROM
   with aliases/positional column aliases and `OPENJSON ... WITH (...)`;
-  CROSS/OUTER APPLY preserve lateral source order in the AST, and PIVOT /
-  UNPIVOT are postfix table-source transforms with required aliases. SELECT
+  CROSS/OUTER APPLY preserve lateral source order in the AST; resolved derived
+  sources may carry projection metadata for aliases, stars, and wire types.
+  PIVOT / UNPIVOT are postfix table-source transforms with required aliases. SELECT
   tails accept FOR JSON PATH/AUTO with ROOT, INCLUDE_NULL_VALUES, and
   WITHOUT_ARRAY_WRAPPER options.
 - **Expressions** — full T-SQL operator precedence, unary `- + ~ NOT`,

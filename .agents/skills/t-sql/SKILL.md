@@ -247,11 +247,10 @@ The language pipeline lives in three packages:
   lax/strict root and WITH-column paths, retains exact AS JSON fragments, and
   reports SQL Server's distinct missing/wrong-kind/malformed error states.
 - CROSS/OUTER APPLY parse as left-associative join nodes without ON. The
-  transpiler supports correlated two-argument STRING_SPLIT and simple
-  derived `SELECT TOP (1)` with equality correlations in WHERE. The latter
-  rewrites to a partitioned row-number join; GROUP/HAVING/set operations,
-  non-equality correlation, other correlated TVFs, and star projection over
-  the rewritten source are cleanly unsupported.
+  transpiler supports correlated STRING_SPLIT, OPENJSON, GENERATE_SERIES,
+  VALUES, and arbitrary derived SELECT sources. Derived sources retain
+  zero/one/many-row, aggregate, predicate, TOP/ORDER, nested-alias, and star
+  semantics through the bounded typed row-packing lowering.
 - PIVOT/UNPIVOT parse as postfix table transforms with mandatory aliases.
   PIVOT supports SUM/AVG/MIN/MAX/COUNT over a value column and requires a
   statically known source schema; listed values become conditional aggregate
@@ -294,6 +293,13 @@ changes without COLLATE reset to the database default. The engine permits the
 SQL Server-compatible indexed variable-length widening case and otherwise
 rejects incompatible PK/index/FK/CHECK/DEFAULT/computed dependencies with
 4922 before rebuilding and converting the stored column.
+
+CROSS/OUTER APPLY retain left-to-right lateral dependencies in the source AST.
+The resolved derived source carries projection metadata so arbitrary SELECT or
+VALUES right sides can preserve aliases, stars, nullability, and wire types.
+Derived execution supports predicates, aggregates, TOP/ORDER, nesting, and
+zero/one/many rows; a non-table APPLY source that cannot be lowered raises the
+specific compatibility error 40000 rather than becoming parser error 102.
 
 ### Compatibility audit findings
 

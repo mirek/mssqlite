@@ -46,7 +46,7 @@ const expressionType =
     return { name: 'bigint', args: [] }
   }
 
-const schema =
+export const schema =
   (source_: FunctionSource): readonly ColumnHint[] => {
     let columns: readonly ColumnHint[]
     switch (finalName(source_.name)) {
@@ -206,23 +206,51 @@ export const source =
   }
 
 /** @returns directly lateral SQLite source for APPLY-compatible TVF shapes. */
-export const applySource =
+const openJsonApply =
   (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
-    const name = finalName(source_.name)
-    if (name === 'openjson' && source_.args.length >= 1 && source_.args.length <= 2) {
-      const json = render(ctx, source_.args[0] ?? { kind: 'null' })
-      const path = source_.args[1] === undefined ? Quote.string('$') : render(ctx, source_.args[1])
-      const adapter = source_.with === undefined ? 'mssqlite_openjson_rows' : 'mssqlite_openjson_sources'
-      return `json_each(${adapter}(${json}, ${path})) AS ${Quote.identifier(alias(source_))}`
+    if (source_.args.length < 1 || source_.args.length > 2) {
+      return unsupported('OPENJSON expects one or two arguments.')
     }
-    if (name !== 'string_split' || source_.args.length !== 2 ||
-      source_.with !== undefined || source_.columns !== undefined) {
-      return unsupported('Correlated APPLY supports OPENJSON or two-argument STRING_SPLIT ' +
-        'without a column alias list.')
+    const json = render(ctx, source_.args[0] ?? { kind: 'null' })
+    const path = source_.args[1] === undefined ? Quote.string('$') : render(ctx, source_.args[1])
+    const adapter = source_.with === undefined ? 'mssqlite_openjson_rows' : 'mssqlite_openjson_sources'
+    return `json_each(${adapter}(${json}, ${path})) AS ${Quote.identifier(alias(source_))}`
+  }
+
+const stringSplitApply =
+  (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
+    if (source_.args.length < 2 || source_.args.length > 3 || source_.with !== undefined) {
+      return unsupported('STRING_SPLIT expects two or three arguments and no WITH clause.')
     }
     const input = render(ctx, source_.args[0] ?? { kind: 'null' })
     const separator = render(ctx, source_.args[1] ?? { kind: 'null' })
-    return `json_each(mssqlite_string_split(${input}, ${separator})) AS ${Quote.identifier(alias(source_))}`
+    return `json_each(mssqlite_string_split(${input}, ${separator})) AS ` +
+      Quote.identifier(alias(source_))
+  }
+
+const generateSeriesApply =
+  (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
+    if (source_.args.length < 2 || source_.args.length > 3 || source_.with !== undefined) {
+      return unsupported('GENERATE_SERIES expects two or three arguments and no WITH clause.')
+    }
+    const args = [
+      render(ctx, source_.args[0] ?? { kind: 'null' }),
+      render(ctx, source_.args[1] ?? { kind: 'null' }),
+      source_.args[2] === undefined ? 'NULL' : render(ctx, source_.args[2])
+    ]
+    return `json_each(mssqlite_generate_series(${args.join(', ')})) AS ` +
+      Quote.identifier(alias(source_))
+  }
+
+export const applySource =
+  (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
+    switch (finalName(source_.name)) {
+      case 'openjson': return openJsonApply(ctx, source_, render)
+      case 'string_split': return stringSplitApply(ctx, source_, render)
+      case 'generate_series': return generateSeriesApply(ctx, source_, render)
+      default: return unsupported(
+        'Correlated APPLY supports OPENJSON, STRING_SPLIT, and GENERATE_SERIES.')
+    }
   }
 
 const applyExpressionEntries =
@@ -231,26 +259,30 @@ const applyExpressionEntries =
       return []
     }
     const nested = [ ...applyExpressionEntries(source_.left), ...applyExpressionEntries(source_.right) ]
-    if (!source_.join.endsWith('Apply') || source_.right.kind !== 'function' ||
-      finalName(source_.right.name) !== 'openjson') {
+    if (!source_.join.endsWith('Apply') || source_.right.kind !== 'function') {
       return nested
     }
-    const openJsonSource = source_.right
-    const qualifier = alias(openJsonSource).toLowerCase()
-    const table = Quote.identifier(alias(openJsonSource))
-    const names = schema(openJsonSource).map(column => column.name)
-    const expressions = openJsonSource.with === undefined ? [
+    const functionSource = source_.right
+    const name = finalName(functionSource.name)
+    const qualifier = alias(functionSource).toLowerCase()
+    const table = Quote.identifier(alias(functionSource))
+    const names = schema(functionSource).map(column => column.name)
+    const expressions = name === 'openjson' ? functionSource.with === undefined ? [
       `json_extract(${table}."value", '$.key')`,
       `json_extract(${table}."value", '$.value')`,
       `json_extract(${table}."value", '$.type')`
-    ] : openJsonSource.with.map(column => openJsonColumnExpression(table, column))
+    ] : functionSource.with.map(column => openJsonColumnExpression(table, column)) :
+      name === 'string_split' ? [
+        `CAST(${table}."value" AS TEXT)`,
+        ...names.length > 1 ? [ `CAST(${table}."key" + 1 AS INTEGER)` ] : []
+      ] : name === 'generate_series' ? [ `${table}."value"` ] : []
     return [
       ...nested,
-      ...names.flatMap((name, index): readonly (readonly [ string, string ])[] => {
+      ...names.flatMap((columnName, index): readonly (readonly [ string, string ])[] => {
         const value = expressions[index]
         return value === undefined ? [] : [
-          [ `${qualifier}.${name.toLowerCase()}`, value ],
-          [ name.toLowerCase(), value ]
+          [ `${qualifier}.${columnName.toLowerCase()}`, value ],
+          [ columnName.toLowerCase(), value ]
         ]
       })
     ]

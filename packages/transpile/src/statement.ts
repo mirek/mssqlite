@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Apply from './apply.ts'
 import * as Collation from './collation.ts'
 import * as Character from './character.ts'
 import * as Decimal from './decimal.ts'
@@ -15,198 +16,6 @@ import expression, { useSelectRender } from './expression.ts'
 import { unsupported } from './error.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
-
-type ApplyPair = {
-  readonly left: Ast.Expression,
-  readonly right: Ast.Expression
-}
-
-const sourceQualifiers =
-  (source: Ast.TableSource): Set<string> => {
-    switch (source.kind) {
-      case 'table':
-        return new Set([ (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase() ])
-      case 'derived':
-        return new Set([ source.alias.toLowerCase() ])
-      case 'values':
-        return new Set([ source.alias.toLowerCase() ])
-      case 'function':
-        return new Set([ (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase() ])
-      case 'pivot':
-      case 'unpivot':
-        return new Set([ source.alias.toLowerCase() ])
-      case 'join':
-        return new Set([ ...sourceQualifiers(source.left), ...sourceQualifiers(source.right) ])
-      default:
-        return new Set()
-    }
-  }
-
-const andTerms =
-  (value: Ast.Expression): readonly Ast.Expression[] =>
-    value.kind === 'binaryOp' && value.operator === 'and' ?
-      [ ...andTerms(value.left), ...andTerms(value.right) ] :
-      [ value ]
-
-const andExpression =
-  (values: readonly Ast.Expression[]): Ast.Expression | undefined =>
-    values.reduce<Ast.Expression | undefined>((left, right) =>
-      left === undefined ? right : { kind: 'binaryOp', operator: 'and', left, right }, undefined)
-
-const qualifierOf =
-  (value: Ast.Expression): string | undefined =>
-    value.kind === 'column' && value.name.length > 1 ?
-      value.name[value.name.length - 2]?.toLowerCase() :
-      undefined
-
-const applyPair =
-  (term: Ast.Expression, left: ReadonlySet<string>, right: string): ApplyPair | undefined => {
-    if (term.kind !== 'binaryOp' || term.operator !== '=') {
-      return undefined
-    }
-    const a = qualifierOf(term.left)
-    const b = qualifierOf(term.right)
-    if (a !== undefined && left.has(a) && b === right) {
-      return { left: term.left, right: term.right }
-    }
-    if (b !== undefined && left.has(b) && a === right) {
-      return { left: term.right, right: term.left }
-    }
-    if (a === undefined && b !== undefined && left.has(b)) {
-      return { left: term.right, right: term.left }
-    }
-    if (b === undefined && a !== undefined && left.has(a)) {
-      return { left: term.left, right: term.right }
-    }
-    return undefined
-  }
-
-const simpleDerivedApply =
-  (
-    ctx: Context.t,
-    leftSource: Ast.TableSource,
-    rightSource: Ast.TableSource & { kind: 'derived' },
-    outer: boolean
-  ): string => {
-    const select_ = rightSource.select
-    if (select_.top !== undefined || select_.from?.kind !== 'table' ||
-      select_.groupBy !== undefined || select_.having !== undefined || select_.union !== undefined ||
-      select_.offset !== undefined || select_.fetch !== undefined || select_.orderBy !== undefined) {
-      return unsupported('APPLY derived tables require a simple correlated SELECT or SELECT TOP (1).')
-    }
-    const rightQualifier = (select_.from.alias ??
-      select_.from.name[select_.from.name.length - 1] ?? '').toLowerCase()
-    const terms = select_.where === undefined ? [] : andTerms(select_.where)
-    const leftQualifiers = sourceQualifiers(leftSource)
-    const pairs: ApplyPair[] = []
-    const remaining: Ast.Expression[] = []
-    for (const term of terms) {
-      const pair = applyPair(term, leftQualifiers, rightQualifier)
-      if (pair === undefined) {
-        remaining.push(term)
-      } else {
-        pairs.push(pair)
-      }
-    }
-    const remainingWhere = andExpression(remaining)
-    const { where: _where, ...base } = select_
-    const projected: Ast.Select = {
-      ...base,
-      ...remainingWhere === undefined ? {} : { where: remainingWhere },
-      items: [
-        ...select_.items,
-        ...pairs.map((pair, index): Ast.SelectItem => ({
-          kind: 'expression',
-          expression: pair.right,
-          alias: `__mssqlite_apply_key_${index}`
-        }))
-      ]
-    }
-    const left = tableSource(ctx, leftSource)
-    const right = `(${select(ctx, projected)}) AS ${Quote.identifier(rightSource.alias)}`
-    if (pairs.length === 0) {
-      return outer ? `${left} LEFT JOIN ${right} ON TRUE` : `${left} CROSS JOIN ${right}`
-    }
-    const conditions = pairs.map((pair, index): Ast.Expression => ({
-      kind: 'binaryOp',
-      operator: '=',
-      left: pair.left,
-      right: { kind: 'column', name: [ rightSource.alias, `__mssqlite_apply_key_${index}` ] }
-    }))
-    return `${left} ${outer ? 'LEFT' : 'INNER'} JOIN ${right} ON ` +
-      expression(ctx, andExpression(conditions) ?? { kind: 'null' })
-  }
-
-const topOneApply =
-  (ctx: Context.t, leftSource: Ast.TableSource, rightSource: Ast.TableSource & { kind: 'derived' }, outer: boolean): string => {
-    const select_ = rightSource.select
-    if (select_.top?.count.kind !== 'number' || Number(select_.top.count.value) !== 1 ||
-      select_.top.percent || select_.top.withTies === true || select_.from?.kind !== 'table' ||
-      select_.groupBy !== undefined || select_.having !== undefined || select_.union !== undefined ||
-      select_.offset !== undefined || select_.fetch !== undefined) {
-      return unsupported('APPLY derived tables require a simple correlated SELECT TOP (1).')
-    }
-    const rightQualifier = (select_.from.alias ??
-      select_.from.name[select_.from.name.length - 1] ?? '').toLowerCase()
-    const terms = select_.where === undefined ? [] : andTerms(select_.where)
-    const leftQualifiers = sourceQualifiers(leftSource)
-    const pairs: ApplyPair[] = []
-    const remaining: Ast.Expression[] = []
-    for (const term of terms) {
-      const pair = applyPair(term, leftQualifiers, rightQualifier)
-      if (pair === undefined) {
-        remaining.push(term)
-      } else {
-        pairs.push(pair)
-      }
-    }
-    if (pairs.length === 0) {
-      return unsupported('APPLY TOP (1) requires an equality correlation in WHERE.')
-    }
-    const { top: _top, orderBy: _orderBy, where: _where, ...base } = select_
-    const remainingWhere = andExpression(remaining)
-    const ranked: Ast.Select = {
-      ...base,
-      ...remainingWhere === undefined ? {} : { where: remainingWhere },
-      items: [
-        ...select_.items,
-        ...pairs.map((pair, index): Ast.SelectItem => ({
-          kind: 'expression', expression: pair.right, alias: `__mssqlite_apply_key_${index}`
-        })),
-        {
-          kind: 'expression',
-          expression: {
-            kind: 'call',
-            name: [ 'row_number' ],
-            args: [],
-            over: {
-              partitionBy: pairs.map(pair => pair.right),
-              orderBy: select_.orderBy ?? []
-            }
-          },
-          alias: '__mssqlite_apply_rank'
-        }
-      ]
-    }
-    const left = tableSource(ctx, leftSource)
-    const right = `(${select(ctx, ranked)}) AS ${Quote.identifier(rightSource.alias)}`
-    const conditions = [
-      ...pairs.map((pair, index): Ast.Expression => ({
-        kind: 'binaryOp',
-        operator: '=',
-        left: pair.left,
-        right: { kind: 'column', name: [ rightSource.alias, `__mssqlite_apply_key_${index}` ] }
-      })),
-      {
-        kind: 'binaryOp' as const,
-        operator: '=',
-        left: { kind: 'column' as const, name: [ rightSource.alias, '__mssqlite_apply_rank' ] },
-        right: { kind: 'number' as const, value: '1' }
-      }
-    ]
-    const on = andExpression(conditions) ?? { kind: 'null' }
-    return `${left} ${outer ? 'LEFT' : 'INNER'} JOIN ${right} ON ${expression(ctx, on)}`
-  }
 
 const valuesSource =
   (ctx: Context.t, source: Ast.TableSource & { kind: 'values' }): string => {
@@ -252,19 +61,21 @@ const tableSource =
       case 'join': {
         const left = tableSource(ctx, source.left)
         if (source.join === 'crossApply' || source.join === 'outerApply') {
+          const outer = source.join === 'outerApply'
           if (source.right.kind === 'derived') {
-            return source.right.select.top === undefined ?
-              simpleDerivedApply(ctx, source.left, source.right, source.join === 'outerApply') :
-              topOneApply(ctx, source.left, source.right, source.join === 'outerApply')
+            const right = Apply.derivedSource(ctx, source.right, select)
+            return outer ? `${left} LEFT JOIN ${right} ON TRUE` : `${left} CROSS JOIN ${right}`
           }
           if (source.right.kind === 'values') {
-            return `${left} CROSS JOIN ${tableSource(ctx, source.right)}`
+            const right = Apply.valuesSource(ctx, source.right, valuesSource)
+            return outer ? `${left} LEFT JOIN ${right} ON TRUE` : `${left} CROSS JOIN ${right}`
           }
           if (source.right.kind !== 'function') {
-            return unsupported('APPLY requires a supported TVF or correlated SELECT TOP (1).')
+            return unsupported(
+              'APPLY requires a derived table, VALUES source, or supported table-valued function.')
           }
           const right = TableFunction.applySource(ctx, source.right, expression)
-          return source.join === 'crossApply' ?
+          return !outer ?
             `${left} CROSS JOIN ${right}` :
             `${left} LEFT JOIN ${right} ON TRUE`
         }
@@ -291,7 +102,11 @@ const selectItem =
           '*' :
           `${Quote.identifier(item.qualifier[item.qualifier.length - 1] ?? '')}.*`
       case 'expression': {
-        const alias = item.alias === undefined ? '' : ` AS ${Quote.identifier(item.alias)}`
+        const rewrittenName = item.expression.kind === 'column' &&
+          Context.columnExpression(ctx, item.expression.name) !== undefined ?
+          item.expression.name[item.expression.name.length - 1] : undefined
+        const exposedName = item.alias ?? rewrittenName
+        const alias = exposedName === undefined ? '' : ` AS ${Quote.identifier(exposedName)}`
         return `${expression(ctx, item.expression)}${alias}`
       }
       case 'assign':
@@ -355,32 +170,17 @@ const orderBy =
 
 const selectCore =
   (ctx: Context.t, select_: Ast.Select): string => Context.withSourceTypes(ctx, select_.from, () => {
-    const applyAliases = (source: Ast.TableSource | undefined): string[] =>
-      source?.kind !== 'join' ?
-        [] :
-        [
-          ...source.join.endsWith('Apply') && source.right.kind === 'derived' ?
-            [ source.right.alias.toLowerCase() ] :
-            [],
-          ...applyAliases(source.left),
-          ...applyAliases(source.right)
-        ]
-    const hidden = applyAliases(select_.from)
-    if (hidden.length > 0 && select_.items.some(item =>
-      item.kind === 'star' && (item.qualifier === undefined ||
-        hidden.includes((item.qualifier[item.qualifier.length - 1] ?? '').toLowerCase())))) {
-      return unsupported('SELECT * over a rewritten TOP (1) APPLY source is not supported.')
-    }
-    const distinctExpressions = select_.items.flatMap(item => item.kind === 'expression' ?
+    const items = Apply.expandStars(select_.from, select_.items)
+    const distinctExpressions = items.flatMap(item => item.kind === 'expression' ?
       [ item.expression ] : item.kind === 'star' ? starExpressions(select_.from, item.qualifier) : [])
     const distinctKeys = select_.distinct && select_.groupBy === undefined && distinctExpressions.length > 0 &&
-      select_.items.every(item => item.kind !== 'assign' &&
+      items.every(item => item.kind !== 'assign' &&
         (item.kind !== 'expression' || !Grouping.containsAggregate(item.expression))) ?
       distinctExpressions.map(value => relationalKey(ctx, value)) : undefined
     const parts: string[] = [
       'SELECT',
       ...select_.distinct && distinctKeys === undefined ? [ 'DISTINCT' ] : [],
-      select_.items.map(item => selectItem(ctx, item)).join(', ')
+      items.map(item => selectItem(ctx, item)).join(', ')
     ]
     if (select_.from !== undefined) {
       parts.push(`FROM ${tableSource(ctx, select_.from)}`)
@@ -702,7 +502,10 @@ const renderedSet =
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => Context.withColumnExpressions(
     ctx,
-    TableFunction.applyColumnExpressions(select_.from),
+    new Map([
+      ...TableFunction.applyColumnExpressions(select_.from),
+      ...Apply.columnExpressions(select_.from)
+    ]),
     () => {
       if (select_.forJson !== undefined) {
         return ForJson.select(ctx, select_, select)

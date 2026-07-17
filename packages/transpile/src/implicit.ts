@@ -599,27 +599,65 @@ type IntoProjection = {
   readonly collation?: string
 }
 
+const projectedSourceColumns =
+  (source: Ast.TableSource | undefined, qualifier: Ast.QualifiedName | undefined): readonly IntoProjection[] => {
+    if (source === undefined) {
+      return []
+    }
+    if (source.kind === 'join') {
+      return [
+        ...projectedSourceColumns(source.left, qualifier),
+        ...projectedSourceColumns(source.right, qualifier)
+      ]
+    }
+    if (source.kind !== 'table' && source.kind !== 'values' && source.kind !== 'derived') {
+      return []
+    }
+    const alias = source.kind === 'table' ?
+      source.alias ?? source.name[source.name.length - 1] ?? '' : source.alias
+    const requested = qualifier?.[qualifier.length - 1]?.toLowerCase()
+    if (requested !== undefined && requested !== alias.toLowerCase()) {
+      return []
+    }
+    const columns = source.kind === 'values' ? source.columnMetadata : source.columns
+    return columns?.flatMap(column => column.type === undefined ? [] : [ {
+      name: column.name,
+      type: column.type,
+      nullable: column.nullable !== false,
+      ...column.collation === undefined ? {} : { collation: column.collation }
+    } ]) ?? []
+  }
+
 const intoTerm =
-  (select: Ast.Select): readonly IntoProjection[] | undefined => {
+  (select: Ast.Select, outer?: Ast.TableSource): readonly IntoProjection[] | undefined => {
     const ctx = Context.of()
-    return Context.withSourceTypes(ctx, select.from, () => {
-      const columns = select.items.map(item => {
+    const sources = outer === undefined ? select.from : select.from === undefined ? outer : {
+      kind: 'join' as const,
+      join: 'cross' as const,
+      left: outer,
+      right: select.from
+    }
+    return Context.withSourceTypes(ctx, sources, () => {
+      const columns = select.items.flatMap<IntoProjection | undefined>(item => {
+        if (item.kind === 'star') {
+          return projectedSourceColumns(select.from, item.qualifier)
+        }
         if (item.kind !== 'expression') {
-          return undefined
+          return [ undefined ]
         }
         const type = item.expression.kind === 'null' ? { name: 'int', args: [] } :
           typeOf(ctx, item.expression)
         if (type === undefined) {
-          return undefined
+          return [ undefined ]
         }
         const collation = Collation.ofExpression(ctx, item.expression)
-        return {
+        return [ {
           name: item.alias ?? (item.expression.kind === 'column' ?
             item.expression.name[item.expression.name.length - 1] ?? '' : ''),
           type,
           nullable: selectIntoNullable(ctx, item.expression),
           ...collation === undefined ? {} : { collation }
-        }
+        } ]
       })
       return columns.some(column => column === undefined) ?
         undefined : columns as readonly IntoProjection[]
@@ -628,12 +666,12 @@ const intoTerm =
 
 /** @returns typed target columns for SELECT INTO, including set-operation widening. */
 export const selectIntoHints =
-  (select: Ast.Select): readonly ColumnHint[] | undefined => {
+  (select: Ast.Select, outer?: Ast.TableSource): readonly ColumnHint[] | undefined => {
     const terms: Ast.Select[] = []
     for (let term: Ast.Select | undefined = select; term !== undefined; term = term.union?.select) {
       terms.push(term)
     }
-    const projected = terms.map(intoTerm)
+    const projected = terms.map(term => intoTerm(term, outer))
     const first = projected[0]
     if (first === undefined || projected.some(columns => columns === undefined || columns.length !== first.length)) {
       return undefined

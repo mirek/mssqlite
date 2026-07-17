@@ -91,12 +91,14 @@ rendered statement reports the variables it binds.
   SQLite callbacks. Before rendering, the engine expands persisted inline
   TVF calls to parameter-substituted derived SELECTs; correlated simple
   inline sources use the same equality-key APPLY lowering as derived tables.
-- **APPLY** — correlated two-argument STRING_SPLIT and OPENJSON use SQLite's
-  implicit lateral virtual-table arguments; correlated simple `SELECT TOP (1)`
-  derived sources become partitioned `ROW_NUMBER()` joins. CROSS uses INNER
-  semantics, OUTER uses LEFT/NULL-extension semantics. Other TVFs, complex
-  derived queries, and star projection over rewritten top-one sources fail
-  cleanly rather than exposing helper columns or changing cardinality.
+- **APPLY** — correlated STRING_SPLIT, OPENJSON, and GENERATE_SERIES use
+  SQLite's implicit lateral virtual-table arguments. VALUES and arbitrary
+  derived SELECT sources run in correlated scalar subqueries, pack at most
+  100,000 typed rows into JSON, and expand through `json_each`; tagged cells
+  retain NULL, numeric, text, bigint, and BLOB values. CROSS removes empty
+  right sides, OUTER uses LEFT/NULL-extension semantics, and qualified or
+  unqualified stars expand to the declared T-SQL columns rather than exposing
+  `json_each` internals.
 - **VALUES table sources** — typed rows lower to native VALUES wrapped by a
   naming SELECT, with explicit SQL-precedence coercions. The same
   renderer covers FROM, joins, uncorrelated APPLY, CTE/subquery bodies, and
