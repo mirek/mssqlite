@@ -86,8 +86,9 @@ flow control. TDS Attention cooperatively interrupts active interpreted work,
 preserves explicit transaction state, suppresses late output, and leaves the
 connection reusable by `tedious`.
 
-There are currently no open implementation briefs; deliberately unsupported
-SQL Server subsystems are listed in [TODO.md](TODO.md).
+Open implementation briefs from the latest compatibility audit are indexed in
+[TODO.md](TODO.md), alongside the deliberately unsupported SQL Server
+subsystems.
 
 ## Development
 
