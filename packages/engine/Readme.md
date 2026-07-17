@@ -241,6 +241,7 @@ decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `substring`,
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), collation-aware LIKE
 with bracket classes/ranges/ESCAPE and error 506 validation, `translate`,
 character cast/storage coercion, Windows-1252 `ascii` / `char`,
+UTF-16-unit `len` / `unicode` / `nchar` and boundary transforms,
 type-aware `datalength`,
 `round` (negative digits, truncate flag), `isnumeric`,
 `isdate`, `name`, `dateadd`/`datediff`/`datepart`/`datename`/`eomonth`

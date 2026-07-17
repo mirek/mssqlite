@@ -305,7 +305,12 @@ the engine:
   Character coercion UDFs encode varchar/char as Windows-1252 and
   nvarchar/nchar as UTF-16LE, so truncation, padding, overflow checks, and
   DATALENGTH share the same byte semantics. ASCII reads the first encoded
-  byte; CHAR decodes one byte and returns varchar(1).
+  byte; CHAR decodes one byte and returns varchar(1). All currently supported
+  collations are non-SC, so LEN/UNICODE/NCHAR and string boundary UDFs operate
+  on UTF-16 code units. When a result contains an unpaired surrogate, the UDF
+  carries raw UTF-16LE as a BLOB across SQLite (which would replace it in TEXT),
+  then `engine/output.ts` decodes it after character metadata inference and
+  before TDS encoding. An eventual `_SC` collation must select code-point mode.
 - **Catalog functions become subqueries** — `OBJECT_ID('t')` →
   `(SELECT object_id FROM "sys.objects" WHERE …)`; UDFs cannot re-enter
   the database connection.

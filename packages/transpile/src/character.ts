@@ -190,7 +190,7 @@ const hintType =
       case 'column':
         return Context.columnType(ctx, value.name)
       case 'call':
-        return [ 'ascii', 'unicode' ].includes(
+        return [ 'ascii', 'unicode', 'len', 'datalength' ].includes(
           value.name[value.name.length - 1]?.toLowerCase() ?? '') ?
           { name: 'int', args: [] } : undefined
       default:

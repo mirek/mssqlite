@@ -188,6 +188,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   mssqlite therefore compiles every LIKE pattern in a UDF after applying the
   effective SQL collation, including ranges, negated classes, ESCAPE, and the
   trailing-source-space alternative required by SQL Server.
+- SQLite length/substr and JavaScript iteration use code points where SQL
+  Server's non-SC collations use UTF-16 units. Dedicated UDFs use JS code-unit
+  indexing. Lone-surrogate results cross SQLite as raw UTF-16LE BLOBs because
+  SQLite TEXT replaces them, then the engine decodes them after metadata is
+  known so TDS retains the exact two-byte unit.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

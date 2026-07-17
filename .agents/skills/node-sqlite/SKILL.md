@@ -95,7 +95,10 @@ that callback before a user-defined aggregate can execute with `OVER`.
 Character coercion callbacks return TEXT after Windows-1252 or UTF-16LE
 length enforcement. Storage callbacks throw `MssqlError` 2628 synchronously;
 node:sqlite propagates it to the engine's statement rollback and TRY/CATCH
-path rather than converting it into a SQLite constraint error.
+path rather than converting it into a SQLite constraint error. node:sqlite
+replaces lone JS surrogates when a callback returns TEXT, so non-SC boundary
+functions return raw UTF-16LE `Uint8Array` only for those values; result
+materialization decodes that bridge after it has resolved character metadata.
 Implicit integer, bit, float, temporal, GUID, and binary callbacks likewise
 run before SQLite affinity or storage-class comparison. Their synchronous
 `MssqlError` values preserve SQL Server conversion/incompatibility numbers and

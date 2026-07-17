@@ -165,14 +165,14 @@ All deterministic unless noted.
 | RIGHT | `RIGHT(expr, n)` | varchar/nvarchar | Rightmost n chars. Error if n < 0. |
 | CHARINDEX | `CHARINDEX(find, search [, start])` | int/bigint | 1-based position. 0 if not found. Empty find → start. |
 | PATINDEX | `PATINDEX('%pattern%', expr)` | int/bigint | 1-based. Pattern uses LIKE wildcards. 0 if not found. |
-| REVERSE | `REVERSE(expr)` | varchar/nvarchar | Reverse string. |
+| REVERSE | `REVERSE(expr)` | varchar/nvarchar | Reverse UTF-16 units (characters under an SC collation). |
 | REPLICATE | `REPLICATE(expr, n)` | same as input | Repeat n times. Truncates at 8000 unless max type. |
 | SPACE | `SPACE(n)` | varchar | String of n spaces. NULL if n < 0. |
 | STUFF | `STUFF(expr, start, len, repl)` | varchar/nvarchar/varbinary | Delete len chars at start, insert repl. NULL if start invalid. |
 | CHAR | `CHAR(int)` | char(1) | ASCII 0-255. NULL if out of range. CHAR(0) = 0x00 byte. |
 | NCHAR | `NCHAR(int)` | nchar(1) | Unicode code point. 0-65535 (or 1114111 with SC). |
 | ASCII | `ASCII(char_expr)` | int | Code of leftmost character. |
-| UNICODE | `UNICODE(nchar_expr)` | int | Unicode code point of first character. |
+| UNICODE | `UNICODE(nchar_expr)` | int | First UTF-16 unit under non-SC; first code point under SC. |
 | STR | `STR(float [, len [, dec]])` | varchar | Right-justified. Default len=10, dec=0. `**` if overflow. |
 | FORMAT | `FORMAT(value, fmt [, culture])` | nvarchar | .NET CLR formatting. Nondeterministic. Max 4000 chars. |
 

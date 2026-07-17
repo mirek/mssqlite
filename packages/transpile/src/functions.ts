@@ -109,8 +109,7 @@ const handlers: Record<string, Handler> = {
   },
   isdate: fixed('mssqlite_isdate'),
   // Strings.
-  len: (call, render) =>
-    `length(rtrim(${arg(call, render, 0)}))`,
+  len: fixed('mssqlite_len'),
   datalength: fixed('mssqlite_datalength'),
   substring: fixed('mssqlite_substring'),
   charindex: (call, render) =>
@@ -135,9 +134,9 @@ const handlers: Record<string, Handler> = {
   reverse: fixed('mssqlite_reverse'),
   stuff: fixed('mssqlite_stuff'),
   char: fixed('mssqlite_char'),
-  nchar: fixed('char'),
+  nchar: fixed('mssqlite_nchar'),
   ascii: fixed('mssqlite_ascii'),
-  unicode: fixed('unicode'),
+  unicode: fixed('mssqlite_unicode'),
   quotename: fixed('mssqlite_quotename'),
   isnumeric: fixed('mssqlite_isnumeric'),
   // Math.

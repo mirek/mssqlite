@@ -1798,6 +1798,37 @@ test('ASCII and CHAR use the Windows-1252 code page and varchar metadata', () =>
     .toThrowError(expect.objectContaining({ number: 245 }) as Error)
 })
 
+test('non-SC string functions use UTF-16 code units', () => {
+  // Compatibility vector checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const result = rowsOf(executeBatch(s, `
+    SELECT UNICODE(N'😀') AS first_unit, LEN(N'😀  ') AS unit_length,
+      NCHAR(128512) AS out_of_range, NCHAR(55357) AS high_surrogate,
+      SUBSTRING(N'A😀B', 2, 1) AS substring_high,
+      SUBSTRING(N'A😀B', 3, 1) AS substring_low,
+      LEFT(N'A😀B', 2) AS left_units, RIGHT(N'A😀B', 2) AS right_units,
+      STUFF(N'A😀B', 2, 1, N'X') AS stuffed,
+      REVERSE(N'A😀B') AS reversed,
+      UNICODE(SUBSTRING(N'A😀B', 3, 1)) AS low_unit,
+      DATALENGTH(NCHAR(55357)) AS surrogate_bytes
+  `))
+  expect(result.rows).toEqual([ [
+    55357, 2, null, '\ud83d', '\ud83d', '\ude00', 'A\ud83d', '\ude00B',
+    'AX\ude00B', 'B\ude00\ud83dA', 56832, 2
+  ] ])
+
+  executeBatch(s, 'CREATE TABLE utf16_values (value nvarchar(10)); INSERT INTO utf16_values VALUES (N\'😀\')')
+  expect(rowsOf(executeBatch(s, 'SELECT LEN(value), UNICODE(value) FROM utf16_values')).rows)
+    .toEqual([ [ 2, 55357 ] ])
+  expect(rowsOf(executeBatch(s, `
+    DECLARE @value nvarchar(10) = N'😀'
+    SELECT LEN(@value), UNICODE(@value)
+  `)).rows).toEqual([ [ 2, 55357 ] ])
+  expect(rowsOf(executeSql(s, 'SELECT LEN(@value), UNICODE(@value)', [ {
+    name: '@value', value: '😀', type: { name: 'nvarchar', args: [ 2 ] }
+  } ]).items).rows).toEqual([ [ 2, 55357 ] ])
+})
+
 test('table-valued functions return rows and metadata through the engine', () => {
   const s = open()
   const split = rowsOf(executeBatch(s, `

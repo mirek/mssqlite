@@ -846,6 +846,34 @@ test('ASCII and CHAR expose Windows-1252 values and varchar metadata over tediou
   ])
 })
 
+test('UTF-16 code-unit string semantics cross the tedious boundary', async () => {
+  const result = await query(`
+    SELECT UNICODE(N'😀') AS first_unit, LEN(N'😀') AS unit_length,
+      NCHAR(128512) AS out_of_range, NCHAR(55357) AS high_surrogate,
+      SUBSTRING(N'A😀B', 3, 1) AS low_surrogate,
+      LEFT(N'A😀B', 2) AS left_units,
+      RIGHT(N'A😀B', 2) AS right_units,
+      STUFF(N'A😀B', 2, 1, N'X') AS stuffed,
+      REVERSE(N'A😀B') AS reversed
+  `)
+  expect(result.rows).toEqual([ {
+    first_unit: 55357,
+    unit_length: 2,
+    out_of_range: null,
+    high_surrogate: '\ud83d',
+    low_surrogate: '\ude00',
+    left_units: 'A\ud83d',
+    right_units: '\ude00B',
+    stuffed: 'AX\ude00B',
+    reversed: 'B\ude00\ud83dA'
+  } ])
+
+  const rpc = await query('SELECT LEN(@value) AS length, UNICODE(@value) AS first_unit', [
+    { name: 'value', type: TYPES.NVarChar, value: '😀' }
+  ])
+  expect(rpc.rows).toEqual([ { length: 2, first_unit: 55357 } ])
+})
+
 test('integer cast coercion crosses literals, empty text, and decimal RPC input', async () => {
   const result = await query(`
     SELECT CAST(1.9 AS int) AS positive_value,

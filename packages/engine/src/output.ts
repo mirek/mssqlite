@@ -1,12 +1,28 @@
 import * as Transpile from '@mssqlite/transpile'
 import { bindable, bindings } from './bind.ts'
-import { columnsOf } from './metadata.ts'
+import { columnsOf, type Column } from './metadata.ts'
 import { MssqlError } from './error.ts'
 import type { Ast } from '@mssqlite/tsql'
 import type { ColumnHint } from '@mssqlite/transpile'
 import type { Item, Rows } from './execute.ts'
-import { countVisibility, type Session } from './session.ts'
+import { countVisibility, type Session, type Value } from './session.ts'
 import positionalRows from './positional-rows.ts'
+import { DataType } from '@mssqlite/tds'
+import { Buffer } from 'node:buffer'
+
+const unicodeTypes: ReadonlySet<number> = new Set([
+  DataType.DataType.nvarchar,
+  DataType.DataType.nchar,
+  DataType.DataType.ntext,
+  DataType.DataType.xml,
+  DataType.DataType.json
+])
+
+const decodedUnicodeRows =
+  (rows: readonly (readonly Value[])[], columns: readonly Column[]): Value[][] =>
+    rows.map(row => row.map((value, index) =>
+      value instanceof Uint8Array && unicodeTypes.has(columns[index]?.typeInfo.type ?? -1) ?
+        Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf16le') : value))
 
 /** @returns result rows of a rendered SELECT with TDS column metadata. */
 export const query =
@@ -21,7 +37,10 @@ export const query =
     const columns = columnsOf(
       session.db, statement, rows, session.tableVariables.values(), hints)
     session.rowCount = rows.length
-    return { kind: 'rows', columns, rows, rowCount: rows.length, ...countVisibility(session) }
+    return {
+      kind: 'rows', columns, rows: decodedUnicodeRows(rows, columns),
+      rowCount: rows.length, ...countVisibility(session)
+    }
   }
 
 /** Emits OUTPUT rows to the client, or routes them into the INTO target table. */

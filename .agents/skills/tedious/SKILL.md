@@ -131,6 +131,9 @@ connection.execSql(request)
 - LIKE character-class e2e tests should include literal and typed RPC patterns,
   case folding under the default collation, ESCAPE, and error 506 so SQLite's
   native no-class LIKE cannot leak through one expression source.
+- Non-SC UTF-16 tests must inspect JavaScript `length` and `charCodeAt`, not only
+  visual output: tedious preserves lone surrogate units decoded from NCHAR,
+  SUBSTRING/LEFT/RIGHT/STUFF, and code-unit REVERSE TDS payloads.
 - Keep a table variable's declaration and all references in one SQL-batch
   request; a later `execSql` call is a new batch and must receive error 1087.
 - TVF result metadata is available even for NULL/empty inputs. Remember that
