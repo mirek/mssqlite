@@ -2057,6 +2057,68 @@ test('table-valued functions return rows and metadata through the engine', () =>
   expect(rowsOf(executeBatch(s, 'SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
 })
 
+test('OPENJSON evaluates lax and strict paths through variables and correlated APPLY', () => {
+  // Compatibility vectors checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const selected = rowsOf(executeBatch(s, `
+    DECLARE @path nvarchar(100) = N'strict $.items'
+    SELECT [key], value, type
+    FROM OPENJSON(N'{"items":[1,{"x":2}]}', @path)
+    ORDER BY [key]
+  `))
+  expect(selected.rows).toEqual([ [ '0', '1', 2 ], [ '1', '{"x":2}', 5 ] ])
+
+  const shaped = rowsOf(executeBatch(s, `
+    SELECT upper_a, lower_a, absent, obj
+    FROM OPENJSON(N'[{"A":1,"a":2,"obj": { "x": 3 }}]')
+    WITH (
+      upper_a int N'strict $.A',
+      lower_a int N'$.a',
+      absent int N'$.missing',
+      obj nvarchar(max) N'strict $.obj' AS JSON
+    )
+  `))
+  expect(shaped.rows).toEqual([ [ 1, 2, null, '{ "x": 3 }' ] ])
+  expect(shaped.columns[3]).toMatchObject({
+    typeInfo: { type: DataType.DataType.nvarchar, maxLength: 65535 }
+  })
+  expect(rowsOf(executeBatch(s, `
+    SELECT value FROM OPENJSON(N'[1,2]') WITH (value int N'$') ORDER BY value
+  `)).rows).toEqual([ [ 1 ], [ 2 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT * FROM OPENJSON(N'{"items":1}', N'$.items')
+  `)).rows).toEqual([])
+
+  const applied = rowsOf(executeBatch(s, `
+    DECLARE @payloads TABLE (id int, payload nvarchar(max), path nvarchar(100))
+    INSERT @payloads VALUES
+      (1, N'{"a":[1,2]}', N'strict $.a'),
+      (2, N'{"b":[3]}', N'strict $.b')
+    SELECT source.id, item.value
+    FROM @payloads source CROSS APPLY OPENJSON(source.payload, source.path) item
+    ORDER BY source.id, item.[key]
+  `))
+  expect(applied.rows).toEqual([ [ 1, '1' ], [ 1, '2' ], [ 2, '3' ] ])
+
+  expect(() => executeBatch(s, 'SELECT * FROM OPENJSON(N\'{"x":1}\', N\'strict $.missing\')'))
+    .toThrowError(expect.objectContaining({ number: 13608, state: 3 }) as Error)
+  expect(() => executeBatch(s, `
+    SELECT * FROM OPENJSON(N'[{}]') WITH (value int N'strict $.missing')
+  `)).toThrowError(expect.objectContaining({ number: 13608, state: 6 }) as Error)
+  expect(() => executeBatch(s, `
+    SELECT * FROM OPENJSON(N'[{"x":{}}]') WITH (value int N'strict $.x')
+  `)).toThrowError(expect.objectContaining({ number: 13624, state: 1 }) as Error)
+  expect(() => executeBatch(s, `
+    SELECT * FROM OPENJSON(N'[{"x":1}]') WITH (value nvarchar(max) N'strict $.x' AS JSON)
+  `)).toThrowError(expect.objectContaining({ number: 13624, state: 1 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM OPENJSON(N\'1\')'))
+    .toThrowError(expect.objectContaining({ number: 13609, state: 4 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM OPENJSON(N\'{bad}\')'))
+    .toThrowError(expect.objectContaining({ number: 13609, state: 4 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM OPENJSON(N\'{}\', N\'strict nope\')'))
+    .toThrowError(expect.objectContaining({ number: 13607, state: 22 }) as Error)
+})
+
 test('values table sources execute with SQL Server shape, coercion and metadata', () => {
   const s = open()
   const values = rowsOf(executeBatch(s, `

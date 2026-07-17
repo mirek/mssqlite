@@ -337,7 +337,7 @@ export const expression =
       case 'variable':
         return Context.parameter(ctx, expression_.name)
       case 'column':
-        return Quote.columnName(expression_.name)
+        return Context.columnExpression(ctx, expression_.name) ?? Quote.columnName(expression_.name)
       case 'nextValue':
         return `mssqlite_next_value_for(${Quote.string(expression_.sequence.join('.'))})`
       case 'collate':

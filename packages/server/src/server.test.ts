@@ -1170,6 +1170,29 @@ test('table-valued functions over the wire include empty inputs', async () => {
   expect((await query('SELECT * FROM OPENJSON(NULL)')).rows).toEqual([])
   expect((await query('SELECT * FROM OPENJSON(\'[]\')')).rows).toEqual([])
 
+  const strict = await query(`
+    DECLARE @path nvarchar(100) = N'strict $.items'
+    SELECT [key], value, type
+    FROM OPENJSON(N'{"items":[1,{"x":2}]}', @path)
+    ORDER BY [key]
+  `)
+  expect(strict.rows).toEqual([
+    { key: '0', value: '1', type: 2 },
+    { key: '1', value: '{"x":2}', type: 5 }
+  ])
+  expect((await query(`
+    SELECT value, fragment
+    FROM OPENJSON(N'[{"A":1,"obj": { "x": 2 }}]')
+    WITH (value int N'strict $.A', fragment nvarchar(max) N'strict $.obj' AS JSON)
+  `)).rows).toEqual([ { value: 1, fragment: '{ "x": 2 }' } ])
+  await expect(query('SELECT * FROM OPENJSON(N\'{"x":1}\', N\'strict $.missing\')'))
+    .rejects.toMatchObject({ number: 13608, class: 16, state: 3 })
+  await expect(query(`
+    SELECT * FROM OPENJSON(N'[{}]') WITH (value int N'strict $.missing')
+  `)).rejects.toMatchObject({ number: 13608, class: 16, state: 6 })
+  await expect(query('SELECT * FROM OPENJSON(N\'{bad}\')'))
+    .rejects.toMatchObject({ number: 13609, class: 16, state: 4 })
+
   const series = await query('SELECT value FROM GENERATE_SERIES(1, 5, 2)')
   expect(series.rows).toEqual([ { value: 1 }, { value: 3 }, { value: 5 } ])
   expect((await query('SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])

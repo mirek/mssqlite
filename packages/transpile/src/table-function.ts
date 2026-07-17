@@ -126,24 +126,6 @@ const stringSplit =
       `AS ${Quote.identifier(alias(source_))}`
   }
 
-const jsonPath =
-  (value: Ast.Expression): Ast.Expression => {
-    if (value.kind !== 'string') {
-      return value
-    }
-    const path = value.value.trim()
-    if (/^strict\s+/i.test(path)) {
-      return unsupported('OPENJSON strict paths are not supported.')
-    }
-    return { ...value, value: path.replace(/^lax\s+/i, '') }
-  }
-
-const openJsonValue =
-  (table: string): string =>
-    `CASE ${table}."type" ` +
-    'WHEN \'null\' THEN NULL WHEN \'true\' THEN \'true\' WHEN \'false\' THEN \'false\' ' +
-    `ELSE CAST(${table}."value" AS TEXT) END`
-
 const openJson =
   (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
     if (source_.args.length < 1 || source_.args.length > 2) {
@@ -151,43 +133,38 @@ const openJson =
     }
     const at = `__mssqlite_openjson_${ctx.nextSource++}`
     const json = render(ctx, source_.args[0] ?? { kind: 'null' })
-    const path = source_.args[1] === undefined ?
-      '' :
-      `, ${render(ctx, jsonPath(source_.args[1]))}`
+    const path = source_.args[1] === undefined ? Quote.string('$') : render(ctx, source_.args[1])
     const columns = schema(source_)
     let select: string
     let each: string
     if (source_.with === undefined) {
-      each = `json_each(${json}${path}) AS ${Quote.identifier(at)}`
+      each = `json_each(mssqlite_openjson_rows(${json}, ${path})) AS ${Quote.identifier(at)}`
       const names = columns.map(column => Quote.identifier(column.name))
       select = [
-        `CAST(${Quote.identifier(at)}."key" AS TEXT) AS ${names[0] ?? Quote.identifier('key')}`,
-        `${openJsonValue(Quote.identifier(at))} AS ${names[1] ?? Quote.identifier('value')}`,
-        `CASE ${Quote.identifier(at)}."type" ` +
-          'WHEN \'null\' THEN 0 WHEN \'text\' THEN 1 WHEN \'integer\' THEN 2 WHEN \'real\' THEN 2 ' +
-          'WHEN \'true\' THEN 3 WHEN \'false\' THEN 3 WHEN \'array\' THEN 4 WHEN \'object\' THEN 5 END ' +
-          `AS ${names[2] ?? Quote.identifier('type')}`
+        `json_extract(${Quote.identifier(at)}."value", '$.key') AS ${names[0] ?? Quote.identifier('key')}`,
+        `json_extract(${Quote.identifier(at)}."value", '$.value') AS ${names[1] ?? Quote.identifier('value')}`,
+        `json_extract(${Quote.identifier(at)}."value", '$.type') AS ${names[2] ?? Quote.identifier('type')}`
       ].join(', ')
     } else {
-      const selected = source_.args[1] === undefined ? json : `json_extract(${json}${path})`
-      const selectedType = source_.args[1] === undefined ? `json_type(${json})` : `json_type(${json}${path})`
-      const rows = `CASE WHEN ${selectedType} IS NULL THEN '[]' ` +
-        `WHEN ${selectedType} = 'array' THEN ${selected} ` +
-        `WHEN ${selectedType} = 'object' THEN json_array(json(${selected})) ` +
-        `ELSE json_array(${selected}) END`
-      each = `json_each(${rows}) AS ${Quote.identifier(at)}`
+      each = `json_each(mssqlite_openjson_sources(${json}, ${path})) AS ${Quote.identifier(at)}`
       select = source_.with.map((column, index) => {
         const columnPath = column.path ?? `$."${column.name.replaceAll('"', '\\"')}"`
         const pathSql = Quote.string(columnPath)
-        const extracted = column.asJson ?
-          `CASE WHEN json_type(${Quote.identifier(at)}."value", ${pathSql}) IN ('array', 'object') ` +
-            `THEN json_extract(${Quote.identifier(at)}."value", ${pathSql}) END` :
-          `json_extract(${Quote.identifier(at)}."value", ${pathSql})`
+        const extracted = `mssqlite_openjson_column(${Quote.identifier(at)}."value", ` +
+          `${pathSql}, ${column.asJson ? 1 : 0})`
         return `CAST(${extracted} AS ${Type.castType(column.type)}) AS ` +
           Quote.identifier(columns[index]?.name ?? column.name)
       }).join(', ')
     }
     return `(SELECT ${select} FROM ${each}) AS ${Quote.identifier(alias(source_))}`
+  }
+
+const openJsonColumnExpression =
+  (table: string, column: NonNullable<FunctionSource['with']>[number]): string => {
+    const columnPath = column.path ?? `$."${column.name.replaceAll('"', '\\"')}"`
+    const extracted = `mssqlite_openjson_column(${table}."value", ` +
+      `${Quote.string(columnPath)}, ${column.asJson ? 1 : 0})`
+    return `CAST(${extracted} AS ${Type.castType(column.type)})`
   }
 
 const generateSeries =
@@ -231,15 +208,58 @@ export const source =
 /** @returns directly lateral SQLite source for APPLY-compatible TVF shapes. */
 export const applySource =
   (ctx: Context.t, source_: FunctionSource, render: RenderExpression): string => {
-    if (finalName(source_.name) !== 'string_split' || source_.args.length !== 2 ||
+    const name = finalName(source_.name)
+    if (name === 'openjson' && source_.args.length >= 1 && source_.args.length <= 2) {
+      const json = render(ctx, source_.args[0] ?? { kind: 'null' })
+      const path = source_.args[1] === undefined ? Quote.string('$') : render(ctx, source_.args[1])
+      const adapter = source_.with === undefined ? 'mssqlite_openjson_rows' : 'mssqlite_openjson_sources'
+      return `json_each(${adapter}(${json}, ${path})) AS ${Quote.identifier(alias(source_))}`
+    }
+    if (name !== 'string_split' || source_.args.length !== 2 ||
       source_.with !== undefined || source_.columns !== undefined) {
-      return unsupported(
-        'Correlated APPLY currently supports two-argument STRING_SPLIT without a column alias list.')
+      return unsupported('Correlated APPLY supports OPENJSON or two-argument STRING_SPLIT ' +
+        'without a column alias list.')
     }
     const input = render(ctx, source_.args[0] ?? { kind: 'null' })
     const separator = render(ctx, source_.args[1] ?? { kind: 'null' })
     return `json_each(mssqlite_string_split(${input}, ${separator})) AS ${Quote.identifier(alias(source_))}`
   }
+
+const applyExpressionEntries =
+  (source_: Ast.TableSource | undefined): readonly (readonly [ string, string ])[] => {
+    if (source_?.kind !== 'join') {
+      return []
+    }
+    const nested = [ ...applyExpressionEntries(source_.left), ...applyExpressionEntries(source_.right) ]
+    if (!source_.join.endsWith('Apply') || source_.right.kind !== 'function' ||
+      finalName(source_.right.name) !== 'openjson') {
+      return nested
+    }
+    const openJsonSource = source_.right
+    const qualifier = alias(openJsonSource).toLowerCase()
+    const table = Quote.identifier(alias(openJsonSource))
+    const names = schema(openJsonSource).map(column => column.name)
+    const expressions = openJsonSource.with === undefined ? [
+      `json_extract(${table}."value", '$.key')`,
+      `json_extract(${table}."value", '$.value')`,
+      `json_extract(${table}."value", '$.type')`
+    ] : openJsonSource.with.map(column => openJsonColumnExpression(table, column))
+    return [
+      ...nested,
+      ...names.flatMap((name, index): readonly (readonly [ string, string ])[] => {
+        const value = expressions[index]
+        return value === undefined ? [] : [
+          [ `${qualifier}.${name.toLowerCase()}`, value ],
+          [ name.toLowerCase(), value ]
+        ]
+      })
+    ]
+  }
+
+/** @returns column rewrites needed by lateral OPENJSON adapters under APPLY. */
+export const applyColumnExpressions =
+  (source_: Ast.TableSource | undefined): ReadonlyMap<string, string> =>
+    new Map(applyExpressionEntries(source_))
 
 /** @returns exact output hints for a simple SELECT over one table function. */
 export const selectHints =

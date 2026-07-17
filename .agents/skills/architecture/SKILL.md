@@ -199,9 +199,11 @@ the engine:
   variables are not visible to nested work.
 - **Built-in TVFs render as derived sources** — FROM-source function ASTs
   dispatch `STRING_SPLIT` to a JSON-array scalar adapter plus `json_each`,
-  `OPENJSON` to JSON1 with SQL Server key/value/type or explicit WITH
-  projections, and `GENERATE_SERIES` to a recursive CTE (the Node SQLite
-  build has no series module). The transpiler attaches output type hints to
+  `OPENJSON` to source-spanned root/column adapters plus `json_each` with SQL
+  Server key/value/type or explicit WITH projections, and `GENERATE_SERIES`
+  to a recursive CTE (the Node SQLite build has no series module). OPENJSON's
+  raw virtual-table APPLY form stays implicitly lateral and outer expressions
+  map its encoded rows back to the declared columns. The transpiler attaches output type hints to
   simple TVF SELECTs so the engine can emit exact metadata before stepping,
   including for empty inputs.
 - **APPLY has shape-specific lowering** — correlated two-argument
@@ -498,8 +500,8 @@ the engine:
 ## Known limitations (v1)
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
-The current differential backlog includes collation behavior, OPENJSON strict
-path validation and static result metadata.
+The current differential backlog includes collation behavior and static result
+metadata. OPENJSON strict path validation from the audit is implemented.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

@@ -547,40 +547,43 @@ const declaredSourceColumns =
 
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
-  (ctx: Context.t, select_: Ast.Select): string => {
-    if (select_.forJson !== undefined) {
-      return ForJson.select(ctx, select_, select)
-    }
-    if (Grouping.requiresExpansion(select_)) {
-      return groupingSelect(ctx, select_)
-    }
-    const current = select_.union === undefined ? select_ : coercedSet(ctx, select_)
-    const parts: string[] = []
-    if (current.ctes !== undefined) {
-      parts.push(`WITH ${cteDefinitions(ctx, current.ctes).join(', ')}`)
-    }
-    const inSet = current.union !== undefined
-    parts.push(inSet ? setTerm(ctx, current) : selectCore(ctx, current))
-    for (let union = current.union; union !== undefined; union = union.select.union) {
-      const keyword = {
-        union: 'UNION',
-        unionAll: 'UNION ALL',
-        except: 'EXCEPT',
-        intersect: 'INTERSECT'
-      }[union.kind]
-      parts.push(keyword, setTerm(ctx, union.select))
-    }
-    if (current.orderBy !== undefined) {
-      parts.push(orderBy(ctx, current.orderBy, inSet ? undefined : current))
-    }
-    if (current.offset !== undefined) {
-      const fetch = current.fetch === undefined ? '-1' : expression(ctx, current.fetch)
-      parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, current.offset)}`)
-    } else if (current.top !== undefined && !inSet) {
-      parts.push(`LIMIT ${topLimit(ctx, current)}`)
-    }
-    return parts.join(' ')
-  }
+  (ctx: Context.t, select_: Ast.Select): string => Context.withColumnExpressions(
+    ctx,
+    TableFunction.applyColumnExpressions(select_.from),
+    () => {
+      if (select_.forJson !== undefined) {
+        return ForJson.select(ctx, select_, select)
+      }
+      if (Grouping.requiresExpansion(select_)) {
+        return groupingSelect(ctx, select_)
+      }
+      const current = select_.union === undefined ? select_ : coercedSet(ctx, select_)
+      const parts: string[] = []
+      if (current.ctes !== undefined) {
+        parts.push(`WITH ${cteDefinitions(ctx, current.ctes).join(', ')}`)
+      }
+      const inSet = current.union !== undefined
+      parts.push(inSet ? setTerm(ctx, current) : selectCore(ctx, current))
+      for (let union = current.union; union !== undefined; union = union.select.union) {
+        const keyword = {
+          union: 'UNION',
+          unionAll: 'UNION ALL',
+          except: 'EXCEPT',
+          intersect: 'INTERSECT'
+        }[union.kind]
+        parts.push(keyword, setTerm(ctx, union.select))
+      }
+      if (current.orderBy !== undefined) {
+        parts.push(orderBy(ctx, current.orderBy, inSet ? undefined : current))
+      }
+      if (current.offset !== undefined) {
+        const fetch = current.fetch === undefined ? '-1' : expression(ctx, current.fetch)
+        parts.push(`LIMIT ${fetch} OFFSET ${expression(ctx, current.offset)}`)
+      } else if (current.top !== undefined && !inSet) {
+        parts.push(`LIMIT ${topLimit(ctx, current)}`)
+      }
+      return parts.join(' ')
+    })
 
 useSelectRender(select)
 

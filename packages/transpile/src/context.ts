@@ -10,6 +10,7 @@ export type Context = {
   readonly columnTypes: ReadonlyMap<string, TypeName.t>[]
   readonly columnCollations: ReadonlyMap<string, string>[]
   readonly columnNullability: ReadonlyMap<string, boolean>[]
+  readonly columnExpressions: ReadonlyMap<string, string>[]
   generated: boolean
   nextSource: number
 }
@@ -21,7 +22,7 @@ export type t =
 export const of =
   (): Context =>
     ({
-      variables: [], columnTypes: [], columnCollations: [], columnNullability: [],
+      variables: [], columnTypes: [], columnCollations: [], columnNullability: [], columnExpressions: [],
       generated: false, nextSource: 1
     })
 
@@ -164,6 +165,30 @@ export const columnNullable =
     const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
     for (let i = ctx.columnNullability.length - 1; i >= 0; i--) {
       const found = ctx.columnNullability[i]?.get(key)
+      if (found !== undefined) {
+        return found
+      }
+    }
+    return undefined
+  }
+
+/** Runs a renderer with source-specific replacements for exposed columns. */
+export const withColumnExpressions =
+  <T>(ctx: Context, expressions: ReadonlyMap<string, string>, run: () => T): T => {
+    ctx.columnExpressions.push(expressions)
+    try {
+      return run()
+    } finally {
+      ctx.columnExpressions.pop()
+    }
+  }
+
+/** @returns a source-specific SQLite expression for an exposed column. */
+export const columnExpression =
+  (ctx: Context, name: Ast.QualifiedName): string | undefined => {
+    const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
+    for (let index = ctx.columnExpressions.length - 1; index >= 0; index--) {
+      const found = ctx.columnExpressions[index]?.get(key)
       if (found !== undefined) {
         return found
       }

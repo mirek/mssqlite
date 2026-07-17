@@ -116,6 +116,28 @@ test('apply maps supported correlated string split sources to lateral virtual ta
   expect(topOne).toContain('"latest"."__mssqlite_apply_rank" = 1')
 })
 
+test('apply keeps OPENJSON lateral while projecting its SQL Server schema', () => {
+  const defaultSchema = sqlOf(`
+    SELECT source.id, item.[key], item.value, item.type
+    FROM payloads source CROSS APPLY OPENJSON(source.payload, source.path) item
+  `)
+  expect(defaultSchema).toContain(
+    'CROSS JOIN json_each(mssqlite_openjson_rows("source"."payload", "source"."path")) AS "item"')
+  expect(defaultSchema).toContain('json_extract("item"."value", \'$.key\')')
+  expect(defaultSchema).toContain('json_extract("item"."value", \'$.type\')')
+
+  const withSchema = sqlOf(`
+    SELECT source.id, item.value
+    FROM payloads source
+    OUTER APPLY OPENJSON(source.payload, N'strict $.items')
+      WITH (value int N'strict $.value') item
+  `)
+  expect(withSchema).toContain(
+    'LEFT JOIN json_each(mssqlite_openjson_sources("source"."payload", \'strict $.items\')) AS "item" ON TRUE')
+  expect(withSchema).toContain(
+    'mssqlite_openjson_column("item"."value", \'strict $.value\', 0)')
+})
+
 test('pivot and unpivot render one source evaluation and reject ambiguous output', () => {
   const pivot = sqlOf(`
     SELECT * FROM (SELECT region, quarter, amount FROM sales) source
