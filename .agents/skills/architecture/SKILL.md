@@ -232,6 +232,13 @@ the engine:
   nested FOR JSON expressions are explicitly re-tagged as SQLite JSON after
   crossing the inner-query boundary. The output always has SQL Server's
   magic column name and nvarchar(max) hint.
+- **FOR XML uses typed serializer UDFs** — PATH/RAW first project ordered
+  values with static alias/type descriptors, then aggregate escaped row
+  fragments into a document. Typed scalar subqueries carry an XML hint so
+  nested fragments remain markup; untyped subqueries are escaped as text.
+  Namespace declarations, XSINIL, roots, and binary base64 are applied in the
+  serializer. Text mode uses the magic `nvarchar(max)` column; TYPE uses
+  native XML metadata. AUTO, EXPLICIT, XMLDATA, and XMLSCHEMA fail cleanly.
 - **Scalar JSON preserves source spans** — ISJSON, JSON_VALUE and JSON_QUERY
   use an engine reader rather than JSON1 extraction. It validates the complete
   document while retaining each node's original slice. The default ISJSON form

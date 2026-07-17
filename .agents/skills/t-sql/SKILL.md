@@ -267,7 +267,13 @@ The language pipeline lives in three packages:
   string (default `root`); INCLUDE_NULL_VALUES and WITHOUT_ARRAY_WRAPPER are
   flags and duplicate options are rejected. PATH dotted aliases create
   nested properties. AUTO requires FROM; current execution supports one
-  source or a root plus one joined child alias. FOR XML remains deferred.
+  source or a root plus one joined child alias.
+- FOR XML parses PATH/RAW/AUTO/EXPLICIT plus ROOT, ELEMENTS
+  [ABSENT|XSINIL], BINARY BASE64, TYPE, XMLDATA, and XMLSCHEMA. Execution
+  supports PATH and RAW: aliases may target attributes, nested elements,
+  text()/data(), or wildcard inline content; NULLs are omitted unless XSINIL
+  applies. WITH XMLNAMESPACES parses default and prefixed declarations.
+  AUTO/EXPLICIT and schema directives raise specific compatibility errors.
 - CREATE/ALTER/CREATE OR ALTER FUNCTION parses typed/defaulted parameters and
   either a scalar RETURNS type with BEGIN/END statements or an inline
   `RETURNS TABLE AS RETURN (SELECT ...)` body. Scalar execution allows local
@@ -284,7 +290,7 @@ The language pipeline lives in three packages:
 ### Not yet implemented (raise clean errors)
 
 WAITFOR, GOTO, BULK INSERT ... FROM file, source columns in MERGE OUTPUT,
-FOR XML, COLLATE as expression operator,
+COLLATE as expression operator,
 AT TIME ZONE.
 
 `ALTER TABLE ... ALTER COLUMN` accepts declared type arguments, optional

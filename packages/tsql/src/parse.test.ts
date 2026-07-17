@@ -854,6 +854,40 @@ test('for json modes and options parse at the select tail', () => {
     'SELECT 1 FOR JSON PATH, INCLUDE_NULL_VALUES, INCLUDE_NULL_VALUES')).toThrow()
 })
 
+test('for xml modes and options parse at the select tail', () => {
+  expect(parseStatement(`
+    SELECT id AS [@id], name FROM users
+    FOR XML PATH('user'), ROOT('users'), ELEMENTS XSINIL, BINARY BASE64, TYPE
+  `)).toMatchObject({
+    forXml: {
+      mode: 'path', rowName: 'user', root: 'users', elements: 'xsinil',
+      binaryBase64: true, type: true
+    }
+  })
+  expect(parseStatement('SELECT id FROM users FOR XML RAW')).toMatchObject({
+    forXml: {
+      mode: 'raw', rowName: 'row', elements: 'absent', binaryBase64: false, type: false
+    }
+  })
+  expect(parseStatement('SELECT id FROM users FOR XML PATH(\'\')')).toMatchObject({
+    forXml: { mode: 'path', rowName: '' }
+  })
+  expect(parseStatement('SELECT id FROM users FOR XML AUTO, XMLDATA')).toMatchObject({
+    forXml: { mode: 'auto', unsupported: 'xmldata' }
+  })
+  expect(parseStatement(`
+    WITH XMLNAMESPACES ('urn:people' AS p, DEFAULT 'urn:default')
+    SELECT 1 AS [@p:id] FOR XML PATH('p:row')
+  `)).toMatchObject({
+    xmlNamespaces: [
+      { uri: 'urn:people', prefix: 'p' }, { uri: 'urn:default' }
+    ],
+    forXml: { mode: 'path', rowName: 'p:row' }
+  })
+  expect(() => parseStatement('SELECT 1 FOR XML PATH(1)')).toThrow()
+  expect(() => parseStatement('SELECT 1 FOR XML PATH, TYPE, TYPE')).toThrow()
+})
+
 test('control flow', () => {
   expect(parseStatement('IF @x > 0 SELECT \'pos\' ELSE SELECT \'neg\'')).toMatchObject({
     kind: 'if',

@@ -5,6 +5,7 @@ import * as Character from './character.ts'
 import * as Decimal from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import * as ForJson from './for-json.ts'
+import * as ForXml from './for-xml.ts'
 import * as Grouping from './grouping.ts'
 import * as Implicit from './implicit.ts'
 import * as Output from './output.ts'
@@ -498,6 +499,17 @@ const renderedSet =
     return { sql: parts.join(' '), collated: false }
   }
 
+const serializedSelect =
+  (ctx: Context.t, select_: Ast.Select): string | undefined => {
+    if (select_.forJson !== undefined) {
+      return ForJson.select(ctx, select_, select)
+    }
+    if (select_.forXml !== undefined) {
+      return ForXml.select(ctx, select_, select)
+    }
+    return undefined
+  }
+
 /** @returns SQLite SELECT — CTEs, set operations, TOP/OFFSET/FETCH become LIMIT. */
 export const select =
   (ctx: Context.t, select_: Ast.Select): string => Context.withColumnExpressions(
@@ -507,8 +519,9 @@ export const select =
       ...Apply.columnExpressions(select_.from)
     ]),
     () => {
-      if (select_.forJson !== undefined) {
-        return ForJson.select(ctx, select_, select)
+      const serialized = serializedSelect(ctx, select_)
+      if (serialized !== undefined) {
+        return serialized
       }
       if (Grouping.requiresExpansion(select_)) {
         return groupingSelect(ctx, select_)
@@ -946,7 +959,8 @@ export const statement =
       }
     })()
     const columns = statement_.kind === 'select' ?
-      ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
+      ForJson.selectHints(statement_) ?? ForXml.selectHints(statement_) ??
+        TableFunction.selectHints(statement_) ??
         TableTransform.selectHints(statement_) ??
         Grouping.selectHints(statement_) ?? Implicit.projectionHints(statement_) ??
         Character.selectHints(statement_) ??

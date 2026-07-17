@@ -123,6 +123,14 @@ rendered statement reports the variables it binds.
   empty arrays, and wrapper removal. JSON_QUERY and nested FOR JSON values
   are tagged with `json()` to avoid double encoding. AUTO joins beyond one
   root/child level are explicitly deferred.
+- **FOR XML** — PATH and RAW render an ordered inner projection followed by
+  typed row/document serializer UDFs. PATH supports attribute, element,
+  text/data, nested-path and wildcard aliases; RAW supports attributes or
+  ELEMENTS. ROOT, XSINIL, BINARY BASE64, WITH XMLNAMESPACES, nested TYPE
+  fragments, and empty results follow SQL Server behavior. Top-level TYPE
+  returns native XML metadata; text results use the SQL Server magic name and
+  an `nvarchar(max)` hint. AUTO, EXPLICIT, XMLDATA, and XMLSCHEMA currently
+  fail as explicit compatibility gaps.
 - **Scalar JSON** — ISJSON, JSON_VALUE and JSON_QUERY render engine UDFs rather
   than JSON1 extraction. JSON_VALUE/JSON_QUERY carry `nvarchar(4000)` hints so
   scalar, fragment and NULL results retain SQL Server wire metadata; the engine
