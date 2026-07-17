@@ -286,7 +286,14 @@ The language pipeline lives in three packages:
 
 WAITFOR, GOTO, BULK INSERT ... FROM file, source columns in MERGE OUTPUT,
 FOR XML, COLLATE as expression operator,
-AT TIME ZONE, ALTER TABLE ALTER COLUMN.
+AT TIME ZONE.
+
+`ALTER TABLE ... ALTER COLUMN` accepts declared type arguments, optional
+COLLATE, and explicit/omitted nullability (omitted means NULL). Character
+changes without COLLATE reset to the database default. The engine permits the
+SQL Server-compatible indexed variable-length widening case and otherwise
+rejects incompatible PK/index/FK/CHECK/DEFAULT/computed dependencies with
+4922 before rebuilding and converting the stored column.
 
 ### Compatibility audit findings
 

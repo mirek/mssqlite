@@ -436,23 +436,43 @@ export const alterTable: Parser.t<Ast.Statement> =
       C.keyword('alter'), C.keyword('table'), C.qualifiedName,
       C.first<Parser.t<(Ast.Statement & { kind: 'alterTable' })['action']>[]>(
         C.map(
-          C.seq(C.keyword('add'), C.sepBy1(
-            C.first<(Parser.t<Ast.TableConstraint | Ast.ColumnDefinition>)[]>(
-              tableConstraint,
-            columnDefinition
-            ),
-            C.punct(',')
-          )),
-          ([ , members ]) => {
-            const constraints = members.filter((member): member is Ast.TableConstraint => 'kind' in member)
-            return constraints.length > 0 ?
-              { kind: 'addConstraints' as const, constraints } :
-              {
-                kind: 'addColumns' as const,
-                columns: members.filter((member): member is Ast.ColumnDefinition => !('kind' in member))
-              }
-          }
+          C.seq(
+            C.keyword('alter'), C.keyword('column'), C.anyIdentifier, typeName,
+            C.maybe(C.map(
+              C.seq(C.keyword('collate'), C.anyIdentifier),
+              ([ , collation ]) => collation
+            )),
+            C.maybe(C.first(
+              C.map(C.seq(C.keyword('not'), C.keyword('null')), () => false),
+              C.map(C.keyword('null'), () => true)
+            ))
+          ),
+          ([ , , column, type, collate, nullable ]) => ({
+            kind: 'alterColumn' as const,
+            column,
+            type,
+            ...collate === undefined ? {} : { collate },
+            nullable: nullable ?? true
+          })
         ),
+      C.map(
+        C.seq(C.keyword('add'), C.sepBy1(
+          C.first<(Parser.t<Ast.TableConstraint | Ast.ColumnDefinition>)[]>(
+            tableConstraint,
+          columnDefinition
+          ),
+          C.punct(',')
+        )),
+        ([ , members ]) => {
+          const constraints = members.filter((member): member is Ast.TableConstraint => 'kind' in member)
+          return constraints.length > 0 ?
+            { kind: 'addConstraints' as const, constraints } :
+            {
+              kind: 'addColumns' as const,
+              columns: members.filter((member): member is Ast.ColumnDefinition => !('kind' in member))
+            }
+        }
+      ),
       C.map(
         C.seq(C.keyword('drop'), C.keyword('column'), C.sepBy1(C.anyIdentifier, C.punct(','))),
         ([ , , columns ]) => ({ kind: 'dropColumns' as const, columns })

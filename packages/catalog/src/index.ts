@@ -4,6 +4,7 @@ export { nameParts, rename, type RenameKind, type RenameResult } from './rename.
 export { bootstrap } from './bootstrap.ts'
 export {
   addColumns,
+  alterColumn,
   alterSequence,
   allocateId,
   createIndex,

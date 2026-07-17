@@ -478,6 +478,13 @@ the engine:
   expressions, joins, duplicate projections, and unions do not. Physical and
   catalog creation precede INSERT SELECT so SQL Server's empty-table failure
   behavior and explicit transaction rollback remain observable.
+- **ALTER COLUMN is an owned-database rebuild** — the engine validates catalog
+  dependencies before touching SQLite, creates a converted replacement table,
+  swaps it under a savepoint, recreates dependent SQLite indexes/triggers/views,
+  and updates the existing `sys.columns` row in place. Type conversion,
+  physical schema, catalog metadata, and foreign-key validation therefore
+  commit or roll back together; database localization routes three-part DDL to
+  the target database's primary handle before this sequence begins.
 
 ## Extension points
 

@@ -447,6 +447,13 @@ export type Statement =
       readonly name: QualifiedName,
       readonly action:
         | { readonly kind: 'addColumns', readonly columns: readonly ColumnDefinition[] }
+        | {
+            readonly kind: 'alterColumn',
+            readonly column: string,
+            readonly type: TypeName.t,
+            readonly collate?: string,
+            readonly nullable: boolean
+          }
         | { readonly kind: 'dropColumns', readonly columns: readonly string[] }
         | { readonly kind: 'addConstraints', readonly constraints: readonly TableConstraint[] }
         | { readonly kind: 'dropConstraints', readonly names: readonly string[] }

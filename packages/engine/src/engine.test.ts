@@ -405,6 +405,235 @@ test('computed columns support ALTER, table variables and database restart', () 
   }
 })
 
+test('alter column rebuilds data and dependent schema with persistent metadata', () => {
+  const path = join(tmpdir(), `mssqlite-alter-column-${randomUUID()}.db`)
+  try {
+    const firstServer = server({ path })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE TABLE alter_column_values (
+        key_value int PRIMARY KEY,
+        identity_value int IDENTITY,
+        numeric_value int,
+        label varchar(5),
+        constrained varchar(5) UNIQUE,
+        defaulted varchar(5) DEFAULT 'x'
+      )
+      CREATE INDEX ix_alter_column_label ON alter_column_values(label)
+      CREATE VIEW alter_column_view AS
+        SELECT key_value, numeric_value, label FROM alter_column_values
+      INSERT alter_column_values (key_value, numeric_value, label, constrained)
+        VALUES (1, 7, 'one', 'first')
+    `)
+    executeBatch(first, `CREATE PROCEDURE alter_column_proc AS
+      SELECT numeric_value FROM alter_column_values ORDER BY key_value`)
+    const objectId = rowsOf(executeBatch(first,
+      'SELECT OBJECT_ID(N\'alter_column_values\')')).rows[0]?.[0]
+    executeBatch(first, `
+      ALTER TABLE alter_column_values ALTER COLUMN numeric_value bigint NOT NULL
+      ALTER TABLE alter_column_values ALTER COLUMN label varchar(10)
+        COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL
+      ALTER TABLE alter_column_values ALTER COLUMN constrained varchar(10)
+        COLLATE SQL_Latin1_General_CP1_CI_AS NULL
+      ALTER TABLE alter_column_values ALTER COLUMN defaulted varchar(10) NULL
+      ALTER TABLE alter_column_values ALTER COLUMN identity_value bigint NOT NULL
+      INSERT alter_column_values (key_value, numeric_value, label, constrained)
+        VALUES (2, 9, 'two', 'second')
+    `)
+    expect(rowsOf(executeBatch(first, `
+      SELECT key_value, identity_value, numeric_value, label, constrained, defaulted
+      FROM alter_column_values ORDER BY key_value
+    `)).rows).toEqual([
+      [ 1, 1, 7, 'one', 'first', 'x' ],
+      [ 2, 2, 9, 'two', 'second', 'x' ]
+    ])
+    expect(rowsOf(executeBatch(first, `
+      SELECT OBJECT_ID(N'alter_column_values'), system_type_id, max_length, is_nullable
+      FROM sys.columns WHERE object_id = OBJECT_ID(N'alter_column_values')
+        AND name = N'numeric_value'
+    `)).rows).toEqual([ [ objectId, 127, 8, 0 ] ])
+    expect(rowsOf(executeBatch(first, `
+      SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_NAME = N'alter_column_values' AND COLUMN_NAME = N'label'
+    `)).rows).toEqual([ [ 'varchar', 10, 'NO' ] ])
+    expect(rowsOf(executeBatch(first, 'SELECT * FROM alter_column_view ORDER BY key_value')).rows)
+      .toEqual([ [ 1, 7, 'one' ], [ 2, 9, 'two' ] ])
+    expect(rowsOf(executeBatch(first, 'EXEC alter_column_proc')).rows)
+      .toEqual([ [ 7 ], [ 9 ] ])
+    expect(() => executeBatch(first, `
+      INSERT alter_column_values (key_value, numeric_value, label, constrained)
+        VALUES (3, 10, 'three', 'SECOND   ')
+    `)).toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+    closeServer(firstServer)
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    expect(rowsOf(executeBatch(second, `
+      SELECT system_type_id, max_length, is_nullable, collation_name
+      FROM sys.columns WHERE object_id = OBJECT_ID(N'alter_column_values')
+      ORDER BY column_id
+    `)).rows).toEqual([
+      [ 56, 4, 0, null ], [ 127, 8, 0, null ], [ 127, 8, 0, null ],
+      [ 167, 10, 0, 'SQL_Latin1_General_CP1_CI_AS' ],
+      [ 167, 10, 1, 'SQL_Latin1_General_CP1_CI_AS' ],
+      [ 167, 10, 1, 'SQL_Latin1_General_CP1_CI_AS' ]
+    ])
+    const plan = second.db.prepare(
+      `EXPLAIN QUERY PLAN SELECT * FROM alter_column_values
+        WHERE mssqlite_collation_key(label, 'sql_latin1_general_cp1_ci_as') = 'one'`
+    ).all() as { readonly detail: string }[]
+    expect(plan.some(row => row.detail.includes('ix_alter_column_label'))).toBe(true)
+    expect(rowsOf(executeBatch(second, 'EXEC alter_column_proc')).rows)
+      .toEqual([ [ 7 ], [ 9 ] ])
+    closeServer(secondServer)
+  } finally {
+    rmSync(path, { force: true })
+  }
+})
+
+test('alter column failures and transaction rollback preserve the prior schema', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE alter_column_failures (text_value varchar(5), nullable_value int NULL)
+    INSERT alter_column_failures VALUES ('abcde', NULL)
+  `)
+  expect(() => executeBatch(s, `
+    ALTER TABLE alter_column_failures ALTER COLUMN text_value varchar(3) NULL
+  `)).toThrowError(expect.objectContaining({ number: 2628 }) as Error)
+  expect(() => executeBatch(s, `
+    ALTER TABLE alter_column_failures ALTER COLUMN nullable_value bigint NOT NULL
+  `)).toThrowError(expect.objectContaining({ number: 515 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT name, system_type_id, max_length, is_nullable FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'alter_column_failures') ORDER BY column_id
+  `)).rows).toEqual([
+    [ 'text_value', 167, 5, 1 ], [ 'nullable_value', 56, 4, 1 ]
+  ])
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM alter_column_failures')).rows)
+    .toEqual([ [ 'abcde', null ] ])
+
+  executeBatch(s, `
+    UPDATE alter_column_failures SET nullable_value = 1
+    BEGIN TRANSACTION
+    ALTER TABLE alter_column_failures ALTER COLUMN nullable_value bigint NOT NULL
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT system_type_id, is_nullable FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'alter_column_failures') AND name = N'nullable_value'
+  `)).rows).toEqual([ [ 127, 0 ] ])
+  executeBatch(s, 'ROLLBACK TRANSACTION')
+  expect(rowsOf(executeBatch(s, `
+    SELECT system_type_id, is_nullable FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'alter_column_failures') AND name = N'nullable_value'
+  `)).rows).toEqual([ [ 56, 1 ] ])
+})
+
+test('alter column converts valid values and rolls back failed conversion and narrowing', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE alter_column_conversions (
+      convertible varchar(4) NOT NULL,
+      invalid_value varchar(4) NOT NULL,
+      narrow_value varchar(5) NOT NULL
+    )
+    INSERT alter_column_conversions VALUES ('42', 'bad', 'abc')
+    ALTER TABLE alter_column_conversions ALTER COLUMN convertible int NOT NULL
+    ALTER TABLE alter_column_conversions ALTER COLUMN narrow_value varchar(3) NOT NULL
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM alter_column_conversions')).rows)
+    .toEqual([ [ 42, 'bad', 'abc' ] ])
+  expect(() => executeBatch(s, `
+    ALTER TABLE alter_column_conversions ALTER COLUMN invalid_value int NOT NULL
+  `)).toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT name, system_type_id, max_length FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'alter_column_conversions') ORDER BY column_id
+  `)).rows).toEqual([
+    [ 'convertible', 56, 4 ], [ 'invalid_value', 167, 4 ], [ 'narrow_value', 167, 3 ]
+  ])
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM alter_column_conversions')).rows)
+    .toEqual([ [ 42, 'bad', 'abc' ] ])
+})
+
+test('alter column changes or resets character collation', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE alter_column_collations (
+      changed nvarchar(10) COLLATE Latin1_General_100_CS_AS,
+      reset_value nvarchar(10) COLLATE Latin1_General_100_CS_AS
+    )
+    INSERT alter_column_collations VALUES (N'É', N'Alpha')
+    ALTER TABLE alter_column_collations ALTER COLUMN changed nvarchar(10)
+      COLLATE Latin1_General_100_CI_AI NULL
+    ALTER TABLE alter_column_collations ALTER COLUMN reset_value nvarchar(20) NULL
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT CASE WHEN changed = N'e' THEN 1 ELSE 0 END,
+      CASE WHEN reset_value = N'alpha' THEN 1 ELSE 0 END
+    FROM alter_column_collations
+  `)).rows).toEqual([ [ 1, 1 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT name, max_length, collation_name FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'alter_column_collations') ORDER BY column_id
+  `)).rows).toEqual([
+    [ 'changed', 20, 'Latin1_General_100_CI_AI' ],
+    [ 'reset_value', 40, 'SQL_Latin1_General_CP1_CI_AS' ]
+  ])
+})
+
+test('alter column changes the owning attached database atomically', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE DATABASE alter_column_owner
+    CREATE TABLE alter_column_owner.dbo.values_to_alter (value int NULL)
+    INSERT alter_column_owner.dbo.values_to_alter VALUES (7)
+    ALTER TABLE alter_column_owner.dbo.values_to_alter ALTER COLUMN value bigint NOT NULL
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT value FROM alter_column_owner.dbo.values_to_alter
+  `)).rows).toEqual([ [ 7 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT system_type_id, max_length, is_nullable
+    FROM alter_column_owner.sys.columns
+    WHERE object_id = (
+      SELECT object_id FROM alter_column_owner.sys.tables WHERE name = N'values_to_alter'
+    )
+  `)).rows).toEqual([ [ 127, 8, 0 ] ])
+})
+
+test('alter column enforces SQL Server dependency restrictions', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE alter_column_parent (id int PRIMARY KEY, code varchar(5) UNIQUE)
+    CREATE TABLE alter_column_dependencies (
+      id int PRIMARY KEY,
+      checked int CHECK (checked > 0),
+      source int,
+      calculated AS source + 1,
+      defaulted varchar(5) DEFAULT 'x',
+      indexed varchar(10),
+      parent_code varchar(5) REFERENCES alter_column_parent(code)
+    )
+    CREATE INDEX ix_alter_column_narrow ON alter_column_dependencies(indexed)
+  `)
+  for (const sql of [
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN id bigint NOT NULL',
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN checked bigint NULL',
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN source bigint NULL',
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN defaulted nvarchar(5) NULL',
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN indexed varchar(5) NULL',
+    'ALTER TABLE alter_column_dependencies ALTER COLUMN parent_code varchar(10) NULL'
+  ]) {
+    expect(() => executeBatch(s, sql))
+      .toThrowError(expect.objectContaining({ number: 4922 }) as Error)
+  }
+  expect(() => executeBatch(s, `
+    CREATE TABLE alter_column_identity (id int IDENTITY)
+    ALTER TABLE alter_column_identity ALTER COLUMN id varchar(10) NOT NULL
+  `)).toThrowError(expect.objectContaining({ number: 2749 }) as Error)
+})
+
 test('declared collations control case, accent, binary ordering and indexes', () => {
   const s = open()
   executeBatch(s, `

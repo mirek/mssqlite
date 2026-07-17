@@ -150,6 +150,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   subqueries, aggregates, window functions, or nondeterministic callbacks.
   Exact decimal and checked integer generated expressions use separately
   registered deterministic UDF names so SQLite accepts them in schema DDL.
+- SQLite cannot alter a column declaration in place. ALTER COLUMN captures the
+  physical CREATE TABLE plus dependent indexes/triggers/views, creates a
+  replacement table with the changed member, inserts through the target T-SQL
+  storage cast, swaps names, recreates dependencies, updates `sys.columns`, and
+  runs `foreign_key_check` inside one savepoint. Incoming foreign keys require
+  temporarily disabling enforcement outside the savepoint; the operation is
+  rejected inside a user transaction when that pragma transition is required.
 - Node's `node:sqlite` API cannot register custom SQLite collations. mssqlite
   therefore declares BINARY/NOCASE as a baseline and renders supported SQL
   Server collations through a deterministic normalization-key UDF. Predicates,

@@ -1042,6 +1042,16 @@ When the server processes DDL statements, it must maintain catalog tables accord
 1. Insert new row into `sys.columns`
 2. Update `max_column_id_used` in sys.tables logic
 
+### ALTER TABLE ALTER COLUMN
+
+1. Validate dependent indexes, keys, checks, defaults, computed columns, and
+   identity/rowversion restrictions before catalog mutation.
+2. Update the existing `sys.columns` row's system/user type ids, max_length,
+   precision, scale, collation_name, and is_nullable in place; object_id and
+   column_id must not change.
+3. Preserve identity and constraint child rows, and update the parent
+   `sys.objects.modify_date` in the same savepoint as the physical rebuild.
+
 ### CREATE/DROP INDEX
 
 1. Insert/delete `sys.indexes` row

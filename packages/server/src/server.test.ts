@@ -1109,6 +1109,20 @@ test('select into preserves stored types and eligible identity over tedious', as
   ])
 })
 
+test('alter column rebuilds values and exposes changed metadata over tedious', async () => {
+  const result = await query(`
+    CREATE TABLE wire_alter_column (id int NOT NULL, label varchar(5) NULL)
+    INSERT wire_alter_column VALUES (7, 'seven')
+    ALTER TABLE wire_alter_column ALTER COLUMN id bigint NOT NULL
+    ALTER TABLE wire_alter_column ALTER COLUMN label varchar(10) NOT NULL
+    SELECT id, label FROM wire_alter_column
+  `)
+  expect(result.rows).toEqual([ { id: '7', label: 'seven' } ])
+  expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 8 ], [ 'VarChar', 10 ]
+  ])
+})
+
 test('ASCII and CHAR expose Windows-1252 values and varchar metadata over tedious', async () => {
   const result = await query(`
     SELECT ASCII('€') AS euro_byte, ASCII('A') AS ascii_byte,

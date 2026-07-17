@@ -121,7 +121,9 @@ because LOGIN7 password scrambling is not transport encryption.
   supports correlated APPLY inputs; other common correlated APPLY shapes are
   translated before execution. SELECT INTO persists the inferred result types,
   widths, nullability, collation, and eligible identity for subsequent wire
-  queries. PIVOT and UNPIVOT rewrites preserve generated
+  queries. ALTER COLUMN rebuilds retained rows and immediately exposes the
+  changed type, width, collation, and nullability in tedious COLMETADATA.
+  PIVOT and UNPIVOT rewrites preserve generated
   result names and types on the wire, including all-NULL columns; ROLLUP,
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with
   stable metadata. Per-statement SET NOCOUNT state clears DONE_COUNT and its

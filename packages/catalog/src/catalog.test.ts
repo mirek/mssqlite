@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, test } from 'vitest'
 import { parseStatement } from '@mssqlite/tsql'
 import {
-  addColumns, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
+  addColumns, alterColumn, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
   createProcedure, createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
   dropSequence, objectIdOf, rowversionValue, sequenceRows, tableColumns,
   updateRowversionValue, updateSequenceValue, rename
@@ -123,6 +123,17 @@ test('indexes, views and alter column maintenance', () => {
   expect(db.prepare('SELECT COUNT(*) AS n FROM "sys.views"').get()).toEqual({ n: 1 })
   addColumns(db, [ 'users' ], [ { name: 'age', type: { name: 'int', args: [] } } ])
   expect(tableColumns(db, objectId).map(column => column.name)).toContain('age')
+  const originalColumnId = tableColumns(db, objectId).find(column => column.name === 'name')?.column_id
+  alterColumn(
+    db, [ 'users' ], 'name', { name: 'nvarchar', args: [ 200 ] },
+    'Latin1_General_100_CS_AS', true)
+  expect(tableColumns(db, objectId).find(column => column.name === 'name')).toMatchObject({
+    column_id: originalColumnId,
+    system_type_id: 231,
+    max_length: 400,
+    collation_name: 'Latin1_General_100_CS_AS',
+    is_nullable: 1
+  })
   dropColumns(db, [ 'users' ], [ 'age' ])
   expect(tableColumns(db, objectId).map(column => column.name)).not.toContain('age')
 })

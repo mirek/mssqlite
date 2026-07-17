@@ -32,6 +32,7 @@ import * as SystemProcedures from './system-procedures.ts'
 import * as Databases from './database.ts'
 import { localize } from './database-name.ts'
 import { installTextForeignKeys, prepareTextForeignKeyDrop } from './foreign-key.ts'
+import { alterColumn as alterPersistedColumn } from './alter-column.ts'
 import {
   flushRowversion,
   installRowversionTriggers,
@@ -1223,6 +1224,7 @@ const executeTransaction =
           session.db.exec('ROLLBACK')
           session.transactionCount = 0
           Identity.rollbackResets(session)
+          Identity.reloadIdentities(session.databaseState)
         }
         session.transactionDoomed = false
         return
@@ -1518,6 +1520,11 @@ const executeStatementInner =
           }
         } : statement
         const db = catalogDatabase(session, resolved.name)
+        if (resolved.action.kind === 'alterColumn') {
+          alterPersistedColumn(session, resolved.name, resolved.action)
+          Identity.reloadIdentities(Databases.stateForName(session, resolved.name))
+          return undefined
+        }
         const objectId = Catalog.objectIdOf(db, resolved.name)
         const existing = objectId === undefined ? [] : Catalog.tableColumns(db, objectId)
         if (resolved.action.kind === 'addColumns') {

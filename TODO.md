@@ -13,7 +13,6 @@ work is complete.
 ## Query and DDL surface
 
 - [APPLY-derived tables](todo/apply-derived-tables.md) — Generalize CROSS/OUTER APPLY beyond narrow TVF and TOP rewrites.
-- [ALTER TABLE ALTER COLUMN](todo/alter-table-alter-column.md) — Change column types and nullability with atomic table rebuilds.
 - [FOR XML](todo/for-xml.md) — Add common SQL Server XML serialization modes and wire metadata.
 
 ## Compatibility testing
