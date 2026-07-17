@@ -3,7 +3,7 @@ import { expect, test } from 'vitest'
 import { parseStatement } from '@mssqlite/tsql'
 import {
   addColumns, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
-  createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
+  createProcedure, createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
   dropSequence, objectIdOf, rowversionValue, sequenceRows, tableColumns,
   updateRowversionValue, updateSequenceValue, rename
 } from './index.ts'
@@ -167,6 +167,83 @@ test('information schema views work', () => {
   ).all()
   expect(columns[0]).toEqual({ COLUMN_NAME: 'id', DATA_TYPE: 'int', CHARACTER_MAXIMUM_LENGTH: 4, IS_NULLABLE: 'NO' })
   expect(columns[1]).toEqual({ COLUMN_NAME: 'name', DATA_TYPE: 'nvarchar', CHARACTER_MAXIMUM_LENGTH: 100, IS_NULLABLE: 'NO' })
+})
+
+test('routine, view and constraint schemas preserve catalog relationships', () => {
+  const db = open()
+  const render = (): string => 'catalog_expression'
+  createTable(db, parseStatement(`
+    CREATE TABLE teams (
+      id INT,
+      CONSTRAINT PK_teams PRIMARY KEY (id)
+    )
+  `) as Ast.Statement & { kind: 'createTable' }, render)
+  createTable(db, parseStatement(`
+    CREATE TABLE members (
+      id INT CONSTRAINT DF_members_id DEFAULT 7,
+      team_id INT,
+      CONSTRAINT PK_members PRIMARY KEY (id),
+      CONSTRAINT FK_members_teams FOREIGN KEY (team_id) REFERENCES teams (id)
+        ON DELETE CASCADE,
+      CONSTRAINT CK_members_id CHECK (id > 0)
+    )
+  `) as Ast.Statement & { kind: 'createTable' }, render)
+  createView(db, [ 'dbo', 'member_view' ], 'CREATE VIEW member_view AS SELECT id FROM members')
+  createProcedure(db, [ 'dbo', 'member_proc' ], 'CREATE PROCEDURE member_proc AS SELECT 1')
+  createFunction(
+    db, [ 'dbo', 'member_fn' ], 'CREATE FUNCTION member_fn RETURNS INT', false,
+    { name: 'int', args: [] })
+
+  expect(db.prepare(
+    `SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE FROM "information_schema.table_constraints"
+      WHERE TABLE_NAME = 'members' ORDER BY CONSTRAINT_NAME`
+  ).all()).toEqual([
+    { CONSTRAINT_NAME: 'CK_members_id', CONSTRAINT_TYPE: 'CHECK' },
+    { CONSTRAINT_NAME: 'FK_members_teams', CONSTRAINT_TYPE: 'FOREIGN KEY' },
+    { CONSTRAINT_NAME: 'PK_members', CONSTRAINT_TYPE: 'PRIMARY KEY' }
+  ])
+  expect(db.prepare(
+    `SELECT CONSTRAINT_NAME, COLUMN_NAME, ORDINAL_POSITION
+      FROM "information_schema.key_column_usage"
+      WHERE TABLE_NAME = 'members' ORDER BY CONSTRAINT_NAME`
+  ).all()).toEqual([
+    { CONSTRAINT_NAME: 'FK_members_teams', COLUMN_NAME: 'team_id', ORDINAL_POSITION: 1 },
+    { CONSTRAINT_NAME: 'PK_members', COLUMN_NAME: 'id', ORDINAL_POSITION: 1 }
+  ])
+  expect(db.prepare(
+    `SELECT CONSTRAINT_NAME, UNIQUE_CONSTRAINT_NAME, DELETE_RULE
+      FROM "information_schema.referential_constraints"`
+  ).get()).toEqual({
+    CONSTRAINT_NAME: 'FK_members_teams',
+    UNIQUE_CONSTRAINT_NAME: 'PK_teams',
+    DELETE_RULE: 'CASCADE'
+  })
+  expect(db.prepare(
+    `SELECT name, parent_object_id, parent_column_id, definition, is_system_named
+      FROM "sys.default_constraints"`
+  ).get()).toMatchObject({
+    name: 'DF_members_id',
+    parent_column_id: 1,
+    definition: '(catalog_expression)',
+    is_system_named: 0
+  })
+  expect(db.prepare(
+    'SELECT TABLE_NAME, VIEW_DEFINITION FROM "information_schema.views"'
+  ).get()).toEqual({
+    TABLE_NAME: 'member_view',
+    VIEW_DEFINITION: 'CREATE VIEW member_view AS SELECT id FROM members'
+  })
+  expect(db.prepare(
+    `SELECT ROUTINE_NAME, ROUTINE_TYPE, DATA_TYPE
+      FROM "information_schema.routines" ORDER BY ROUTINE_NAME`
+  ).all()).toEqual([
+    { ROUTINE_NAME: 'member_fn', ROUTINE_TYPE: 'FUNCTION', DATA_TYPE: 'int' },
+    { ROUTINE_NAME: 'member_proc', ROUTINE_TYPE: 'PROCEDURE', DATA_TYPE: null }
+  ])
+  expect(db.prepare(
+    `SELECT is_inlineable, inline_type FROM "sys.sql_modules"
+      WHERE object_id = (SELECT object_id FROM "sys.objects" WHERE name = 'member_fn')`
+  ).get()).toEqual({ is_inlineable: 0, inline_type: 0 })
 })
 
 test('typical sys catalog query joins', () => {

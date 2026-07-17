@@ -436,6 +436,77 @@ test('information schema over the wire', async () => {
   expect(result.rows).toEqual([ { COLUMN_NAME: 'name', DATA_TYPE: 'nvarchar' } ])
 })
 
+test('expanded catalog relationships and metadata cross tedious', async () => {
+  await query(`
+    CREATE TABLE wire_catalog_parent (
+      id INT, CONSTRAINT PK_wire_catalog_parent PRIMARY KEY (id)
+    )
+    CREATE TABLE wire_catalog_child (
+      id INT CONSTRAINT DF_wire_catalog_child_id DEFAULT 9,
+      parent_id INT,
+      CONSTRAINT PK_wire_catalog_child PRIMARY KEY (id),
+      CONSTRAINT FK_wire_catalog_child_parent FOREIGN KEY (parent_id)
+        REFERENCES wire_catalog_parent (id) ON DELETE CASCADE
+    )
+    CREATE VIEW wire_catalog_view AS SELECT id FROM wire_catalog_child
+  `)
+  await query('CREATE PROCEDURE wire_catalog_proc AS SELECT 1')
+  await query('CREATE FUNCTION wire_catalog_fn() RETURNS INT AS BEGIN RETURN 1 END')
+
+  const constraints = await query(`
+    SELECT CONSTRAINT_NAME, COLUMN_NAME, ORDINAL_POSITION
+    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+    WHERE TABLE_NAME = 'wire_catalog_child' ORDER BY CONSTRAINT_NAME
+  `)
+  expect(constraints.rows).toEqual([
+    { CONSTRAINT_NAME: 'FK_wire_catalog_child_parent', COLUMN_NAME: 'parent_id', ORDINAL_POSITION: 1 },
+    { CONSTRAINT_NAME: 'PK_wire_catalog_child', COLUMN_NAME: 'id', ORDINAL_POSITION: 1 }
+  ])
+  expect(constraints.columns.map(column => column.name)).toEqual([
+    'CONSTRAINT_NAME', 'COLUMN_NAME', 'ORDINAL_POSITION'
+  ])
+  expect(constraints.columns.map(column => column.type)).toEqual([
+    'NVarChar', 'NVarChar', 'IntN'
+  ])
+
+  const definitions = await query(`
+    SELECT v.TABLE_NAME, v.VIEW_DEFINITION, r.ROUTINE_NAME, r.ROUTINE_TYPE
+    FROM INFORMATION_SCHEMA.VIEWS v
+    CROSS JOIN INFORMATION_SCHEMA.ROUTINES r
+    WHERE v.TABLE_NAME = 'wire_catalog_view' AND r.ROUTINE_NAME = 'wire_catalog_fn'
+  `)
+  expect(definitions.rows[0]).toMatchObject({
+    TABLE_NAME: 'wire_catalog_view',
+    VIEW_DEFINITION: expect.stringContaining('CREATE VIEW'),
+    ROUTINE_NAME: 'wire_catalog_fn',
+    ROUTINE_TYPE: 'FUNCTION'
+  })
+})
+
+test('dynamic session and current request metadata cross tedious', async () => {
+  const observer = await connect(listening.port)
+  try {
+    const sessions = await query(`
+      SELECT COUNT(*) AS session_count
+      FROM sys.dm_exec_sessions
+    `)
+    expect(Number(sessions.rows[0]?.['session_count'])).toBeGreaterThanOrEqual(2)
+
+    const request = await query(`
+      SELECT session_id, request_id, status, command
+      FROM sys.dm_exec_requests WHERE session_id = @@SPID
+    `)
+    expect(request.rows).toEqual([ {
+      session_id: expect.any(Number), request_id: 0, status: 'running', command: 'SELECT'
+    } ])
+    expect(request.columns.map(column => column.type)).toEqual([
+      'IntN', 'IntN', 'NVarChar', 'NVarChar'
+    ])
+  } finally {
+    observer.close()
+  }
+})
+
 test('errors surface with mssql numbers', async () => {
   await expect(query('SELECT * FROM missing_table')).rejects.toMatchObject({ number: 208 })
   await expect(query('INSERT INTO users (name) VALUES (NULL)')).rejects.toMatchObject({ number: 515 })

@@ -98,6 +98,9 @@ plaintext development mode. `requestClientCertificate` and
 
 Each connection gets its own engine session (variables, transactions,
 `@@`-state); all sessions share the server's SQLite database.
+Authenticated connections and in-flight requests are visible through the
+minimal `sys.dm_exec_sessions` / `sys.dm_exec_requests` surface and are removed
+on request completion or socket close.
 
 Mixed-success batches retain SQL Server token order: each recoverable engine
 error becomes ERROR + DONE_ERROR/DONE_MORE, followed by later result metadata,

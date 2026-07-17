@@ -34,6 +34,8 @@ import {
 } from './rowversion.ts'
 import type { Ast } from '@mssqlite/tsql'
 import {
+  beginRequest,
+  endRequest,
   functionKey,
   countVisibility,
   procedureKey,
@@ -1163,7 +1165,7 @@ const executeStatementInner =
         validateRowversionColumns(resolved.columns)
         const rendered = Transpile.statement(resolved)
         session.db.exec(rendered.sql)
-        Catalog.createTable(session.db, resolved)
+        Catalog.createTable(session.db, resolved, expression => Transpile.scalar(expression).sql)
         const rowversion = resolved.columns.find(column => isRowversionType(column.type))
         if (rowversion !== undefined) {
           installRowversionTriggers(session.db, resolved.name, rowversion.name)
@@ -1210,8 +1212,17 @@ const executeStatementInner =
         Catalog.dropIndex(session.db, statement.name)
         return undefined
       case 'createView':
-        session.db.exec(Transpile.statement(statement).sql)
-        Catalog.createView(session.db, statement.name)
+        {
+          if (statement.orReplace === true &&
+            Catalog.objectIdOf(session.db, statement.name) !== undefined) {
+            session.db.exec(Transpile.statement({
+              kind: 'dropView', names: [ statement.name ], ifExists: true
+            }).sql)
+          }
+          const rendered = Transpile.statement(statement).sql
+          session.db.exec(rendered)
+          Catalog.createView(session.db, statement.name, rendered)
+        }
         return undefined
       case 'dropView':
         session.db.exec(Transpile.statement(statement).sql)
@@ -1246,7 +1257,9 @@ const executeStatementInner =
         session.db.exec(Transpile.statement(resolved).sql)
         switch (resolved.action.kind) {
           case 'addColumns': {
-            Catalog.addColumns(session.db, resolved.name, resolved.action.columns)
+            Catalog.addColumns(
+              session.db, resolved.name, resolved.action.columns,
+              expression => Transpile.scalar(expression).sql)
             const rowversion = resolved.action.columns.find(column => isRowversionType(column.type))
             if (rowversion !== undefined) {
               populateRowversion(session.db, resolved.name, rowversion.name)
@@ -1703,7 +1716,8 @@ const defineFunction =
       statement.returns.body.forEach(validateFunctionStatement)
     }
     Catalog.createFunction(
-      session.db, statement.name, statement.definition, statement.returns.kind === 'table')
+      session.db, statement.name, statement.definition, statement.returns.kind === 'table',
+      statement.returns.kind === 'scalar' ? statement.returns.type : undefined)
     const function_: UserFunction = {
       name: statement.name,
       parameters: statement.parameters,
@@ -1936,6 +1950,7 @@ const canContinueBatch =
 
 export const executeBatch =
   (session: Session, sql: string): Item[] => {
+    beginRequest(session, sql)
     session.server.current = session
     for (const [ key, function_ ] of session.server.functions) {
       installScalarFunction(session.server, key, function_)
@@ -1987,5 +2002,7 @@ export const executeBatch =
         session.lastError = mapped.number
       }
       throw mapped
+    } finally {
+      endRequest(session)
     }
   }

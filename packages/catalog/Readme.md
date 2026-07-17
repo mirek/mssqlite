@@ -11,7 +11,8 @@ no query interception.
 
 - `bootstrap(db, databaseName)` — creates backing tables, derived views
   (`sys.tables`, `sys.views`, `sys.procedures`, `sys.identity_columns`,
-  `INFORMATION_SCHEMA.TABLES/COLUMNS`) and seed rows (schemas, all 31 system
+  `INFORMATION_SCHEMA.TABLES/COLUMNS/ROUTINES/VIEWS/TABLE_CONSTRAINTS/`
+  `KEY_COLUMN_USAGE/REFERENTIAL_CONSTRAINTS`) and seed rows (schemas, all 34 system
   types, databases incl. the user database as id 5, database/server
   principals, object id allocator). The 34 rows include CLR assembly types
   hierarchyid/geometry/geography with distinct user ids over system type 240.
@@ -27,7 +28,7 @@ no query interception.
   - `createIndex` / `dropIndex`, `createView` / `dropView`,
     `createProcedure` / `dropProcedure`, and scalar/inline-TVF
     `createFunction` / `dropFunction`, and `createTrigger` / `dropTrigger`;
-    module definitions persist in `sys.sql_modules`, functions use
+    view/routine/trigger definitions persist in completed `sys.sql_modules`, functions use
     sys.objects type `FN` / `IF`, and triggers use table-parented type `TR`;
     `createSequence` / `alterSequence` / `dropSequence` maintain `SO` objects
     and lossless counter state behind `sys.sequences`;
@@ -35,9 +36,14 @@ no query interception.
     persists as decimal text in the singleton `sys.rowversion_state` table;
     computed columns populate `is_computed` plus definition/persistence rows
     behind `sys.computed_columns`; `addColumns` / `dropColumns`.
+    DEFAULT expressions and `sys.columns.default_object_id` stay synchronized
+    through the inherited `sys.default_constraints` view.
   - `rename(db, oldName, newName, kind)` uses a savepoint to rename a physical
     SQLite table/view, column, or user index together with its `sys.objects`,
     `sys.columns`, or `sys.indexes` identity. A failure rolls both layers back.
+- Live state — engine session/request hooks maintain the exposed
+  `sys.dm_exec_sessions` and `sys.dm_exec_requests` subsets; completed requests
+  disappear and disconnected sessions are deleted.
 - Lookups — `objectIdOf(db, name)` (schema-aware, case-insensitive),
   `tableColumns(db, objectId)` (the engine derives TDS column metadata from
   these rows), `schemaIdOf`, `allocateId`.

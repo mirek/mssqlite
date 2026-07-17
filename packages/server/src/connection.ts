@@ -3,7 +3,7 @@ import {
   Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
 } from '@mssqlite/tds'
 import {
-  BatchError, errorOf, executeBatch, executeSql, session,
+  BatchError, closeSession, errorOf, executeBatch, executeSql, session, syncSession,
   type Parameter, type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
@@ -139,6 +139,7 @@ const onLogin =
     if (login.database !== '') {
       session_.database = login.database
     }
+    syncSession(session_)
     connection.session = session_
     if (login.packetSize >= 512 && login.packetSize <= 32767) {
       connection.packetSize = login.packetSize
@@ -401,4 +402,9 @@ export const attach =
     })
     socket.on('end', () => connection.tls?.end())
     socket.on('error', () => socket.destroy())
+    socket.once('close', () => {
+      if (connection.session !== undefined) {
+        closeSession(connection.session)
+      }
+    })
   }

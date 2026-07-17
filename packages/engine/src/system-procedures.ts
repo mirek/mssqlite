@@ -511,17 +511,32 @@ const spWho =
       { name: 'loginame', defaultValue: null }
     ])
     const filter = stringOf(filterValue ?? null)?.toLowerCase() ?? null
-    const included = filter === null || filter === 'active' ||
-      filter === session.userName.toLowerCase() || filter === String(session.spid)
+    const activity = session.db.prepare(
+      `SELECT s.session_id, s.status, s.login_name, s.host_name,
+        r.command, r.request_id
+      FROM "sys.dm_exec_sessions" s
+      LEFT JOIN "sys.dm_exec_requests" r ON r.session_id = s.session_id
+      ORDER BY s.session_id`
+    ).all() as unknown as {
+      session_id: number,
+      status: string,
+      login_name: string,
+      host_name: string | null,
+      command: string | null,
+      request_id: number | null
+    }[]
+    const selected = activity.filter(row => filter === null ||
+      (filter === 'active' ? row.request_id !== null :
+        filter === row.login_name.toLowerCase() || filter === String(row.session_id)))
     return [ rows([
       integer('spid', 2, false), integer('ecid', 2, false), nchar('status', 30, false),
       nchar('loginame', 128, false), nchar('hostname', 128, false),
       char('blk', 5, false), nchar('dbname', 128, false), nchar('cmd', 26, false),
       integer('request_id', 4, false)
-    ], included ? [ [
-      session.spid, 0, 'running', session.userName, session.hostName,
-      '0', session.database, 'AWAITING COMMAND', 0
-    ] ] : []) ]
+    ], selected.map(row => [
+      row.session_id, 0, row.status, row.login_name, row.host_name ?? '',
+      '0', session.database, row.command ?? 'AWAITING COMMAND', row.request_id ?? 0
+    ])) ]
   }
 
 const databaseBytes =

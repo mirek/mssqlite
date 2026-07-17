@@ -232,6 +232,12 @@ const insertColumn =
     }
   }
 
+type ExpressionRenderer = (expression: Ast.Expression) => string
+
+const expressionDefinition =
+  (render: ExpressionRenderer | undefined, expression: Ast.Expression): string | null =>
+    render === undefined ? null : `(${render(expression)})`
+
 const insertKeyConstraint =
   (db: DatabaseSync, fields: {
     kind: 'primaryKey' | 'unique',
@@ -275,7 +281,11 @@ const insertKeyConstraint =
 
 /** Registers a created table — objects, columns, constraints, indexes. */
 export const createTable =
-  (db: DatabaseSync, statement: Ast.Statement & { kind: 'createTable' }): number => {
+  (
+    db: DatabaseSync,
+    statement: Ast.Statement & { kind: 'createTable' },
+    renderExpression?: ExpressionRenderer
+  ): number => {
     const at = objectNameOf(statement.name)
     const schemaId = schemaIdOf(db, at.schema)
     const objectId = allocateId(db)
@@ -343,24 +353,37 @@ export const createTable =
           typeDesc: 'CHECK_CONSTRAINT'
         })
         db.prepare(
-          `INSERT INTO "sys.check_constraints" (object_id, parent_column_id, is_system_named)
-            VALUES (?, ?, 1)`
-        ).run(checkId, columnIds.get(column.name.toLowerCase()) ?? 0)
+          `INSERT INTO "sys.check_constraints"
+            (object_id, parent_column_id, definition, is_system_named)
+            VALUES (?, ?, ?, 1)`
+        ).run(
+          checkId, columnIds.get(column.name.toLowerCase()) ?? 0,
+          expressionDefinition(renderExpression, column.check)
+        )
       }
       if (column.default_ !== undefined) {
         const defaultId = allocateId(db)
         insertObject(db, {
           objectId: defaultId,
-          name: `DF__${at.name}__${defaultId}`,
+          name: column.constraintName ?? `DF__${at.name}__${defaultId}`,
           schemaId,
           parentObjectId: objectId,
           type: 'D',
           typeDesc: 'DEFAULT_CONSTRAINT'
         })
         db.prepare(
-          `INSERT INTO "sys.default_constraints" (object_id, parent_column_id, is_system_named)
-            VALUES (?, ?, 1)`
-        ).run(defaultId, columnIds.get(column.name.toLowerCase()) ?? 0)
+          `INSERT INTO "sys.default_constraints_extra"
+            (object_id, parent_column_id, definition, is_system_named)
+            VALUES (?, ?, ?, ?)`
+        ).run(
+          defaultId, columnIds.get(column.name.toLowerCase()) ?? 0,
+          expressionDefinition(renderExpression, column.default_),
+          column.constraintName === undefined ? 1 : 0
+        )
+        db.prepare(
+          `UPDATE "sys.columns" SET default_object_id = ?
+            WHERE object_id = ? AND column_id = ?`
+        ).run(defaultId, objectId, columnIds.get(column.name.toLowerCase()) ?? 0)
       }
     })
     // Table-level constraints.
@@ -415,9 +438,12 @@ export const createTable =
             typeDesc: 'CHECK_CONSTRAINT'
           })
           db.prepare(
-            `INSERT INTO "sys.check_constraints" (object_id, is_system_named)
-              VALUES (?, ?)`
-          ).run(checkId, constraint.name === undefined ? 1 : 0)
+            `INSERT INTO "sys.check_constraints" (object_id, definition, is_system_named)
+              VALUES (?, ?, ?)`
+          ).run(
+            checkId, expressionDefinition(renderExpression, constraint.expression),
+            constraint.name === undefined ? 1 : 0
+          )
           break
         }
         default:
@@ -452,7 +478,7 @@ export const dropTable =
       db.prepare('DELETE FROM "sys.foreign_keys" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.key_constraints" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.check_constraints" WHERE object_id = ?').run(id)
-      db.prepare('DELETE FROM "sys.default_constraints" WHERE object_id = ?').run(id)
+      db.prepare('DELETE FROM "sys.default_constraints_extra" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.identity_columns_extra" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.computed_columns_extra" WHERE object_id = ?').run(id)
       db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(id)
@@ -495,7 +521,19 @@ export const dropIndex =
 
 /** Registers a created view. */
 export const createView =
-  (db: DatabaseSync, name: Ast.QualifiedName): number => {
+  (db: DatabaseSync, name: Ast.QualifiedName, definition = ''): number => {
+    const existing = objectIdOf(db, name)
+    if (existing !== undefined) {
+      db.prepare(
+        `UPDATE "sys.objects" SET modify_date = strftime('%Y-%m-%d %H:%M:%S', 'now')
+          WHERE object_id = ?`
+      ).run(existing)
+      db.prepare(
+        `INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)
+          ON CONFLICT(object_id) DO UPDATE SET definition = excluded.definition`
+      ).run(existing, definition)
+      return existing
+    }
     const at = objectNameOf(name)
     const objectId = allocateId(db)
     insertObject(db, {
@@ -505,6 +543,8 @@ export const createView =
       type: 'V',
       typeDesc: 'VIEW'
     })
+    db.prepare('INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)')
+      .run(objectId, definition)
     return objectId
   }
 
@@ -513,6 +553,7 @@ export const dropView =
   (db: DatabaseSync, name: Ast.QualifiedName): void => {
     const objectId = objectIdOf(db, name)
     if (objectId !== undefined) {
+      db.prepare('DELETE FROM "sys.sql_modules" WHERE object_id = ?').run(objectId)
       db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(objectId)
     }
   }
@@ -538,6 +579,7 @@ const dropModule =
   (db: DatabaseSync, name: Ast.QualifiedName): void => {
     const objectId = objectIdOf(db, name)
     if (objectId !== undefined) {
+      db.prepare('DELETE FROM "sys.routine_metadata" WHERE object_id = ?').run(objectId)
       db.prepare('DELETE FROM "sys.sql_modules" WHERE object_id = ?').run(objectId)
       db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(objectId)
     }
@@ -547,13 +589,72 @@ const dropModule =
 export const dropProcedure =
   dropModule
 
+const characterTypes =
+  new Set([ 'char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'sysname' ])
+const unicodeTypes =
+  new Set([ 'nchar', 'nvarchar', 'ntext', 'sysname' ])
+const numericTypes =
+  new Set([ 'tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric',
+    'money', 'smallmoney', 'real', 'float' ])
+const datetimeTypes =
+  new Set([ 'time', 'datetime2', 'datetimeoffset' ])
+
+type RoutineMetadata = readonly (string | number | null)[]
+
+const when =
+  <T extends string | number>(condition: boolean, value: T | null | undefined): T | null =>
+    condition ? value ?? null : null
+
+const maximumCharacters =
+  (maxLength: number | undefined, unicode: boolean): number | null => {
+    if (maxLength === undefined || maxLength === -1) {
+      return maxLength ?? null
+    }
+    return unicode ? maxLength / 2 : maxLength
+  }
+
+const numericRadix =
+  (numeric: boolean, name: string): number | null => {
+    if (!numeric) {
+      return null
+    }
+    return [ 'real', 'float' ].includes(name) ? 2 : 10
+  }
+
+const routineMetadata =
+  (tableValued: boolean, returnType: TypeName.t | undefined): RoutineMetadata => {
+    if (tableValued) {
+      return [ 'table', null, null, null, null, null, null, null, null ]
+    }
+    if (returnType === undefined) {
+      return [ null, null, null, null, null, null, null, null, null ]
+    }
+    const type = columnType(returnType)
+    const character = characterTypes.has(returnType.name)
+    const unicode = unicodeTypes.has(returnType.name)
+    const numeric = numericTypes.has(returnType.name)
+    const datetime = datetimeTypes.has(returnType.name)
+    return [
+      returnType.name,
+      when(character, maximumCharacters(type?.maxLength, unicode)),
+      when(character, type?.maxLength),
+      when(character, type?.collationName),
+      when(character, unicode ? 'UNICODE' : 'iso_1'),
+      when(numeric, type?.precision),
+      numericRadix(numeric, returnType.name),
+      when(numeric, type?.scale),
+      when(datetime, type?.scale)
+    ]
+  }
+
 /** Registers a scalar or inline table-valued function definition. */
 export const createFunction =
   (
     db: DatabaseSync,
     name: Ast.QualifiedName,
     definition: string,
-    tableValued: boolean
+    tableValued: boolean,
+    returnType?: TypeName.t
   ): number => {
     const at = objectNameOf(name)
     const objectId = allocateId(db)
@@ -564,8 +665,17 @@ export const createFunction =
       type: tableValued ? 'IF' : 'FN',
       typeDesc: tableValued ? 'SQL_INLINE_TABLE_VALUED_FUNCTION' : 'SQL_SCALAR_FUNCTION'
     })
-    db.prepare('INSERT INTO "sys.sql_modules" (object_id, definition) VALUES (?, ?)')
-      .run(objectId, definition)
+    db.prepare(
+      `INSERT INTO "sys.sql_modules" (object_id, definition, is_inlineable, inline_type)
+        VALUES (?, ?, ?, ?)`
+    ).run(objectId, definition, tableValued ? 1 : 0, tableValued ? 1 : 0)
+    db.prepare(
+      `INSERT INTO "sys.routine_metadata" (
+        object_id, data_type, character_maximum_length, character_octet_length,
+        collation_name, character_set_name, numeric_precision, numeric_precision_radix,
+        numeric_scale, datetime_precision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(objectId, ...routineMetadata(tableValued, returnType))
     return objectId
   }
 
@@ -729,16 +839,48 @@ export const updateSequenceValue =
 
 /** Registers columns added by ALTER TABLE ADD. */
 export const addColumns =
-  (db: DatabaseSync, name: Ast.QualifiedName, columns: readonly Ast.ColumnDefinition[]): void => {
+  (
+    db: DatabaseSync,
+    name: Ast.QualifiedName,
+    columns: readonly Ast.ColumnDefinition[],
+    renderExpression?: ExpressionRenderer
+  ): void => {
     const objectId = objectIdOf(db, name)
     if (objectId === undefined) {
       return
     }
+    const object = db.prepare(
+      'SELECT name, schema_id FROM "sys.objects" WHERE object_id = ?'
+    ).get(objectId) as { name: string, schema_id: number }
     const max = db.prepare('SELECT MAX(column_id) AS max_id FROM "sys.columns" WHERE object_id = ?')
       .get(objectId) as { max_id: number | null }
     let columnId = (max.max_id ?? 0) + 1
     for (const column of columns) {
-      insertColumn(db, objectId, columnId++, column)
+      const at = columnId++
+      insertColumn(db, objectId, at, column)
+      if (column.default_ !== undefined) {
+        const defaultId = allocateId(db)
+        insertObject(db, {
+          objectId: defaultId,
+          name: column.constraintName ?? `DF__${object.name}__${defaultId}`,
+          schemaId: object.schema_id,
+          parentObjectId: objectId,
+          type: 'D',
+          typeDesc: 'DEFAULT_CONSTRAINT'
+        })
+        db.prepare(
+          `INSERT INTO "sys.default_constraints_extra"
+            (object_id, parent_column_id, definition, is_system_named)
+            VALUES (?, ?, ?, ?)`
+        ).run(
+          defaultId, at, expressionDefinition(renderExpression, column.default_),
+          column.constraintName === undefined ? 1 : 0
+        )
+        db.prepare(
+          `UPDATE "sys.columns" SET default_object_id = ?
+            WHERE object_id = ? AND column_id = ?`
+        ).run(defaultId, objectId, at)
+      }
     }
   }
 
@@ -754,6 +896,23 @@ export const dropColumns =
         'SELECT column_id FROM "sys.columns" WHERE object_id = ? AND name = ?'
       ).get(objectId, column) as { column_id: number } | undefined
       if (row !== undefined) {
+        const constraints = db.prepare(
+          `SELECT o.object_id, o.type FROM "sys.objects" o
+            LEFT JOIN "sys.default_constraints_extra" d ON d.object_id = o.object_id
+            LEFT JOIN "sys.check_constraints" c ON c.object_id = o.object_id
+            WHERE o.parent_object_id = ?
+              AND (d.parent_column_id = ? OR c.parent_column_id = ?)`
+        ).all(objectId, row.column_id, row.column_id) as { object_id: number, type: string }[]
+        for (const constraint of constraints) {
+          if (constraint.type === 'D') {
+            db.prepare('DELETE FROM "sys.default_constraints_extra" WHERE object_id = ?')
+              .run(constraint.object_id)
+          } else if (constraint.type === 'C') {
+            db.prepare('DELETE FROM "sys.check_constraints" WHERE object_id = ?')
+              .run(constraint.object_id)
+          }
+          db.prepare('DELETE FROM "sys.objects" WHERE object_id = ?').run(constraint.object_id)
+        }
         db.prepare(
           'DELETE FROM "sys.computed_columns_extra" WHERE object_id = ? AND column_id = ?'
         ).run(objectId, row.column_id)

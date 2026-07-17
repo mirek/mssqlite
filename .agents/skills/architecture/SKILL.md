@@ -223,9 +223,15 @@ the engine:
   in-memory procedure, trigger, or sequence registry. The rename surface covers
   tables/views/modules/sequences, columns, and user indexes; function renames
   and dependency-text rewriting are deliberately unsupported. `sp_who` exposes
-  only the current connection until the server owns a shared session registry,
-  and `sp_spaceused` reports local SQLite page estimates rather than SQL Server
+  all authenticated connections through the shared dynamic-session catalog;
+  `sp_spaceused` reports local SQLite page estimates rather than SQL Server
   allocation-unit detail.
+- **Dynamic management state follows request scope** — `session(server)` inserts
+  a sleeping `sys.dm_exec_sessions` row, LOGIN synchronizes client identity,
+  and the outer `executeBatch` call inserts request 0 before parsing. This makes
+  `sys.dm_exec_requests` self-observable during execution. The request row is
+  removed in `finally`, transaction/row/error counters are copied back to the
+  session row, and TDS socket close removes the authenticated session.
 - **MERGE is decomposed, not rendered** (`engine/merge.ts`) — one
   snapshot temp table computed against the pre-merge state joins source
   to target (LEFT JOIN, or FULL JOIN through a never-null source marker
