@@ -77,7 +77,9 @@ date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
 error numbers, offset-preserving `datetimeoffset` with UTC-normalized
 comparison and exact TDS round trips, and declared case/accent/BIN2 collation
 semantics. Embedded listeners support scrypt-hashed, hot-rotatable SQL logins
-over required TLS, with explicit insecure mode reserved for development.
+over required TLS, with explicit insecure mode reserved for development. TDS
+bulk-load streams interoperate with `tedious` and node-mssql bulk-copy APIs,
+decode rows incrementally, and commit or roll back each load atomically.
 
 What's still missing is tracked in [TODO.md](TODO.md).
 

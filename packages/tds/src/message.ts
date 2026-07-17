@@ -10,6 +10,14 @@ export type Message = {
 export type t =
   Message
 
+/** One complete packet payload from a message selected for streaming. */
+export type Fragment = {
+  readonly type: number,
+  readonly payload: Uint8Array,
+  readonly eom: boolean,
+  readonly ignore: boolean
+}
+
 /** Incremental packet reassembly state. */
 export type State = {
   /** Raw bytes received but not yet consumed as complete packets. */
@@ -36,7 +44,11 @@ export const initial: State = {
  * messages across packet boundaries (EOM terminates a message).
  */
 export const push =
-  (state: State, chunk: Uint8Array): { state: State, messages: Message[] } => {
+  (
+    state: State,
+    chunk: Uint8Array,
+    streamedTypes: readonly number[] = []
+  ): { state: State, messages: Message[], fragments: Fragment[] } => {
     let pending = state.pending.byteLength === 0 ?
       chunk :
       Encode.concat(state.pending, chunk)
@@ -44,6 +56,7 @@ export const push =
     let type = state.type
     let ignore = state.ignore
     const messages: Message[] = []
+    const fragments: Fragment[] = []
     for (;;) {
       if (pending.byteLength < Packet.headerLength) {
         break
@@ -62,16 +75,30 @@ export const push =
       if (pending.byteLength < length) {
         break
       }
-      payloads.push(pending.subarray(Packet.headerLength, length))
+      if (type !== undefined && type !== header.value.type) {
+        throw new Error('Malformed TDS message: packet type changed before EOM.')
+      }
       type ??= header.value.type
       if ((status & Packet.Status.ignore) !== 0) {
         ignore = true
+      }
+      const payload = pending.subarray(Packet.headerLength, length)
+      const streamed = streamedTypes.includes(type)
+      if (streamed) {
+        fragments.push({
+          type,
+          payload,
+          eom: (status & Packet.Status.eom) !== 0,
+          ignore
+        })
+      } else {
+        payloads.push(payload)
       }
       pending = pending.subarray(length)
       if ((status & Packet.Status.eom) !== 0) {
         // A message flagged IGNORE (client canceled mid-send) must be
         // discarded, not executed; the client follows with an Attention.
-        if (!ignore) {
+        if (!ignore && !streamed) {
           messages.push({ type, payload: Encode.concat(...payloads) })
         }
         payloads = []
@@ -81,6 +108,7 @@ export const push =
     }
     return {
       state: { pending, payloads, type, ignore },
-      messages
+      messages,
+      fragments
     }
   }

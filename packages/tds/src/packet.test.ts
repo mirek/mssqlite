@@ -78,3 +78,20 @@ test('message reassembly of two messages in one chunk', () => {
   expect(messages[0]).toMatchObject({ type: Packet.Type.sqlBatch })
   expect(messages[1]).toMatchObject({ type: Packet.Type.attention, payload: new Uint8Array(0) })
 })
+
+test('selected message types stream packet fragments without retaining payloads', () => {
+  const payload = new Uint8Array(9000).map((_, index) => index % 251)
+  const packets = Packet.split(Packet.Type.bulkLoad, payload, 512)
+  let state = Message.initial
+  const fragments: Message.Fragment[] = []
+  for (const packet of packets) {
+    const result = Message.push(state, packet, [ Packet.Type.bulkLoad ])
+    state = result.state
+    fragments.push(...result.fragments)
+    expect(result.messages).toEqual([])
+    expect(state.payloads).toEqual([])
+  }
+  expect(Encode.concat(...fragments.map(fragment => fragment.payload))).toEqual(payload)
+  expect(fragments.at(-1)?.eom).toBe(true)
+  expect(state).toEqual(Message.initial)
+})

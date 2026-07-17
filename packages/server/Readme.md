@@ -136,6 +136,15 @@ because LOGIN7 password scrambling is not transport encryption.
 - **Transaction manager (0x0E)** — begin/commit/rollback/save mapped to
   engine transactions with ENVCHANGE type 8/9/10 descriptors (how tedious
   `beginTransaction()` works).
+- **Bulk load (0x07)** — an `INSERT BULK` SQL batch establishes validated
+  target columns, then packet fragments feed bounded COLMETADATA/ROW/PLP
+  decoding directly into an engine savepoint. Successful loads return final
+  DONE_COUNT; malformed data, conversion or constraints return ERROR +
+  DONE_ERROR and roll back. IGNORE and Attention cancellation also roll back.
+  This interoperates with `tedious` `execBulkLoad`, node-mssql `request.bulk`
+  (its SqlBulkCopy-style API), and the equivalent BCP token stream. Each type-7
+  request is atomic; `freebcp -b` sends separate requests, so an earlier batch
+  remains committed if a later batch fails.
 - **Attention (0x06)** — acknowledged with DONE_ATTN.
 - Packet-size negotiation from LOGIN7; responses split across packets.
 

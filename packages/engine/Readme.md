@@ -38,6 +38,10 @@ const items = executeBatch(s, `
   parameters bind as scoped variables, OUTPUT values return.
 - `evaluate(session, expression)` — scalar evaluation used for DECLARE
   initializers, SET, IF/WHILE conditions and PRINT.
+- `prepareBulkLoad` / `beginBulkLoad` / `writeBulkRows` /
+  `finishBulkLoad` / `abortBulkLoad` — validate an `INSERT BULK` setup,
+  bind wire metadata to catalog columns, stream decoded rows through cached
+  SQLite statements under one savepoint, and commit or roll back the request.
 
 ## Interpretation
 
@@ -72,6 +76,14 @@ const items = executeBatch(s, `
 - **Transactions** — nested BEGIN TRAN counts `@@TRANCOUNT`; only the
   outermost pair touches SQLite. ROLLBACK unwinds everything; SAVE TRAN
   maps to savepoints; `ROLLBACK TRAN name` targets a savepoint first.
+- **Bulk load** — `INSERT BULK` setup batches resolve one-, two-, or three-part
+  targets and validate every selected column before packet data is accepted.
+  Rows convert against catalog TYPE_INFO, enforce integer/decimal and declared
+  string/binary widths, apply defaults unless KEEP_NULLS is present, and use
+  cached insert statements inside a savepoint. Empty loads commit with count
+  zero; decode, conversion, constraint, disconnect, and cancellation failures
+  roll back the whole request. KEEPIDENTITY is required for explicit identity
+  input; FIRE_TRIGGERS routes rows through interpreted INSERT execution.
 - **Statement errors** — mapped constraint/conversion/arithmetic failures,
   RAISERROR below severity 20, and cursor/sequence runtime errors continue at
   the next statement while preserving ordered rows/counts/errors. Syntax,

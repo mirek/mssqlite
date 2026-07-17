@@ -52,6 +52,7 @@ new Connection({
 | `callProcedure(request)` | RPC by procedure name | system/user procedure dispatch, result sets + return status |
 | `prepare(request)` / `execute(request, params)` | RPC `sp_prepare` (0xFFFF + id 11) / `sp_execute` (12) | handle map in `server/connection.ts` |
 | `beginTransaction/commitTransaction/rollbackTransaction` | Transaction manager (0x0E) types 5/7/8 | engine transactions + ENVCHANGE 8/9/10 |
+| `newBulkLoad` + `execBulkLoad` | SQL batch `INSERT BULK`, then Bulk Load (0x07) | incremental decoder + atomic engine loader |
 | `cancel()` | Attention (0x06) | DONE with DONE_ATTN |
 | pooled reset | RPC `sp_reset_connection` | acknowledged no-op |
 
@@ -83,6 +84,14 @@ connection.execSql(request)
   rowCount. Trigger-body DML can therefore add to the originating count.
   NOCOUNT makes the event argument `undefined` and excludes that completion
   from the callback total; result rows and `@@ROWCOUNT` remain available.
+- `execBulkLoad` first sends its generated `INSERT BULK table(columns...)`
+  batch and waits for DONE, then streams COLMETADATA, ROW values, and DONE in
+  packet type 7. Its callback row count comes from the server's DONE_COUNT.
+  `keepNulls`, `checkConstraints`, and `fireTriggers` become INSERT BULK
+  options. Cancellation before the stream finishes uses an IGNORE EOM packet
+  without a separate Attention; cancellation after send uses Attention.
+  Unlike `freebcp -b`, tedious sends one type-7 request for the supplied row
+  iterable, so a server-side row failure rolls back that complete request.
 
 ## Testing patterns
 
@@ -117,6 +126,11 @@ connection.execSql(request)
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` with NVarChar(max) metadata.
   Test a value larger than 8 KiB so the server's PLP path is exercised;
   tedious still surfaces the completed value as one JavaScript string.
+- Bulk-load e2e tests should include an `AsyncIterable` or thousands of rows,
+  an nvarchar(max)/varbinary(max) PLP value spanning packets, NULL/default
+  handling, a constraint rollback, and cancellation followed by another query
+  on the same connection. node-mssql `Table` + `request.bulk` exercises the
+  higher-level SqlBulkCopy-style API over the same tedious wire path.
 - User-function e2e tests should cover a scalar declared return type (BIGINT
   arrives as IntN(8) and a string) and an inline TVF used as an ordinary FROM
   source. CREATE FUNCTION definitions must be sent in their own request/batch.

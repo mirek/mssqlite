@@ -1,11 +1,12 @@
-import { Encode } from '@mssqlite/bytes'
+import { Encode, Result } from '@mssqlite/bytes'
 import {
-  Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch, Token, TransactionManager
+  BulkLoad as TdsBulkLoad, Collation, DataType, Login7, Message, Packet, Prelogin, Rpc, SqlBatch,
+  Token, TransactionManager
 } from '@mssqlite/tds'
 import {
-  BatchError, closeSession, errorOf, executeBatch, executeSql, MssqlError, session, syncSession,
-  useDatabase,
-  type Parameter, type Server, type Session, type Value
+  abortBulkLoad, BatchError, beginBulkLoad, closeSession, errorOf, executeBatch, executeSql,
+  finishBulkLoad, MssqlError, prepareBulkLoad, session, syncSession, useDatabase, writeBulkRows,
+  type BulkLoader, type BulkPlan, type Parameter, type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
 import createTlsTransport, { type Transport as TlsTransport } from './tls-transport.ts'
@@ -35,7 +36,13 @@ type Connection = {
   /** Prepared statement handles for sp_prepare / sp_execute. */
   readonly prepared: Map<number, string>,
   nextHandle: number,
-  transactionDescriptor: bigint
+  transactionDescriptor: bigint,
+  bulkPlan: BulkPlan | undefined,
+  bulk: {
+    decoder: TdsBulkLoad.State,
+    loader: BulkLoader | undefined,
+    error: MssqlError | undefined
+  } | undefined
 }
 
 const productVersion = { major: 15, minor: 0, build: 2000 }
@@ -192,6 +199,15 @@ const onSqlBatch =
       return
     }
     try {
+      const bulkPlan = prepareBulkLoad(session_, batch.sql)
+      if (bulkPlan !== undefined) {
+        if (connection.bulkPlan !== undefined || connection.bulk !== undefined) {
+          throw new MssqlError('A bulk load request is already pending.', 4815, 16)
+        }
+        connection.bulkPlan = bulkPlan
+        respond(connection, Token.done(Token.Status.final, 0, 0n))
+        return
+      }
       const items = executeBatch(session_, batch.sql)
       respond(connection, batchResponse(items, connection.engine.serverName))
     } catch (error) {
@@ -201,6 +217,95 @@ const onSqlBatch =
         errorResponse(mapped, connection.engine.serverName))
       if (mapped.severity >= 20) {
         connection.stream.end()
+      }
+    }
+  }
+
+const clearBulk =
+  (connection: Connection): void => {
+    if (connection.bulk?.loader !== undefined) {
+      abortBulkLoad(connection.bulk.loader)
+    }
+    connection.bulk = undefined
+    connection.bulkPlan = undefined
+  }
+
+const finishBulkError =
+  (connection: Connection, error: MssqlError): void => {
+    respond(connection, errorResponse(error, connection.engine.serverName))
+    connection.bulk = undefined
+    connection.bulkPlan = undefined
+  }
+
+const onBulkFragment =
+  (connection: Connection, fragment: Message.Fragment): void => {
+    const session_ = connection.session
+    if (session_ === undefined) {
+      connection.network.destroy()
+      return
+    }
+    if (fragment.ignore) {
+      clearBulk(connection)
+      // A client that cancels before finishing the request terminates it with
+      // IGNORE and does not send Attention; it still waits for a normal reply.
+      if (fragment.eom) {
+        respond(connection, Token.done(Token.Status.final, 0, 0n))
+      }
+      return
+    }
+    const plan = connection.bulkPlan
+    if (plan === undefined) {
+      if (fragment.eom) {
+        finishBulkError(connection,
+          new MssqlError('Bulk load data arrived without INSERT BULK.', 4815, 16))
+      }
+      return
+    }
+    const bulk = connection.bulk ?? {
+      decoder: TdsBulkLoad.initial,
+      loader: undefined,
+      error: undefined
+    }
+    connection.bulk = bulk
+    if (bulk.error !== undefined) {
+      if (fragment.eom) {
+        finishBulkError(connection, bulk.error)
+      }
+      return
+    }
+    try {
+      // FreeTDS/freebcp ends the stream at a ROW boundary without the
+      // specification's client DONE; the standalone codec stays strict.
+      const decoded = TdsBulkLoad.push(bulk.decoder, fragment.payload, fragment.eom, true)
+      if (Result.failed(decoded)) {
+        throw new MssqlError(`Invalid bulk load data: ${decoded.reason}`, 4816, 16)
+      }
+      bulk.decoder = decoded.value.state
+      if (bulk.loader === undefined && bulk.decoder.columns !== undefined) {
+        bulk.loader = beginBulkLoad(plan, bulk.decoder.columns)
+      }
+      if (bulk.loader !== undefined && decoded.value.rows.length > 0) {
+        writeBulkRows(bulk.loader, decoded.value.rows)
+      }
+      if (fragment.eom) {
+        if (bulk.loader === undefined || !bulk.decoder.done) {
+          throw new MssqlError('Invalid or truncated bulk load data.', 4816, 16)
+        }
+        const count = finishBulkLoad(bulk.loader)
+        respond(connection, Token.done(
+          Token.Status.final | Token.Status.count, 0xf0, BigInt(count)))
+        connection.bulk = undefined
+        connection.bulkPlan = undefined
+      }
+    } catch (error) {
+      const mapped = errorOf(error)
+      if (bulk.loader !== undefined) {
+        abortBulkLoad(bulk.loader)
+        bulk.loader = undefined
+      }
+      bulk.error = mapped
+      if (fragment.eom) {
+        finishBulkError(connection, mapped)
       }
     }
   }
@@ -353,6 +458,7 @@ const onMessage =
         onLogin(connection, message.payload)
         return
       case Packet.Type.attention:
+        clearBulk(connection)
         respond(connection, Token.done(Token.Status.attention, 0, 0n))
         return
       default:
@@ -384,8 +490,12 @@ const onMessage =
 const consume =
   (connection: Connection, chunk: Uint8Array): void => {
     try {
-      const { state, messages } = Message.push(connection.state, chunk)
+      const { state, messages, fragments } = Message.push(
+        connection.state, chunk, [ Packet.Type.bulkLoad ])
       connection.state = state
+      for (const fragment of fragments) {
+        onBulkFragment(connection, fragment)
+      }
       for (const message of messages) {
         onMessage(connection, message)
       }
@@ -416,7 +526,9 @@ export const attach =
       packetSize: Packet.defaultPacketSize,
       prepared: new Map(),
       nextHandle: 1,
-      transactionDescriptor: 0n
+      transactionDescriptor: 0n,
+      bulkPlan: undefined,
+      bulk: undefined
     }
     socket.on('data', (chunk: Buffer) => {
       const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
@@ -429,6 +541,7 @@ export const attach =
     socket.on('end', () => connection.tls?.end())
     socket.on('error', () => socket.destroy())
     socket.once('close', () => {
+      clearBulk(connection)
       if (connection.session !== undefined) {
         closeSession(connection.session)
       }

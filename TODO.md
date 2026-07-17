@@ -6,7 +6,6 @@ work is complete.
 
 ## Protocol and operational surface
 
-- [Bulk load](todo/bulk-load.md) — Handle TDS Bulk Load messages for `bcp` and `SqlBulkCopy`.
 - [MARS](todo/mars.md) — Support multiplexed active requests on one TDS connection.
 - [Attention and cancellation](todo/attention-cancellation.md) — Interrupt running engine work promptly and return correct cancellation tokens.
 
