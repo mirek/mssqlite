@@ -2787,6 +2787,134 @@ test('apply preserves correlated row elimination and null extension', () => {
   `)).rows).toEqual([ [ 1, 'new' ], [ 2, null ], [ 3, 'only' ] ])
 })
 
+test('derived apply supports lateral cardinality, aggregates, nesting, stars and binary values', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE apply_general_parent (id int PRIMARY KEY, label varchar(8))
+    CREATE TABLE apply_general_child (
+      parent_id int, sequence int, amount int, payload varbinary(4)
+    )
+    INSERT apply_general_parent VALUES (1, 'one'), (2, 'two'), (3, 'three')
+    INSERT apply_general_child VALUES
+      (1, 1, 10, 0x0102), (1, 2, 11, 0x0304), (3, 1, 30, 0x0506)
+  `)
+  const scalar = rowsOf(executeBatch(s, `
+    SELECT p.id, q.n
+    FROM (SELECT 1 AS id UNION ALL SELECT 2) AS p
+    CROSS APPLY (SELECT p.id + 1 AS n) AS q
+    ORDER BY p.id
+  `))
+  expect(scalar.rows).toEqual([ [ 1, 2 ], [ 2, 3 ] ])
+  expect(scalar.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ]))
+    .toEqual([
+      [ DataType.DataType.intN, 4 ], [ DataType.DataType.intN, 4 ]
+    ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, c.sequence, c.amount
+    FROM apply_general_parent p CROSS APPLY (
+      SELECT sequence, amount FROM apply_general_child c
+      WHERE c.parent_id = p.id AND c.amount >= 11
+    ) c
+    ORDER BY p.id, c.sequence
+  `)).rows).toEqual([ [ 1, 2, 11 ], [ 3, 1, 30 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, q.n
+    FROM (VALUES (1), (2)) p(id)
+    CROSS APPLY (SELECT n FROM (VALUES (10), (20)) source(n)) q
+    ORDER BY p.id, q.n
+  `)).rows).toEqual([ [ 1, 10 ], [ 1, 20 ], [ 2, 10 ], [ 2, 20 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, c.sequence
+    FROM apply_general_parent p OUTER APPLY (
+      SELECT sequence FROM apply_general_child c WHERE c.parent_id = p.id
+    ) c
+    ORDER BY p.id, c.sequence
+  `)).rows).toEqual([ [ 1, 1 ], [ 1, 2 ], [ 2, null ], [ 3, 1 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, totals.count_, totals.sum_
+    FROM apply_general_parent p CROSS APPLY (
+      SELECT COUNT(*) AS count_, SUM(c.amount) AS sum_
+      FROM apply_general_child c WHERE c.parent_id = p.id
+    ) totals
+    ORDER BY p.id
+  `)).rows).toEqual([ [ 1, 2, 21 ], [ 2, 0, null ], [ 3, 1, 30 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, latest.amount
+    FROM apply_general_parent p OUTER APPLY (
+      SELECT TOP (1) c.amount FROM apply_general_child c
+      WHERE c.parent_id = p.id ORDER BY c.sequence DESC
+    ) latest
+    ORDER BY p.id
+  `)).rows).toEqual([ [ 1, 11 ], [ 2, null ], [ 3, 30 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, first_.n, second_.n2
+    FROM apply_general_parent p
+    CROSS APPLY (SELECT p.id + 1 AS n) first_
+    CROSS APPLY (SELECT first_.n + 1 AS n2) second_
+    ORDER BY p.id
+  `)).rows).toEqual([ [ 1, 2, 3 ], [ 2, 3, 4 ], [ 3, 4, 5 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.*, c.*
+    FROM apply_general_parent p OUTER APPLY (
+      SELECT TOP (1) c.sequence, c.payload FROM apply_general_child c
+      WHERE c.parent_id = p.id ORDER BY c.sequence
+    ) c
+    ORDER BY p.id
+  `)).rows).toEqual([
+    [ 1, 'one', 1, Uint8Array.from([ 1, 2 ]) ],
+    [ 2, 'two', null, null ],
+    [ 3, 'three', 1, Uint8Array.from([ 5, 6 ]) ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, c.parent_id, c.sequence, c.amount, c.payload
+    FROM apply_general_parent p CROSS APPLY (
+      SELECT c.* FROM apply_general_child c WHERE c.parent_id = p.id
+    ) c
+    ORDER BY p.id, c.sequence
+  `)).rows).toEqual([
+    [ 1, 1, 1, 10, Uint8Array.from([ 1, 2 ]) ],
+    [ 1, 1, 2, 11, Uint8Array.from([ 3, 4 ]) ],
+    [ 3, 3, 1, 30, Uint8Array.from([ 5, 6 ]) ]
+  ])
+  expect(() => executeBatch(s, `
+    SELECT * FROM apply_general_parent p CROSS APPLY apply_general_child c
+  `)).toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+})
+
+test('apply supports correlated values and all built-in table functions', () => {
+  const s = open()
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, v.n
+    FROM (VALUES (1), (2)) p(id)
+    CROSS APPLY (VALUES (p.id + 1), (p.id + 2)) v(n)
+    ORDER BY p.id, v.n
+  `)).rows).toEqual([ [ 1, 2 ], [ 1, 3 ], [ 2, 3 ], [ 2, 4 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, part.value, part.ordinal
+    FROM (VALUES (1, N'a,b'), (2, N'c')) p(id, csv)
+    CROSS APPLY STRING_SPLIT(p.csv, N',', 1) part
+    ORDER BY p.id, part.ordinal
+  `)).rows).toEqual([ [ 1, 'a', 1 ], [ 1, 'b', 2 ], [ 2, 'c', 1 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.*, part.*
+    FROM (VALUES (1, N'a,b')) p(id, csv)
+    CROSS APPLY STRING_SPLIT(p.csv, N',', 1) part
+    ORDER BY part.ordinal
+  `)).rows).toEqual([ [ 1, 'a,b', 'a', 1 ], [ 1, 'a,b', 'b', 2 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, series.value
+    FROM (VALUES (1), (2)) p(id)
+    CROSS APPLY GENERATE_SERIES(p.id, p.id + 1) series
+    ORDER BY p.id, series.value
+  `)).rows).toEqual([ [ 1, 1 ], [ 1, 2 ], [ 2, 2 ], [ 2, 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id, item.value
+    FROM (VALUES (1, N'[10,11]'), (2, N'[]')) p(id, json_value)
+    OUTER APPLY OPENJSON(p.json_value) item
+    ORDER BY p.id, item.[key]
+  `)).rows).toEqual([ [ 1, '10' ], [ 1, '11' ], [ 2, null ] ])
+})
+
 test('pivot and unpivot expose generated values and metadata', () => {
   const s = open()
   executeBatch(s, `

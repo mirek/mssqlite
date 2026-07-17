@@ -43,10 +43,10 @@ const sourceColumns =
     if (source.kind === 'join') {
       return [ ...sourceColumns(source.left), ...sourceColumns(source.right) ]
     }
-    if (source.kind !== 'table' && source.kind !== 'values') {
+    if (source.kind !== 'table' && source.kind !== 'values' && source.kind !== 'derived') {
       return []
     }
-    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    const metadata = source.kind === 'values' ? source.columnMetadata : source.columns
     if (metadata === undefined) {
       return []
     }
@@ -63,10 +63,10 @@ const sourceCollations =
     if (source.kind === 'join') {
       return [ ...sourceCollations(source.left), ...sourceCollations(source.right) ]
     }
-    if (source.kind !== 'table' && source.kind !== 'values') {
+    if (source.kind !== 'table' && source.kind !== 'values' && source.kind !== 'derived') {
       return []
     }
-    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    const metadata = source.kind === 'values' ? source.columnMetadata : source.columns
     if (metadata === undefined) {
       return []
     }
@@ -83,10 +83,10 @@ const sourceNullability =
     if (source.kind === 'join') {
       return [ ...sourceNullability(source.left), ...sourceNullability(source.right) ]
     }
-    if (source.kind !== 'table' && source.kind !== 'values') {
+    if (source.kind !== 'table' && source.kind !== 'values' && source.kind !== 'derived') {
       return []
     }
-    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    const metadata = source.kind === 'values' ? source.columnMetadata : source.columns
     if (metadata === undefined) {
       return []
     }

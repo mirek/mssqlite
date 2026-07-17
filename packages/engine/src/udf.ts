@@ -23,6 +23,38 @@ const text =
   (value: Argument): string =>
     typeof value === 'string' ? value : String(value ?? '')
 
+const applyPack =
+  (value: Argument, declared: Argument): string => {
+    if (value === null) {
+      return 'n'
+    }
+    if (value instanceof Uint8Array) {
+      return `b${Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64')}`
+    }
+    if (typeof value === 'bigint') {
+      const integer = text(declared).toLowerCase() === 'bigint' ||
+        value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)
+      return `${integer ? 'i' : 'd'}${value}`
+    }
+    return `${typeof value === 'number' ? 'd' : 's'}${value}`
+  }
+
+const applyUnpack =
+  (value: Argument): Argument => {
+    if (value === null) {
+      return null
+    }
+    const packed = text(value)
+    const body = packed.slice(1)
+    switch (packed[0]) {
+      case 'n': return null
+      case 'b': return Uint8Array.from(Buffer.from(body, 'base64'))
+      case 'i': return BigInt(body)
+      case 'd': return Number(body)
+      default: return body
+    }
+  }
+
 const integerArgument =
   (value: Argument): number =>
     Math.trunc(Number(value))
@@ -448,8 +480,16 @@ const averageResult =
 export const registerFunctions =
   (server: Server, db: DatabaseSync = server.db): void => {
     const define =
-      (name: string, fn: (...args: Argument[]) => Argument, options: { deterministic?: boolean, varargs?: boolean } = {}): void => {
-        db.function(name, { deterministic: options.deterministic ?? true, varargs: options.varargs ?? false }, fn)
+      (name: string, fn: (...args: Argument[]) => Argument, options: {
+        deterministic?: boolean,
+        varargs?: boolean,
+        useBigIntArguments?: boolean
+      } = {}): void => {
+        db.function(name, {
+          deterministic: options.deterministic ?? true,
+          varargs: options.varargs ?? false,
+          useBigIntArguments: options.useBigIntArguments ?? false
+        }, fn)
       }
     define('mssqlite_add', (a, b) => {
       if (a === null || b === null) {
@@ -629,6 +669,14 @@ export const registerFunctions =
     define('mssqlite_openjson_sources', (value, path) => Json.openJsonSources(value, path) as Argument)
     define('mssqlite_openjson_column', (value, path, asJson) =>
       Json.openJsonColumn(value, path, asJson) as Argument)
+    define('mssqlite_apply_pack', applyPack, { useBigIntArguments: true })
+    define('mssqlite_apply_unpack', applyUnpack)
+    define('mssqlite_apply_rows', (count, rows) => {
+      if (Number(count) > 100_000) {
+        throw new RangeError('Correlated APPLY exceeds 100000 rows for one left row.')
+      }
+      return rows
+    })
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]
@@ -690,6 +738,27 @@ export const registerFunctions =
         throw new RangeError('GENERATE_SERIES step cannot be zero.')
       }
       return resolved
+    })
+    define('mssqlite_generate_series', (start, stop, step) => {
+      if (start === null || stop === null) {
+        return '[]'
+      }
+      const first = Number(start)
+      const last = Number(stop)
+      const increment = Number(step ?? (first <= last ? 1 : -1))
+      if (increment === 0) {
+        throw new RangeError('GENERATE_SERIES step cannot be zero.')
+      }
+      const values: number[] = []
+      for (let value = first;
+        increment > 0 ? value <= last : value >= last;
+        value += increment) {
+        if (values.length >= 100_000) {
+          throw new RangeError('Correlated GENERATE_SERIES exceeds 100000 rows.')
+        }
+        values.push(value)
+      }
+      return JSON.stringify(values)
     })
     define('mssqlite_newid', () => randomUUID().toUpperCase(), { deterministic: false })
     define('mssqlite_rand', () => Math.random(), { deterministic: false })

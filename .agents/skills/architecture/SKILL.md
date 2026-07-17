@@ -206,13 +206,12 @@ the engine:
   map its encoded rows back to the declared columns. The transpiler attaches output type hints to
   simple TVF SELECTs so the engine can emit exact metadata before stepping,
   including for empty inputs.
-- **APPLY has shape-specific lowering** — correlated two-argument
-  STRING_SPLIT lowers to SQLite's implicitly lateral `json_each` source;
-  simple correlated TOP (1) derived queries move equality correlation keys
-  into a join and rank right rows with `ROW_NUMBER() OVER (PARTITION BY ...
-  ORDER BY ...)`. CROSS APPLY uses INNER JOIN, OUTER APPLY uses LEFT JOIN.
-  Complex correlation and star projection over ranked helper columns are
-  rejected explicitly.
+- **APPLY preserves general lateral dependencies** — correlated built-in TVFs
+  lower to SQLite's implicitly lateral `json_each` source. Derived SELECT and
+  VALUES right sides use bounded typed row packing through a correlated scalar
+  subquery, then expand through `json_each`. CROSS APPLY uses CROSS JOIN;
+  OUTER APPLY uses LEFT JOIN for NULL extension. Projection metadata and
+  expression maps hide adapter columns and preserve nested aliases and stars.
 - **PIVOT/UNPIVOT use source-schema-aware lowering** — the engine annotates
   table leaves with catalog or table-variable column metadata. PIVOT emits
   one conditional aggregate per listed value and groups all remaining input
@@ -485,6 +484,14 @@ the engine:
   physical schema, catalog metadata, and foreign-key validation therefore
   commit or roll back together; database localization routes three-part DDL to
   the target database's primary handle before this sequence begins.
+- **Derived APPLY uses bounded typed row packing** — SQLite scalar subqueries
+  can correlate through outer SELECT scopes even though table subqueries are
+  not lateral. The transpiler renders each derived/VALUES right source inside
+  such a scalar scope, packs up to 100,000 rows through tagged JSON cells, and
+  expands them with lateral `json_each`. Column-expression maps restore aliases,
+  types, collations, stars, and nested APPLY references; CROSS/OUTER choose
+  CROSS versus LEFT JOIN cardinality. Native JSON TVFs and GENERATE_SERIES use
+  direct lateral adapter arguments.
 
 ## Extension points
 

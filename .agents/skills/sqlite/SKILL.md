@@ -101,9 +101,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   and JSON_VALUE's 4000 UTF-16-unit ceiling. OPENJSON shares that reader for
   root and WITH-column paths while retaining `json_each` as its row source.
 - SQLite has no general LATERAL keyword, but eponymous virtual-table function
-  arguments can reference earlier FROM sources. mssqlite uses that for
-  correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
-  lower to a ROW_NUMBER-partitioned INNER/LEFT join.
+  arguments and scalar subqueries can reference earlier FROM sources.
+  STRING_SPLIT/OPENJSON/GENERATE_SERIES APPLY use the former. Derived/VALUES
+  APPLY uses the latter to aggregate a typed, tagged JSON rowset under a
+  100,001-row input cap, rejects counts above 100,000, and expands through
+  `json_each`; pack/unpack UDFs retain BLOB and bigint cells losslessly.
 - T-SQL VALUES table sources wrap native SQLite VALUES in an outer SELECT that
   renames generated `columnN` fields. Engine resolution first infers SQL Server
   common types and validates the row/alias shape; transpilation explicitly

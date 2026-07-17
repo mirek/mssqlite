@@ -148,7 +148,13 @@ export type TableSource =
       /** Common column metadata populated by the execution engine. */
       readonly columnMetadata?: readonly SourceColumn[]
     }
-  | { readonly kind: 'derived', readonly select: Select, readonly alias: string }
+  | {
+      readonly kind: 'derived',
+      readonly select: Select,
+      readonly alias: string,
+      /** Projection metadata populated by the execution engine. */
+      readonly columns?: readonly SourceColumn[]
+    }
   | {
       readonly kind: 'pivot',
       readonly source: TableSource,

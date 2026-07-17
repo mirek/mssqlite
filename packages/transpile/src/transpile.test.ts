@@ -102,18 +102,19 @@ test('apply maps supported correlated string split sources to lateral virtual ta
     SELECT t.id, s.value FROM tags t
     OUTER APPLY STRING_SPLIT(t.csv, ',') s
   `)).toContain('LEFT JOIN json_each(mssqlite_string_split("t"."csv", \',\')) AS "s" ON TRUE')
-  expect(() => sqlOf(`
+  expect(sqlOf(`
     SELECT * FROM tags t CROSS APPLY GENERATE_SERIES(1, t.id) s
-  `)).toThrow(UnsupportedError)
+  `)).toContain('json_each(mssqlite_generate_series(1, "t"."id", NULL))')
   const topOne = sqlOf(`
     SELECT t.id, latest.note FROM tags t OUTER APPLY (
       SELECT TOP (1) n.note FROM notes n
       WHERE n.tag_id = t.id ORDER BY n.created DESC
     ) latest
   `)
-  expect(topOne).toContain('row_number() OVER (PARTITION BY "n"."tag_id" ORDER BY "n"."created" DESC)')
+  expect(topOne).toContain('json_group_array(json_array(mssqlite_apply_pack')
+  expect(topOne).toContain('ORDER BY "n"."created" DESC LIMIT 1')
   expect(topOne).toContain('LEFT JOIN')
-  expect(topOne).toContain('"latest"."__mssqlite_apply_rank" = 1')
+  expect(topOne).toContain('mssqlite_apply_unpack(json_extract("latest"."value", \'$[0]\'))')
 })
 
 test('apply keeps OPENJSON lateral while projecting its SQL Server schema', () => {

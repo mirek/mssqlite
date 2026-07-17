@@ -128,6 +128,15 @@ const tableFunctionDatabase =
       start === null || stop === null ?
         null :
         Number(step ?? (Number(start) <= Number(stop) ? 1 : -1)))
+    db.function('mssqlite_apply_pack', (value, _type) =>
+      value === null ? 'n' : `${typeof value === 'number' ? 'd' : 's'}${value}`)
+    db.function('mssqlite_apply_unpack', value => {
+      if (value === null || String(value)[0] === 'n') {
+        return null
+      }
+      return String(value)[0] === 'd' ? Number(String(value).slice(1)) : String(value).slice(1)
+    })
+    db.function('mssqlite_apply_rows', (_count, rows) => rows)
     return db
   }
 

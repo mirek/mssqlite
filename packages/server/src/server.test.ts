@@ -1452,6 +1452,26 @@ test('apply correlation and null extension over the wire', async () => {
     ORDER BY t.id
   `)
   expect(latest.rows).toEqual([ { id: 1, note: 'new' }, { id: 2, note: null } ])
+  const derived = await query(`
+    SELECT p.id, q.n, totals.count_, latest.note
+    FROM (VALUES (1), (2)) p(id)
+    CROSS APPLY (SELECT p.id + 1 AS n) q
+    CROSS APPLY (
+      SELECT COUNT(*) AS count_ FROM wire_apply_notes x WHERE x.tag_id = p.id
+    ) totals
+    OUTER APPLY (
+      SELECT TOP (1) x.note FROM wire_apply_notes x
+      WHERE x.tag_id = p.id ORDER BY x.created DESC
+    ) latest
+    ORDER BY p.id
+  `)
+  expect(derived.rows).toEqual([
+    { id: 1, n: 2, count_: 2, note: 'new' },
+    { id: 2, n: 3, count_: 0, note: null }
+  ])
+  expect(derived.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'NVarChar', 40 ]
+  ])
 })
 
 test('pivot and unpivot values and metadata over the wire', async () => {

@@ -118,8 +118,9 @@ because LOGIN7 password scrambling is not transport encryption.
   remain scoped to the batch or stored procedure that declares them;
   `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` stream ordinary result
   rows with predeclared metadata. OPENJSON preserves strict-path errors and
-  supports correlated APPLY inputs; other common correlated APPLY shapes are
-  translated before execution. SELECT INTO persists the inferred result types,
+  supports correlated APPLY inputs; arbitrary derived and VALUES APPLY shapes
+  preserve lateral cardinality, nesting, stars, and inferred wire metadata.
+  SELECT INTO persists the inferred result types,
   widths, nullability, collation, and eligible identity for subsequent wire
   queries. ALTER COLUMN rebuilds retained rows and immediately exposes the
   changed type, width, collation, and nullability in tedious COLMETADATA.
