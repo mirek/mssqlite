@@ -54,10 +54,65 @@ const database =
 const tableFunctionDatabase =
   (): DatabaseSync => {
     const db = database()
+    const jsonAt =
+      (value: unknown, path_: unknown): unknown => {
+        let current: unknown = JSON.parse(String(value))
+        const path = String(path_).trim().replace(/^(?:lax|strict)\s+/i, '')
+        const step = /\.([^.[\]"]+)|\."((?:\\.|[^"])*)"|\[(\d+)\]/gy
+        let at = 1
+        while (at < path.length) {
+          step.lastIndex = at
+          const match = step.exec(path)
+          if (match === null) {
+            throw new Error('invalid test JSON path')
+          }
+          const key = match[1] ?? (match[2] === undefined ? Number(match[3]) :
+            JSON.parse(`"${match[2]}"`) as string)
+          current = current === null || typeof current !== 'object' ? undefined :
+            (current as Record<string | number, unknown>)[key]
+          at = step.lastIndex
+        }
+        return current
+      }
+    const jsonType =
+      (value: unknown): number =>
+        value === null ? 0 : typeof value === 'string' ? 1 : typeof value === 'number' ? 2 :
+          typeof value === 'boolean' ? 3 : Array.isArray(value) ? 4 : 5
+    const jsonText =
+      (value: unknown): string | null =>
+        value === null ? null : typeof value === 'object' ? JSON.stringify(value) : String(value)
     db.function('mssqlite_string_split', (value, separator) =>
       value === null || separator === null || value === '' ?
         '[]' :
         JSON.stringify(String(value).split(String(separator))))
+    db.function('mssqlite_openjson_rows', (value, path) => {
+      if (value === null || path === null) {
+        return '[]'
+      }
+      const selected = jsonAt(value, path)
+      const entries = Array.isArray(selected) ? selected.map((item, key) => [ String(key), item ] as const) :
+        selected !== null && typeof selected === 'object' ? Object.entries(selected) : []
+      return JSON.stringify(entries.map(([ key, item ]) =>
+        ({ key, value: jsonText(item), type: jsonType(item) })))
+    })
+    db.function('mssqlite_openjson_sources', (value, path) => {
+      if (value === null || path === null) {
+        return '[]'
+      }
+      const selected = jsonAt(value, path)
+      const rows = Array.isArray(selected) ? selected :
+        selected !== null && typeof selected === 'object' ? [ selected ] : []
+      return JSON.stringify(rows.map(row => JSON.stringify(row)))
+    })
+    db.function('mssqlite_openjson_column', (value, path, asJson) => {
+      if (value === null || path === null) {
+        return null
+      }
+      const selected = jsonAt(value, path)
+      return Number(asJson) !== 0 ?
+        selected !== null && typeof selected === 'object' ? JSON.stringify(selected) : null :
+        selected !== null && typeof selected !== 'object' ? String(selected) : null
+    })
     db.function('mssqlite_series_step', (start, stop, step) =>
       start === null || stop === null ?
         null :

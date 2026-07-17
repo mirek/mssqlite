@@ -269,9 +269,9 @@ const selected =
   }
 
 const missing =
-  (): MssqlError =>
+  (state = 1): MssqlError =>
     new MssqlError('Property cannot be found on the specified JSON path.',
-      13608, 16, 1, { statementTerminating: true })
+      13608, 16, state, { statementTerminating: true })
 
 /** @returns SQL Server's default object-or-array ISJSON result. */
 export const isJson =
@@ -346,4 +346,124 @@ export const jsonQuery =
       return null
     }
     return source.slice(node.start, node.end)
+  }
+
+const nodeText =
+  (source: string, node: Node): string | null => {
+    if (node.kind === 'null') {
+      return null
+    }
+    return node.kind === 'string' ? node.value ?? '' : source.slice(node.start, node.end)
+  }
+
+const openJsonType =
+  (node: Node): number =>
+    ({ null: 0, string: 1, number: 2, boolean: 3, array: 4, object: 5 })[node.kind]
+
+const jsonErrorState =
+  (error: unknown, number: number, state: number): never => {
+    if (error instanceof MssqlError && error.number === number) {
+      throw new MssqlError(error.message, number, 16, state, { statementTerminating: true })
+    }
+    throw error
+  }
+
+const openJsonDocument =
+  (source: string, containerRoot: boolean): Node => {
+    let root: Node
+    try {
+      root = parse(source)
+    } catch (error) {
+      return jsonErrorState(error, 13609, 4)
+    }
+    if (containerRoot && root.kind !== 'object' && root.kind !== 'array') {
+      const at = whitespaceEnd(source, 0)
+      throw new MssqlError(
+        `JSON text is not properly formatted. Unexpected character '${source[at] ?? 'end of input'}' ` +
+        `is found at position ${at}.`,
+        13609, 16, 4, { statementTerminating: true })
+    }
+    return root
+  }
+
+const openJsonPath =
+  (value: Value): Path => {
+    try {
+      return path(String(value))
+    } catch (error) {
+      return jsonErrorState(error, 13607, 22)
+    }
+  }
+
+const pathNode =
+  (
+    value: Value,
+    path_: Value,
+    missingState: number,
+    containerRoot: boolean
+  ): { readonly source: string, readonly path: Path, readonly node?: Node } | undefined => {
+    if (value === null || path_ === null) {
+      return undefined
+    }
+    const source = String(value)
+    const root = openJsonDocument(source, containerRoot)
+    const parsedPath = openJsonPath(path_)
+    const node = selected(root, parsedPath)
+    if (node === undefined && parsedPath.strict) {
+      throw missing(missingState)
+    }
+    return { source, path: parsedPath, ...node === undefined ? {} : { node } }
+  }
+
+/** @returns default-schema OPENJSON rows encoded for SQLite json_each. */
+export const openJsonRows =
+  (value: Value, path_: Value): Value => {
+    const resolved = pathNode(value, path_, 3, true)
+    if (resolved?.node === undefined) {
+      return '[]'
+    }
+    const { source, node } = resolved
+    const entries: readonly { readonly key: string | null, readonly node: Node }[] =
+      node.kind === 'object' ? node.members?.map(member => ({ key: member.key, node: member.value })) ?? [] :
+        node.kind === 'array' ? node.elements?.map((element, index) => ({ key: String(index), node: element })) ?? [] :
+          []
+    return JSON.stringify(entries.map(entry => ({
+      key: entry.key,
+      value: nodeText(source, entry.node),
+      type: openJsonType(entry.node)
+    })))
+  }
+
+/** @returns exact per-row source slices for OPENJSON WITH projection. */
+export const openJsonSources =
+  (value: Value, path_: Value): Value => {
+    const resolved = pathNode(value, path_, 3, true)
+    if (resolved?.node === undefined) {
+      return '[]'
+    }
+    const { source, node } = resolved
+    const nodes = node.kind === 'array' ? node.elements ?? [] : node.kind === 'object' ? [ node ] : []
+    return JSON.stringify(nodes.map(item => source.slice(item.start, item.end)))
+  }
+
+/** @returns one OPENJSON WITH column under lax/strict scalar or AS JSON rules. */
+export const openJsonColumn =
+  (value: Value, path_: Value, asJson: Value): Value => {
+    const resolved = pathNode(value, path_, 6, false)
+    if (resolved?.node === undefined) {
+      return null
+    }
+    const fragment = Number(asJson) !== 0
+    const structured = resolved.node.kind === 'object' || resolved.node.kind === 'array'
+    if (fragment && structured) {
+      return resolved.source.slice(resolved.node.start, resolved.node.end)
+    }
+    if (!fragment && !structured) {
+      return nodeText(resolved.source, resolved.node)
+    }
+    if (resolved.path.strict) {
+      throw new MssqlError('Object or array cannot be found in the specified JSON path.',
+        13624, 16, 1, { statementTerminating: true })
+    }
+    return null
   }

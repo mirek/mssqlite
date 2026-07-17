@@ -229,8 +229,9 @@ The language pipeline lives in three packages:
   [WITH (...)]`, and `GENERATE_SERIES(start, stop [, step])`. STRING_SPLIT
   requires constant 0/1/NULL for `enable_ordinal`, returns no rows for NULL
   or empty input, preserves empty interior tokens, and only promises source
-  position through its bigint `ordinal` column. OPENJSON supports lax paths;
-  strict path mode remains unsupported.
+  position through its bigint `ordinal` column. OPENJSON evaluates BIN2-like
+  lax/strict root and WITH-column paths, retains exact AS JSON fragments, and
+  reports SQL Server's distinct missing/wrong-kind/malformed error states.
 - CROSS/OUTER APPLY parse as left-associative join nodes without ON. The
   transpiler supports correlated two-argument STRING_SPLIT and simple
   derived `SELECT TOP (1)` with equality correlations in WHERE. The latter
@@ -282,7 +283,7 @@ collation keys and reporting 2627/2601 by origin. SELECT INTO still loses
 expression types. IDENTITY allocation findings from that
 audit are implemented with database-owned counters, custom signed definitions,
 rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
-confirmed general APPLY lowering and strict OPENJSON paths, while VALUES-derived
-tables and the audited MERGE terminator and arm validation rules are now
-implemented. Treat the individual
+confirmed general APPLY lowering; strict OPENJSON paths, VALUES-derived tables,
+and the audited MERGE terminator and arm validation rules are now implemented.
+Treat the individual
 `todo/*.md` briefs as the executable scope and ground-truth checklist.

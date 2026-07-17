@@ -72,16 +72,17 @@ rendered statement reports the variables it binds.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.
 - **Table-valued functions** — `STRING_SPLIT` adapts a JSON-array UDF
-  through `json_each`, `OPENJSON` projects SQLite JSON1 rows to SQL Server's
-  default or explicit schema, and `GENERATE_SERIES` uses a recursive CTE
-  because Node's bundled SQLite omits the series extension. Rendered SELECTs
-  carry declared column hints so empty results retain exact TDS metadata.
+  through `json_each`; `OPENJSON` feeds source-spanned root/row adapters through
+  `json_each` and projects SQL Server's default or explicit schema; and
+  `GENERATE_SERIES` uses a recursive CTE because Node's bundled SQLite omits
+  the series extension. Rendered SELECTs carry declared column hints so empty
+  results retain exact TDS metadata.
 - **User functions** — unknown scalar names pass through to engine-registered
   SQLite callbacks. Before rendering, the engine expands persisted inline
   TVF calls to parameter-substituted derived SELECTs; correlated simple
   inline sources use the same equality-key APPLY lowering as derived tables.
-- **APPLY** — correlated two-argument STRING_SPLIT uses SQLite's implicit
-  lateral virtual-table arguments; correlated simple `SELECT TOP (1)`
+- **APPLY** — correlated two-argument STRING_SPLIT and OPENJSON use SQLite's
+  implicit lateral virtual-table arguments; correlated simple `SELECT TOP (1)`
   derived sources become partitioned `ROW_NUMBER()` joins. CROSS uses INNER
   semantics, OUTER uses LEFT/NULL-extension semantics. Other TVFs, complex
   derived queries, and star projection over rewritten top-one sources fail

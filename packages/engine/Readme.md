@@ -59,11 +59,14 @@ const items = executeBatch(s, `
   when its declaring scope exits, including on errors.
 - **Table-valued functions** — SELECT sources support `STRING_SPLIT`,
   `OPENJSON` (default and explicit WITH schemas), and `GENERATE_SERIES`.
-  Small scalar adapters validate splitting/series arguments; SQLite
-  `json_each` and a streaming recursive CTE produce the rows.
+  Small scalar adapters validate splitting, JSON paths, and series arguments;
+  SQLite `json_each` and a streaming recursive CTE produce the rows. OPENJSON
+  shares the source-spanned JSON reader with the scalar functions, including
+  BIN2-like lax/strict root and column paths and exact JSON fragments.
 - **CROSS / OUTER APPLY** — supported for correlated two-argument
-  STRING_SPLIT and simple correlated TOP (1) derived queries. CROSS removes
-  empty right sides; OUTER retains the left row with NULL right columns.
+  STRING_SPLIT, correlated OPENJSON, and simple correlated TOP (1) derived
+  queries. CROSS removes empty right sides; OUTER retains the left row with
+  NULL right columns.
 - **PIVOT / UNPIVOT** — source schemas are resolved before transpilation so
   conditional-aggregate PIVOT and materialized `UNION ALL` UNPIVOT rewrites
   can validate names and emit stable generated-column metadata. UNPIVOT

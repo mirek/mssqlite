@@ -88,17 +88,18 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   Current divergence: their DML shares the surrounding SQLite transaction,
   while SQL Server table-variable updates survive user transaction rollback.
 - Built-in T-SQL table-valued functions lean on JSON1: `STRING_SPLIT` feeds
-  an adapter-produced JSON array to `json_each`, while `OPENJSON` remaps
-  `json_each` key/value/type fields and uses `json_extract` for explicit
-  schemas. Node's bundled SQLite does not expose the optional
+  an adapter-produced JSON array to `json_each`, while `OPENJSON` feeds
+  source-spanned default-schema rows or exact WITH-row slices to `json_each`.
+  Column adapter UDFs apply SQL Server BIN2-like lax/strict paths before SQLite
+  casts the declared output types. Node's bundled SQLite does not expose the optional
   `generate_series` virtual table, so `GENERATE_SERIES` renders as a
   streaming recursive CTE with SQL Server's direction-sensitive default step.
 - Do not use JSON1 scalar extraction for JSON_VALUE/JSON_QUERY compatibility:
   `json_extract` returns SQLite numeric types and normalizes object/array text.
   mssqlite instead parses source-spanned nodes, returning lexical scalar text
   or the exact selected fragment while enforcing SQL Server lax/strict errors
-  and JSON_VALUE's 4000 UTF-16-unit ceiling. OPENJSON remains a JSON1
-  table-source lowering and has its own strict-path backlog.
+  and JSON_VALUE's 4000 UTF-16-unit ceiling. OPENJSON shares that reader for
+  root and WITH-column paths while retaining `json_each` as its row source.
 - SQLite has no general LATERAL keyword, but eponymous virtual-table function
   arguments can reference earlier FROM sources. mssqlite uses that for
   correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
@@ -233,5 +234,5 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 
 Native SQLite shortcuts that still leak through the T-SQL compatibility
 boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
-2025 differentials cover text comparison/collation, OPENJSON path validation,
-scalar function contracts, and result metadata.
+2025 differentials cover text comparison/collation and result metadata; the
+OPENJSON path and scalar JSON contracts from that audit are implemented.

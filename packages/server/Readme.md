@@ -117,7 +117,8 @@ because LOGIN7 password scrambling is not transport encryption.
   ERROR tokens with MSSQL numbers/severity on failure. Table variables
   remain scoped to the batch or stored procedure that declares them;
   `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` stream ordinary result
-  rows with predeclared metadata; common correlated APPLY shapes are
+  rows with predeclared metadata. OPENJSON preserves strict-path errors and
+  supports correlated APPLY inputs; other common correlated APPLY shapes are
   translated before execution. PIVOT and UNPIVOT rewrites preserve generated
   result names and types on the wire, including all-NULL columns; ROLLUP,
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with

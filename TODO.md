@@ -15,7 +15,6 @@ work is complete.
 
 - [APPLY-derived tables](todo/apply-derived-tables.md) — Generalize CROSS/OUTER APPLY beyond narrow TVF and TOP rewrites.
 - [ALTER TABLE ALTER COLUMN](todo/alter-table-alter-column.md) — Change column types and nullability with atomic table rebuilds.
-- [OPENJSON strict paths](todo/openjson-strict-paths.md) — Evaluate strict JSON paths and return SQL Server errors.
 - [FOR XML](todo/for-xml.md) — Add common SQL Server XML serialization modes and wire metadata.
 
 ## Compatibility testing

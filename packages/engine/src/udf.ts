@@ -625,6 +625,10 @@ export const registerFunctions =
     define('mssqlite_isjson', value => Json.isJson(value) as Argument)
     define('mssqlite_json_value', (value, path) => Json.jsonValue(value, path) as Argument)
     define('mssqlite_json_query', (value, path) => Json.jsonQuery(value, path) as Argument)
+    define('mssqlite_openjson_rows', (value, path) => Json.openJsonRows(value, path) as Argument)
+    define('mssqlite_openjson_sources', (value, path) => Json.openJsonSources(value, path) as Argument)
+    define('mssqlite_openjson_column', (value, path, asJson) =>
+      Json.openJsonColumn(value, path, asJson) as Argument)
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]
