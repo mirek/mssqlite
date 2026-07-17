@@ -58,7 +58,10 @@ rendered statement reports the variables it binds.
   types for arithmetic, comparisons, BETWEEN/IN, simple/result CASE, compound
   SELECTs, and multi-row VALUES. Known incompatible pairs fail before SQLite;
   strict conversion UDFs preserve SQL Server error numbers instead of using
-  SQLite storage-class comparison or permissive numeric casts.
+  SQLite storage-class comparison or permissive numeric casts. Integer casts
+  also carry static or variable-declaration source type into the UDF so numeric
+  values truncate toward zero while decimal-looking character text still raises
+  245; projection hints retain the requested integer wire width.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.
 - **Table-valued functions** — `STRING_SPLIT` adapts a JSON-array UDF

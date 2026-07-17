@@ -334,9 +334,12 @@ the engine:
   successful statement resets `@@ERROR`; a failure sets it and zeroes
   `@@ROWCOUNT` before continuation. Qualifying errors under XACT_ABORT ON roll
   back the user transaction and abort; RAISERROR explicitly ignores XACT_ABORT.
-  Integer CAST/CONVERT routes through a strict UDF so invalid text raises 245,
-  overflow raises 8115, and TRY_CAST/TRY_CONVERT returns NULL instead of relying
-  on SQLite's permissive conversion-to-zero behavior.
+  Integer CAST/CONVERT routes through a strict UDF. The renderer marks numeric
+  expressions and passes variable names so the UDF can consult live declaration
+  types: numeric inputs truncate toward zero, empty character input becomes
+  zero, invalid text raises 245, overflow raises 8115, and TRY_CAST/TRY_CONVERT
+  returns NULL for either failure. Result hints preserve explicit integer widths
+  instead of inferring every safe runtime number as int.
 - **Integer arithmetic is checked before SQLite can coerce it** — inferred
   32/64-bit `+`, `-`, `*`, `/`, `%` expressions render one nondeterministic
   scalar UDF call, preserving one evaluation per operand, NULL propagation,

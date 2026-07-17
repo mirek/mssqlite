@@ -859,6 +859,52 @@ test('conversion failures continue while TRY_CAST returns NULL', () => {
   expect(rows.map(item => item.rows)).toEqual([ [ [ 7 ] ], [ [ null ] ] ])
 })
 
+test('integer casts truncate numeric inputs and treat empty character input as zero', () => {
+  // Compatibility vector checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const widths = rowsOf(executeBatch(s, `
+    SELECT
+      CAST(CAST(255.9 AS decimal(4,1)) AS tinyint) AS tiny_value,
+      CAST(CAST(-32768.9 AS decimal(6,1)) AS smallint) AS small_value,
+      CAST(CAST(2147483647.9 AS decimal(11,1)) AS int) AS int_value,
+      CAST(CAST(9007199254740991.9 AS decimal(17,1)) AS bigint) AS big_value
+  `))
+  expect(widths.rows).toEqual([ [ 255, -32768, 2147483647, 9007199254740991 ] ])
+  expect(widths.columns.map(column => column.typeInfo.maxLength)).toEqual([ 1, 2, 4, 8 ])
+
+  expect(rowsOf(executeBatch(s, `
+    SELECT CAST(1.9 AS int), CAST(-1.9 AS int),
+      CAST('' AS tinyint), CAST('   ' AS smallint),
+      TRY_CAST(1.9 AS int), TRY_CAST('bad' AS int),
+      TRY_CONVERT(int, '2147483648')
+  `)).rows).toEqual([ [ 1, -1, 0, 0, 1, null, null ] ])
+  expect(() => executeBatch(s, 'SELECT CAST(\'bad\' AS int)'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(() => executeBatch(s, 'SELECT CAST(2147483648 AS int)'))
+    .toThrowError(expect.objectContaining({ number: 8115 }) as Error)
+
+  const variables = rowsOf(executeBatch(s, `
+    DECLARE @decimal decimal(4,1) = 7.9, @real float = -8.9
+    SELECT CAST(@decimal AS int) AS decimal_value,
+      CONVERT(smallint, @real) AS real_value
+  `))
+  expect(variables.rows).toEqual([ [ 7, -8 ] ])
+
+  const rpc = rowsOf(executeSql(s, 'SELECT CAST(@value AS int) AS value', [ {
+    name: '@value', value: '9.9', type: { name: 'decimal', args: [ 2, 1 ] }
+  } ]).items)
+  expect(rpc.rows).toEqual([ [ 9 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE integer_cast_target (
+      tiny_value tinyint, small_value smallint, int_value int, big_value bigint
+    )
+    INSERT INTO integer_cast_target VALUES (1.9, -2.9, 3.9, 4.9)
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT * FROM integer_cast_target')).rows)
+    .toEqual([ [ 1, -2, 3, 4 ] ])
+})
+
 test('implicit conversion applies type precedence across expression contexts', () => {
   // Values, errors and result shapes below were checked against SQL Server 2025
   // 17.0.4065.4 (RTM-CU7) before being recorded as compatibility vectors.

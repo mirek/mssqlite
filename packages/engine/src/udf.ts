@@ -10,6 +10,7 @@ import { nextSequenceValue } from './sequence.ts'
 import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
 import { SqlVariant, TypeInfo } from '@mssqlite/tds'
+import { Type as TranspileType } from '@mssqlite/transpile'
 import type { Server } from './session.ts'
 import type { DatabaseSync } from 'node:sqlite'
 
@@ -241,9 +242,20 @@ const serverProperties =
   })
 
 const castInteger =
-  (value: Argument, type: Argument, try_: Argument): Argument => {
+  (
+    server: Server,
+    value: Argument,
+    type: Argument,
+    try_: Argument,
+    numeric: Argument,
+    variable: Argument
+  ): Argument => {
     try {
-      return Implicit.integer(value, text(type).toLowerCase()) as Argument
+      const declared = server.current?.variables.get(text(variable).toLowerCase())?.type
+      const numericVariable = declared !== undefined && [ 'integer', 'real', 'decimal', 'bit' ].includes(
+        TranspileType.category(declared) ?? '')
+      return Implicit.integer(
+        value, text(type).toLowerCase(), Number(numeric) !== 0 || numericVariable) as Argument
     } catch (error) {
       if (Number(try_) !== 0) {
         return null
@@ -475,7 +487,8 @@ export const registerFunctions =
       result: state => sumResult(server, String(state)),
       deterministic: false
     })
-    define('mssqlite_cast_integer', castInteger)
+    define('mssqlite_cast_integer', (value, type, try_, numeric, variable) =>
+      castInteger(server, value, type, try_, numeric, variable))
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]

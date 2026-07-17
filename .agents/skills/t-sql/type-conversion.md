@@ -123,7 +123,8 @@ Returns NULL on conversion failure instead of error. Still raises error for expl
 
 | Scenario | Behavior |
 |----------|----------|
-| float → integer | **truncated** |
+| finite numeric/decimal/float → integer | **truncated toward zero before range checking** |
+| empty or whitespace character → integer | **zero** |
 | datetime fractional > 3 digits → datetime | **truncated** |
 | Character → shorter character | **truncated** |
 | decimal → lower precision/scale | **rounded** (by default) |
