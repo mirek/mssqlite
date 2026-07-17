@@ -386,8 +386,12 @@ the engine:
   `sys.dm_exec_requests` self-observable during execution. The request row is
   removed in `finally`, transaction/row/error counters are copied back to the
   session row, and TDS socket close removes the authenticated session.
-- **MERGE is decomposed, not rendered** (`engine/merge.ts`) — one
-  snapshot temp table computed against the pre-merge state joins source
+- **MERGE is decomposed, not rendered** (`engine/merge.ts`) — preflight
+  validates action uniqueness and conditional arm reachability
+  before catalog resolution or snapshot construction; parser-level terminator
+  enforcement and preflight errors retain SQL Server 10713/10714/5324
+  metadata. After validation, one snapshot temp table computed against the
+  pre-merge state joins source
   to target (LEFT JOIN, or FULL JOIN through a never-null source marker
   column when NOT MATCHED BY SOURCE arms exist) and stores each row's
   chosen arm tag plus every pre-evaluated SET / INSERT value; per-arm

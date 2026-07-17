@@ -146,7 +146,9 @@ const items = executeBatch(s, `
   `deleted` (`inserted.*` / `deleted.*` expand to the target's columns).
   `OUTPUT … INTO` re-inserts the rows into the target table and emits
   only the affected-row count, as MSSQL does.
-- **MERGE** — decomposed, not rendered: a snapshot temp table computed
+- **MERGE** — decomposed, not rendered: preflight rejects duplicate actions
+  (10714) and unreachable conditional arms (5324) before snapshot construction,
+  so invalid statements cannot mutate the target. A snapshot temp table computed
   against the pre-merge state (source LEFT JOIN target, or FULL JOIN via
   a never-null source marker when NOT MATCHED BY SOURCE arms exist)
   stores each row's chosen arm and pre-evaluated SET / INSERT values;

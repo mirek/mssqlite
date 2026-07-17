@@ -38,13 +38,10 @@ const and =
 
 const clauseLabel = {
   matched: 'WHEN MATCHED',
-  notMatchedByTarget: 'WHEN NOT MATCHED [BY TARGET]',
+  notMatchedByTarget: 'WHEN NOT MATCHED',
   notMatchedBySource: 'WHEN NOT MATCHED BY SOURCE'
 } as const
 
-// Grammar already restricts action kinds per clause, so rejecting duplicate
-// (clause, action) pairs enforces every T-SQL cap: two MATCHED arms must be
-// one UPDATE and one DELETE, one NOT MATCHED insert, two BY SOURCE arms.
 const validateArms =
   (whens: readonly Ast.MergeWhen[]): void => {
     const seen = new Set<string>()
@@ -52,10 +49,18 @@ const validateArms =
       const key = `${when.match}:${when.action.kind}`
       if (seen.has(key)) {
         throw new MssqlError(
-          `An action of type '${when.action.kind.toUpperCase()}' cannot appear more than once in a '${clauseLabel[when.match]}' clause of a MERGE statement.`,
-          10714, 16)
+          `An action of type '${clauseLabel[when.match]}' cannot appear more than once in a '${when.action.kind.toUpperCase()}' clause of a MERGE statement.`,
+          10714, 15)
       }
       seen.add(key)
+    }
+    for (const match of Object.keys(clauseLabel) as (keyof typeof clauseLabel)[]) {
+      const clauses = whens.filter(when => when.match === match)
+      if (clauses.length > 1 && clauses[0]?.condition === undefined) {
+        throw new MssqlError(
+          `In a MERGE statement, a '${clauseLabel[match]}' clause with a search condition cannot appear after a '${clauseLabel[match]}' clause with no search condition.`,
+          5324, 16)
+      }
     }
   }
 
@@ -607,9 +612,9 @@ const outputSelect =
  */
 export const executeMerge =
   (session: Session, statement_: Merge, items: Item[]): void => {
+    validateArms(statement_.whens)
     const statement = resolveRowversion(session, statement_)
     const identity = Identity.resolve(session, statement.target)
-    validateArms(statement.whens)
     for (const when of statement.whens) {
       if (when.action.kind === 'insert') {
         insertColumnCount(session, statement, when.action)

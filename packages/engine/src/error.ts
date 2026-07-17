@@ -46,6 +46,9 @@ export const of =
     const message = error instanceof Error ? error.message : String(error)
     const name = error instanceof Error ? error.name : ''
     if (name === 'ParseError' || name === 'LexError') {
+      if (message.includes('A MERGE statement must be terminated by a semi-colon (;).')) {
+        return new MssqlError('A MERGE statement must be terminated by a semi-colon (;).', 10713, 15)
+      }
       return new MssqlError(`Incorrect syntax: ${message}`, 102, 15)
     }
     if (name === 'UnsupportedError') {

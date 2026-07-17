@@ -699,6 +699,31 @@ test('errors surface with mssql numbers', async () => {
   await expect(query('INSERT INTO users (name) VALUES (NULL)')).rejects.toMatchObject({ number: 515 })
 })
 
+test('merge validation errors retain SQL Server TDS metadata and atomicity', async () => {
+  await query(`
+    CREATE TABLE wire_merge_target (id INT PRIMARY KEY, value INT)
+    CREATE TABLE wire_merge_source (id INT, value INT)
+    INSERT INTO wire_merge_target VALUES (1, 10)
+    INSERT INTO wire_merge_source VALUES (1, 20)
+  `)
+  await expect(query(`
+    MERGE wire_merge_target AS t USING wire_merge_source AS s ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET value = s.value
+  `)).rejects.toMatchObject({ number: 10713, class: 15, state: 1 })
+  await expect(query(`
+    MERGE wire_merge_target AS t USING wire_merge_source AS s ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET value = s.value
+    WHEN MATCHED AND s.value > 0 THEN DELETE;
+  `)).rejects.toMatchObject({ number: 5324, class: 16, state: 1 })
+  await expect(query(`
+    MERGE wire_merge_target AS t USING wire_merge_source AS s ON t.id = s.id
+    WHEN MATCHED AND s.value > 0 THEN DELETE
+    WHEN MATCHED THEN DELETE;
+  `)).rejects.toMatchObject({ number: 10714, class: 15, state: 1 })
+  expect((await query('SELECT id, value FROM wire_merge_target')).rows)
+    .toEqual([ { id: 1, value: 10 } ])
+})
+
 test('statement errors and successful rows stay ordered over tedious', async () => {
   await query('CREATE TABLE wire_error_order (id INT PRIMARY KEY); INSERT INTO wire_error_order VALUES (1)')
   const events = await new Promise<string[]>((resolve, reject) => {

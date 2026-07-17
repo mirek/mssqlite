@@ -116,14 +116,19 @@ MERGE [TOP (expression) [PERCENT]]
 - WHEN NOT MATCHED BY SOURCE: target row has no source match. UPDATE or DELETE.
 - Max 2 WHEN MATCHED clauses: first must have AND condition.
 - Max 1 WHEN NOT MATCHED BY TARGET.
-- Max 2 WHEN NOT MATCHED BY SOURCE.
+- Max 2 WHEN NOT MATCHED BY SOURCE: first must have AND condition.
+- Two-clause MATCHED / BY SOURCE families must use one UPDATE and one DELETE;
+  repeating an action is invalid regardless of conditions.
 - OUTPUT: $action returns 'INSERT', 'UPDATE', 'DELETE'.
 - @@ROWCOUNT: total of all operations.
 
 ### Error Conditions
 - Multiple source rows match same target row (nondeterministic → error).
 - Constraint violations.
-- Missing semicolon terminator.
+- Missing semicolon terminator: error 10713, severity 15.
+- Repeated action in one match family: error 10714, severity 15.
+- A second MATCHED / BY SOURCE arm after an unconditional first arm: error
+  5324, severity 16.
 - Cannot use same table as target and source (use subquery/CTE as source).
 
 ## 5. TRUNCATE TABLE
