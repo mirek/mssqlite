@@ -803,6 +803,26 @@ test('character widths and fixed families cross the tedious boundary', async () 
   expect(parameter.columns).toMatchObject([ { type: 'VarChar', length: 3 } ])
 })
 
+test('ASCII and CHAR expose Windows-1252 values and varchar metadata over tedious', async () => {
+  const result = await query(`
+    SELECT ASCII('€') AS euro_byte, ASCII('A') AS ascii_byte,
+      CHAR(128) AS euro_character, CHAR(65) AS ascii_character,
+      CHAR(-1) AS negative_value, CHAR(256) AS overflow_value
+  `)
+  expect(result.rows).toEqual([ {
+    euro_byte: 128,
+    ascii_byte: 65,
+    euro_character: '€',
+    ascii_character: 'A',
+    negative_value: null,
+    overflow_value: null
+  } ])
+  expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 4 ],
+    [ 'VarChar', 1 ], [ 'VarChar', 1 ], [ 'VarChar', 1 ], [ 'VarChar', 1 ]
+  ])
+})
+
 test('implicit type precedence crosses predicates, RPC parameters and result metadata', async () => {
   const result = await query(`
     SELECT

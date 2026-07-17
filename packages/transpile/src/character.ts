@@ -109,6 +109,12 @@ export const typeOf =
       }
       case 'call': {
         const name = value.name[value.name.length - 1]?.toLowerCase()
+        if (name === 'char') {
+          return { name: 'varchar', args: [ 1 ] }
+        }
+        if (name === 'nchar') {
+          return { name: 'nchar', args: [ 1 ] }
+        }
         if (name === 'isnull') {
           return typeOf(ctx, value.args[0]) ?? typeOf(ctx, value.args[1])
         }
@@ -183,6 +189,10 @@ const hintType =
         return value.type
       case 'column':
         return Context.columnType(ctx, value.name)
+      case 'call':
+        return [ 'ascii', 'unicode' ].includes(
+          value.name[value.name.length - 1]?.toLowerCase() ?? '') ?
+          { name: 'int', args: [] } : undefined
       default:
         return undefined
     }

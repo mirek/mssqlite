@@ -30,6 +30,9 @@ export const encode =
       const code = value.charCodeAt(i)
       if (code <= 0x7f || (code >= 0xa0 && code <= 0xff)) {
         bytes[i] = code
+      } else if (code >= 0x80 && code <= 0x9f && high[code - 0x80] === 0) {
+        // Undefined CP-1252 byte positions round-trip as their C1 controls.
+        bytes[i] = code
       } else {
         bytes[i] = encodeMap.get(code) ?? 0x3f
       }

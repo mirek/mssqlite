@@ -1622,6 +1622,42 @@ test('character widths govern casts, assignment, storage, defaults and metadata'
     .toThrowError(expect.objectContaining({ number: 2628 }) as Error)
 })
 
+test('ASCII and CHAR use the Windows-1252 code page and varchar metadata', () => {
+  // Compatibility vector checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const result = rowsOf(executeBatch(s, `
+    SELECT ASCII('A') AS ascii_value, ASCII('€') AS euro_byte,
+      ASCII('') AS empty_value, ASCII(NULL) AS null_byte,
+      CHAR(0) AS zero_value, CHAR(65) AS ascii_character,
+      CHAR(128) AS euro_character, CHAR(129) AS control_character,
+      CHAR(130) AS quote_character,
+      CHAR(159) AS y_character, CHAR(255) AS final_character,
+      CHAR(-1) AS negative_value, CHAR(256) AS overflow_value,
+      CHAR(NULL) AS null_character
+  `))
+  expect(result.rows).toEqual([ [
+    65, 128, null, null,
+    '\0', 'A', '€', '\u0081', '‚', 'Ÿ', 'ÿ', null, null, null
+  ] ])
+  expect(result.columns.slice(0, 4).map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength
+  ])).toEqual([
+    [ DataType.DataType.intN, 4 ],
+    [ DataType.DataType.intN, 4 ],
+    [ DataType.DataType.intN, 4 ],
+    [ DataType.DataType.intN, 4 ]
+  ])
+  expect(result.columns.slice(4).map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+  ])).toEqual(Array.from({ length: 10 }, () => [
+    DataType.DataType.bigVarchar, 1, true
+  ]))
+  expect(rowsOf(executeBatch(s, 'SELECT CHAR(\'65\') AS text_value')).rows)
+    .toEqual([ [ 'A' ] ])
+  expect(() => executeBatch(s, 'SELECT CHAR(\'x\')'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+})
+
 test('table-valued functions return rows and metadata through the engine', () => {
   const s = open()
   const split = rowsOf(executeBatch(s, `

@@ -179,6 +179,9 @@ connection.execSql(request)
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,
   `TYPES.UniqueIdentifier`, `TYPES.VarBinary`, `TYPES.Numeric`.
+- Windows-1252 scalar tests should assert both values (`ASCII('€') = 128`,
+  `CHAR(128) = '€'`) and metadata: ASCII is IntN(4), while CHAR is
+  nullable VarChar(1), not inferred NVarChar.
 
 ## Gotchas discovered
 

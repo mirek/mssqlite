@@ -485,6 +485,8 @@ export const registerFunctions =
         value,
         { name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ] },
         text(column)) as Argument)
+    define('mssqlite_ascii', value => Character.ascii(value))
+    define('mssqlite_char', value => Character.char(value))
     define('mssqlite_implicit_bit', value => Implicit.bit(value) as Argument)
     define('mssqlite_implicit_real', (value, target) =>
       Implicit.real(value, text(target)) as Argument)

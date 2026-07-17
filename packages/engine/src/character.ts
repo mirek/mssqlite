@@ -1,5 +1,6 @@
 import { TypeInfo, Value as TdsValue } from '@mssqlite/tds'
 import { MssqlError } from './error.ts'
+import * as Implicit from './implicit.ts'
 import type { TypeName } from '@mssqlite/tsql'
 import type { Value } from './session.ts'
 
@@ -125,4 +126,24 @@ export const dataLength =
       return 8
     }
     return Number.isInteger(value) ? 4 : 8
+  }
+
+/** @returns the Windows-1252 byte of the leftmost character. */
+export const ascii =
+  (value: Value): number | null => {
+    if (value === null) {
+      return null
+    }
+    return encoded('varchar', text(value))[0] ?? null
+  }
+
+/** @returns the one-byte Windows-1252 character for an integer code. */
+export const char =
+  (value: Value): string | null => {
+    const converted_ = Implicit.integer(value, 'int')
+    if (converted_ === null) {
+      return null
+    }
+    const code = Number(converted_)
+    return code < 0 || code > 255 ? null : decoded('varchar', Uint8Array.of(code))
   }
