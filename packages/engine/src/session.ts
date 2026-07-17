@@ -108,6 +108,9 @@ export type Session = {
   userName: string,
   applicationName: string,
   hostName: string,
+  readonly loginTime: string,
+  requestDepth: number,
+  requestStartedAt: number,
   /** Declared variables keyed by lowercased `@name`. */
   readonly variables: Map<string, Variable>,
   /** Table variables in the active batch or procedure scope. */
@@ -274,8 +277,8 @@ export const server =
 
 /** @returns fresh session on a server. */
 export const session =
-  (server_: Server): Session =>
-    ({
+  (server_: Server): Session => {
+    const session_: Session = {
       server: server_,
       db: server_.db,
       spid: nextSpid++,
@@ -283,6 +286,9 @@ export const session =
       userName: 'sa',
       applicationName: '',
       hostName: '',
+      loginTime: new Date().toISOString(),
+      requestDepth: 0,
+      requestStartedAt: 0,
       variables: new Map(),
       tableVariables: new Map(),
       cursors: new Map(),
@@ -301,7 +307,113 @@ export const session =
       returnValue: null,
       lastReturnStatus: 0,
       nestLevel: 0
-    })
+    }
+    syncSession(session_)
+    return session_
+  }
+
+/** Synchronizes mutable connection identity and counters with sys.dm_exec_sessions. */
+const databaseId =
+  (session_: Session): number => {
+    const row = session_.db.prepare(
+      'SELECT database_id FROM "sys.databases" WHERE name = ?'
+    ).get(session_.database) as { database_id: number } | undefined
+    return row?.database_id ?? 5
+  }
+
+export const syncSession =
+  (session_: Session): void => {
+    session_.db.prepare(
+      `INSERT INTO "sys.dm_exec_sessions" (
+        session_id, login_time, host_name, program_name, client_version,
+        client_interface_name, login_name, status, database_id,
+        open_transaction_count, row_count, prev_error, original_login_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        host_name = excluded.host_name, program_name = excluded.program_name,
+        login_name = excluded.login_name, status = excluded.status,
+        database_id = excluded.database_id,
+        open_transaction_count = excluded.open_transaction_count,
+        row_count = excluded.row_count, prev_error = excluded.prev_error,
+        original_login_name = excluded.original_login_name`
+    ).run(
+      session_.spid, session_.loginTime, session_.hostName || null,
+      session_.applicationName || null, 0x74000004, 'TDS', session_.userName,
+      session_.requestDepth > 0 ? 'running' : 'sleeping', databaseId(session_),
+      session_.transactionCount,
+      session_.rowCount, session_.lastError, session_.userName
+    )
+  }
+
+const requestCommand =
+  (sql: string): string => /^[\s;]*(\w+)/.exec(sql)?.[1]?.toUpperCase() ?? 'UNKNOWN'
+
+/** Registers an outer client request so the request can observe itself in the DMVs. */
+export const beginRequest =
+  (session_: Session, sql: string): void => {
+    const mutable = session_
+    mutable.requestDepth++
+    if (mutable.requestDepth !== 1) {
+      return
+    }
+    syncSession(session_)
+    mutable.requestStartedAt = Date.now()
+    session_.db.prepare(
+      `INSERT OR REPLACE INTO "sys.dm_exec_requests" (
+        session_id, request_id, start_time, status, command, database_id,
+        open_transaction_count, row_count
+      ) VALUES (?, 0, ?, 'running', ?, ?, ?, ?)`
+    ).run(
+      session_.spid, new Date(session_.requestStartedAt).toISOString(),
+      requestCommand(sql), databaseId(session_), session_.transactionCount, session_.rowCount
+    )
+    session_.db.prepare(
+      `UPDATE "sys.dm_exec_sessions"
+        SET status = 'running', last_request_start_time = ?, open_transaction_count = ?
+        WHERE session_id = ?`
+    ).run(new Date(session_.requestStartedAt).toISOString(), session_.transactionCount, session_.spid)
+  }
+
+/** Completes an outer request and leaves the authenticated session sleeping. */
+export const endRequest =
+  (session_: Session): void => {
+    const mutable = session_
+    mutable.requestDepth--
+    if (mutable.requestDepth !== 0) {
+      return
+    }
+    const ended = new Date().toISOString()
+    const elapsed = Math.max(0, Date.now() - session_.requestStartedAt)
+    session_.db.prepare(
+      `UPDATE "sys.dm_exec_requests" SET total_elapsed_time = ?, row_count = ?
+        WHERE session_id = ? AND request_id = 0`
+    ).run(elapsed, session_.rowCount, session_.spid)
+    session_.db.prepare(
+      `UPDATE "sys.dm_exec_sessions" SET status = 'sleeping',
+        last_request_end_time = ?, open_transaction_count = ?, row_count = ?, prev_error = ?
+        WHERE session_id = ?`
+    ).run(
+      ended, session_.transactionCount, session_.rowCount, session_.lastError, session_.spid
+    )
+    session_.db.prepare(
+      'DELETE FROM "sys.dm_exec_requests" WHERE session_id = ? AND request_id = 0'
+    ).run(session_.spid)
+  }
+
+/** Removes disconnected session/request rows from the dynamic management surface. */
+export const closeSession =
+  (session_: Session): void => {
+    try {
+      session_.db.prepare('DELETE FROM "sys.dm_exec_requests" WHERE session_id = ?')
+        .run(session_.spid)
+      session_.db.prepare('DELETE FROM "sys.dm_exec_sessions" WHERE session_id = ?')
+        .run(session_.spid)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('database is not open')) {
+        throw error
+      }
+    }
+  }
 
 /** Removes LOCAL cursors declared while `run` owns the active batch/procedure scope. */
 export const withCursorScope =

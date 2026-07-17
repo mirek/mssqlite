@@ -2,6 +2,45 @@ import { tables, views } from './schema.ts'
 import * as TypeRow from './type-row.ts'
 import type { DatabaseSync } from 'node:sqlite'
 
+const hasColumn =
+  (db: DatabaseSync, table: string, column: string): boolean =>
+    (db.prepare(`PRAGMA table_info("${table.replaceAll('"', '""')}")`).all() as
+      { name: string }[]).some(row => row.name === column)
+
+const migrate =
+  (db: DatabaseSync): void => {
+    const defaultObject = db.prepare(
+      'SELECT type FROM sqlite_schema WHERE name = \'sys.default_constraints\''
+    ).get() as { type: string } | undefined
+    if (defaultObject?.type === 'table') {
+      db.exec(`ALTER TABLE "sys.default_constraints"
+        RENAME TO "sys.default_constraints_legacy"`)
+      db.exec(`INSERT OR REPLACE INTO "sys.default_constraints_extra"
+        SELECT object_id, parent_column_id, definition, is_system_named
+        FROM "sys.default_constraints_legacy"`)
+      db.exec('DROP TABLE "sys.default_constraints_legacy"')
+    }
+    if (!hasColumn(db, 'sys.sql_modules', 'is_inlineable')) {
+      db.exec(`ALTER TABLE "sys.sql_modules"
+        ADD COLUMN is_inlineable INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!hasColumn(db, 'sys.sql_modules', 'inline_type')) {
+      db.exec(`ALTER TABLE "sys.sql_modules"
+        ADD COLUMN inline_type INTEGER NOT NULL DEFAULT 0`)
+    }
+  }
+
+const recreateViews =
+  (db: DatabaseSync): void => {
+    for (const sql of views) {
+      const name = /CREATE VIEW IF NOT EXISTS "([^"]+)"/.exec(sql)?.[1]
+      if (name !== undefined) {
+        db.exec(`DROP VIEW IF EXISTS "${name.replaceAll('"', '""')}"`)
+      }
+      db.exec(sql)
+    }
+  }
+
 const databases = [
   [ 1, 'master' ], [ 2, 'tempdb' ], [ 3, 'model' ], [ 4, 'msdb' ]
 ] as const
@@ -49,9 +88,8 @@ export const bootstrap =
     for (const sql of tables) {
       db.exec(sql)
     }
-    for (const sql of views) {
-      db.exec(sql)
-    }
+    migrate(db)
+    recreateViews(db)
     const insertDatabase = db.prepare(
       'INSERT OR IGNORE INTO "sys.databases" (database_id, name) VALUES (?, ?)'
     )
@@ -59,6 +97,10 @@ export const bootstrap =
       insertDatabase.run(id, name)
     }
     insertDatabase.run(5, databaseName)
+    db.prepare(
+      `INSERT INTO "sys._database_context" (singleton, name) VALUES (1, ?)
+        ON CONFLICT(singleton) DO UPDATE SET name = excluded.name`
+    ).run(databaseName)
     const insertSchema = db.prepare(
       'INSERT OR IGNORE INTO "sys.schemas" (schema_id, name, principal_id) VALUES (?, ?, ?)'
     )

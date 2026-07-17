@@ -119,6 +119,10 @@ connection.execSql(request)
   `sp_helpdb`, and `sp_spaceused` can emit multiple result sets. Procedure names
   and `sys.` aliases are case-insensitive. Test `sp_rename` by querying the
   renamed SQLite object afterward, not only by inspecting its return status.
+- Catalog-coverage tests should query `INFORMATION_SCHEMA` and `sys.dm_exec_*`
+  through ordinary `execSql`, asserting `columnMetadata` as well as values.
+  Open a second tedious connection to prove session rows are server-wide; the
+  querying connection should see its own request 0 as `running`/`SELECT`.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

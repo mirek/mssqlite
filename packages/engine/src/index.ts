@@ -15,10 +15,12 @@ export {
 } from './execute.ts'
 export { registerFunctions } from './udf.ts'
 export {
+  closeSession,
   procedureKey,
   functionKey,
   server,
   session,
+  syncSession,
   type Procedure,
   type Server,
   type Session,

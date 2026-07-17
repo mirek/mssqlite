@@ -68,7 +68,8 @@ TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
 CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
 indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested
 transactions and savepoints, `sys.tables` / `sys.columns` /
-`INFORMATION_SCHEMA` catalog queries, `@@ROWCOUNT` / `@@IDENTITY` /
+expanded `INFORMATION_SCHEMA` routine/view/constraint catalogs and live
+`sys.dm_exec_sessions` / `sys.dm_exec_requests`, `@@ROWCOUNT` / `@@IDENTITY` /
 `SCOPE_IDENTITY()`, a large built-in function surface (strings, math,
 date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
 error numbers, offset-preserving `datetimeoffset` with UTC-normalized

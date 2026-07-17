@@ -13,12 +13,14 @@ Source: `sql-docs/docs/relational-databases/system-catalog-views/`
 
 This spec is implemented in [`packages/catalog`](../../../packages/catalog):
 
-- **Phase 1 + 2 + most of phase 3 are done** — schemas, types (34
+- **Phase 1 + 2 + the high-value phase 3 surface are done** — schemas, types (34
   seed rows), objects, columns, tables/views/procedures views, databases,
   indexes, index_columns, key_constraints, foreign_keys +
   foreign_key_columns, check/default constraints, database/server
   principals, identity_columns (+ `_extra` backing table), plus
-  `INFORMATION_SCHEMA.TABLES` and `.COLUMNS` views.
+  `INFORMATION_SCHEMA.TABLES`, `.COLUMNS`, `.ROUTINES`, `.VIEWS`,
+  `.TABLE_CONSTRAINTS`, `.KEY_COLUMN_USAGE`, and
+  `.REFERENTIAL_CONSTRAINTS` views.
 - **Query interception is unnecessary** — instead of routing `sys.*`
   queries (§ Architecture Overview above), the transpiler flattens
   `sys.tables` to the literal SQLite object name `"sys.tables"`, which is
@@ -31,12 +33,12 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   TYPE_ID/TYPE_NAME/DB_ID/DB_NAME rewrite to catalog subqueries at
   transpile time; SERVERPROPERTY/@@VERSION/@@SPID come from engine UDFs
   and globals.
-- `sys.sql_modules` stores stored-procedure, user-function, and DML-trigger
+- `sys.sql_modules` stores view, stored-procedure, user-function, and DML-trigger
   definitions (whole batch source); the engine reloads procedures, scalar
   (`FN`) and inline table-valued (`IF`) functions, and table-parented `TR`
   triggers from it on server start, and
-  `OBJECT_DEFINITION()` rewrites to a subquery over it. View definitions
-  are not yet stored there.
+  `OBJECT_DEFINITION()` rewrites to a subquery over it. It includes the SQL
+  Server 2019 `is_inlineable` and `inline_type` flags.
 - `sys.sequences` joins `SO` / `SEQUENCE_OBJECT` rows to the internal
   `sys.sequence_state` backing table and exposes type ids, precision/scale,
   start/increment/bounds, cycle/cache settings, current/exhausted state, and
@@ -65,7 +67,41 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   names synchronized with SQLite under a savepoint; module source is retained
   verbatim, matching SQL Server's warning that stored definitions and dependent
   references are not rewritten.
+- `sys.default_constraints` is a derived view that inherits all
+  `sys.objects` columns and joins `parent_column_id`, expression `definition`,
+  and `is_system_named` from `sys.default_constraints_extra`.
+- `sys.dm_exec_sessions` and `sys.dm_exec_requests` are mutable backing tables:
+  session creation/login synchronizes identity, an outer engine batch inserts a
+  request before parsing so it can observe itself, completion returns the
+  session to `sleeping`, and socket close deletes both rows.
 - Not yet populated: extended properties.
+
+### Implemented high-value view contracts
+
+All catalog-name columns read the singleton current-database context; schema
+and object names join through `sys.schemas`/`sys.objects`. Reserved ISO fields
+are present as NULL rather than omitted.
+
+| View | Complete exposed schema |
+|---|---|
+| `INFORMATION_SCHEMA.VIEWS` | `TABLE_CATALOG/SCHEMA/NAME nvarchar(128)`, `VIEW_DEFINITION nvarchar(4000) NULL`, `CHECK_OPTION varchar(7)`, `IS_UPDATABLE varchar(2)` |
+| `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` | `CONSTRAINT_CATALOG/SCHEMA/NAME`, `TABLE_CATALOG/SCHEMA/NAME` as `nvarchar(128)`, `CONSTRAINT_TYPE varchar(11)`, `IS_DEFERRABLE varchar(2)`, `INITIALLY_DEFERRED varchar(2)` |
+| `INFORMATION_SCHEMA.KEY_COLUMN_USAGE` | catalog/schema/name triples for constraint and table plus `COLUMN_NAME nvarchar(128)` and `ORDINAL_POSITION int`; PK/UQ rows join key indexes and FK rows join `sys.foreign_key_columns` |
+| `INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS` | constraint and referenced-unique catalog/schema/name triples as `nvarchar(128)`, `MATCH_OPTION varchar(7)`, `UPDATE_RULE/DELETE_RULE varchar(11)`; the referenced name resolves through `key_index_id` |
+| `INFORMATION_SCHEMA.ROUTINES` | all SQL Server columns: `SPECIFIC_*`, `ROUTINE_*`, `MODULE_*`, `UDT_*`, `DATA_TYPE`, character/collation/character-set fields, numeric precision/radix/scale, datetime/interval fields, `TYPE_UDT_*`, `SCOPE_*`, `MAXIMUM_CARDINALITY`, `DTD_IDENTIFIER`, body/definition/external fields, determinism/data-access/null-call fields, SQL path/schema-level/dynamic-result/cast/invocation fields, and `CREATED`/`LAST_ALTERED`; scalar return details come from `sys.routine_metadata`, IF returns `table`, and procedure return fields are NULL |
+
+`sys.sql_modules` has `object_id int`, `definition nvarchar(max) NULL`, eight
+SQL Server option columns (`uses_ansi_nulls`, `uses_quoted_identifier`,
+`is_schema_bound`, `uses_database_collation`, `is_recompiled`,
+`null_on_null_input`, `execute_as_principal_id NULL`,
+`uses_native_compilation`) plus `is_inlineable bit` and `inline_type bit`.
+
+The minimal live DMV schemas are intentionally the commonly consumed subset:
+
+| View | Columns |
+|---|---|
+| `sys.dm_exec_sessions` | `session_id smallint`, `login_time datetime`, nullable `host_name/program_name nvarchar(128)`, nullable `host_process_id/client_version int`, nullable `client_interface_name nvarchar(32)`, `login_name nvarchar(128)`, `status nvarchar(30)`, `database_id smallint`, `open_transaction_count int`, nullable request start/end datetimes, `row_count bigint`, `prev_error int`, `original_login_name nvarchar(128)` |
+| `sys.dm_exec_requests` | `session_id smallint`, `request_id int`, `start_time datetime`, `status nvarchar(30)`, `command nvarchar(32)`, `database_id smallint`, `user_id int`, `blocking_session_id smallint`, nullable `wait_type nvarchar(60)`, `wait_time int`, `wait_resource nvarchar(256)`, `open_transaction_count int`, `percent_complete real`, `cpu_time/total_elapsed_time int`, `reads/writes/logical_reads/row_count bigint` |
 
 ---
 
@@ -692,15 +728,21 @@ Inherits from sys.objects (type='D'). One row per DEFAULT constraint.
 | definition | nvarchar(max) | TEXT | SQL expression for the default value |
 | is_system_named | bit | INTEGER NOT NULL DEFAULT 0 | System-generated name |
 
-### SQLite Backing Table
+### SQLite Backing Table + Derived View
 
 ```sql
-CREATE TABLE IF NOT EXISTS [sys.default_constraints] (
+CREATE TABLE IF NOT EXISTS [sys.default_constraints_extra] (
   object_id INTEGER PRIMARY KEY,
   parent_column_id INTEGER NOT NULL,
   definition TEXT,
   is_system_named INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE VIEW [sys.default_constraints] AS
+SELECT o.*, d.parent_column_id, d.definition, d.is_system_named
+FROM [sys.objects] o
+JOIN [sys.default_constraints_extra] d ON d.object_id = o.object_id
+WHERE o.type = 'D';
 ```
 
 ---

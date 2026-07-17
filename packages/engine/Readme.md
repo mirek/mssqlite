@@ -26,7 +26,9 @@ const items = executeBatch(s, `
   many sessions on a shared connection (SQLite serializes writes; one
   transaction at a time).
 - `session(server)` — per-connection state: declared variables, SET
-  options, `@@ROWCOUNT` / `@@IDENTITY` / `@@TRANCOUNT` / `@@ERROR`, spid.
+  options, `@@ROWCOUNT` / `@@IDENTITY` / `@@TRANCOUNT` / `@@ERROR`, spid,
+  and a synchronized `sys.dm_exec_sessions` row. Outermost batches expose a
+  live request row until completion; `closeSession` removes disconnected state.
 - `executeBatch(session, sql)` — items: `rows` (with TDS column metadata),
   `count`, `message`, and ordered recoverable `error` entries. Throws
   `BatchError` after a mixed-error batch (retaining all produced items) or

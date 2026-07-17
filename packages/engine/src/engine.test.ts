@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { DataType, SqlVariant } from '@mssqlite/tds'
-import { BatchError, executeBatch, executeSql, MssqlError, server, session } from './index.ts'
+import {
+  BatchError, closeSession, executeBatch, executeSql, MssqlError, server, session, syncSession
+} from './index.ts'
 import type { Item, Rows } from './execute.ts'
 
 const open =
@@ -1472,6 +1474,104 @@ test('catalog queries work end to end', () => {
     .toEqual([ [ '15.0.2000.5' ] ])
 })
 
+test('expanded catalog views track live DDL definitions and constraints', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE catalog_parent (
+      id INT,
+      CONSTRAINT PK_catalog_parent PRIMARY KEY (id)
+    )
+    CREATE TABLE catalog_child (
+      id INT CONSTRAINT DF_catalog_child_id DEFAULT 7,
+      parent_id INT,
+      CONSTRAINT PK_catalog_child PRIMARY KEY (id),
+      CONSTRAINT FK_catalog_child_parent FOREIGN KEY (parent_id)
+        REFERENCES catalog_parent (id) ON DELETE CASCADE
+    )
+    CREATE VIEW catalog_child_view AS SELECT id, parent_id FROM catalog_child
+  `)
+  executeBatch(s, `
+    CREATE OR ALTER VIEW catalog_child_view AS SELECT id FROM catalog_child
+    ALTER TABLE catalog_child ADD score INT DEFAULT 3
+  `)
+  executeBatch(s, 'CREATE PROCEDURE catalog_proc AS SELECT 1')
+  executeBatch(s, 'CREATE FUNCTION catalog_fn() RETURNS INT AS BEGIN RETURN 1 END')
+
+  expect(rowsOf(executeBatch(s, `
+    SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE
+    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+    WHERE TABLE_NAME = 'catalog_child' ORDER BY CONSTRAINT_NAME
+  `)).rows).toEqual([
+    [ 'FK_catalog_child_parent', 'FOREIGN KEY' ],
+    [ 'PK_catalog_child', 'PRIMARY KEY' ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT CONSTRAINT_NAME, UNIQUE_CONSTRAINT_NAME, DELETE_RULE
+    FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+  `)).rows).toEqual([
+    [ 'FK_catalog_child_parent', 'PK_catalog_parent', 'CASCADE' ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT TABLE_NAME, VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS
+  `)).rows[0]).toMatchObject([ 'catalog_child_view', expect.stringContaining('CREATE VIEW') ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT ROUTINE_NAME, ROUTINE_TYPE, DATA_TYPE
+    FROM INFORMATION_SCHEMA.ROUTINES ORDER BY ROUTINE_NAME
+  `)).rows).toEqual([
+    [ 'catalog_fn', 'FUNCTION', 'int' ],
+    [ 'catalog_proc', 'PROCEDURE', null ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT d.name, d.definition, c.default_object_id
+    FROM sys.default_constraints d
+    JOIN sys.columns c ON c.object_id = d.parent_object_id
+      AND c.column_id = d.parent_column_id
+    ORDER BY d.parent_column_id
+  `)).rows).toEqual([
+    [ 'DF_catalog_child_id', '(7)', expect.any(Number) ],
+    [ expect.stringMatching(/^DF__catalog_child__/), '(3)', expect.any(Number) ]
+  ])
+
+  executeBatch(s, 'ALTER TABLE catalog_child DROP COLUMN score')
+  expect(rowsOf(executeBatch(s, `
+    SELECT COUNT(*) AS n FROM sys.default_constraints
+    WHERE parent_object_id = OBJECT_ID(N'catalog_child')
+  `)).rows).toEqual([ [ 1 ] ])
+
+  executeBatch(s, 'DROP VIEW catalog_child_view; DROP PROCEDURE catalog_proc; DROP FUNCTION catalog_fn')
+  expect(rowsOf(executeBatch(s, `
+    SELECT COUNT(*) AS n FROM sys.sql_modules
+    WHERE object_id NOT IN (SELECT object_id FROM sys.objects)
+  `)).rows).toEqual([ [ 0 ] ])
+})
+
+test('dynamic management rows follow session and request lifecycles', () => {
+  const server_ = server()
+  const first = session(server_)
+  const second = session(server_)
+  second.userName = 'observer'
+  second.hostName = 'observer-host'
+  second.applicationName = 'catalog-test'
+  syncSession(second)
+
+  expect(rowsOf(executeBatch(first, `
+    SELECT session_id, status, login_name, host_name, program_name
+    FROM sys.dm_exec_sessions ORDER BY session_id
+  `)).rows).toEqual([
+    [ first.spid, 'running', 'sa', null, null ],
+    [ second.spid, 'sleeping', 'observer', 'observer-host', 'catalog-test' ]
+  ])
+  expect(rowsOf(executeBatch(first, `
+    SELECT session_id, request_id, status, command
+    FROM sys.dm_exec_requests
+  `)).rows).toEqual([ [ first.spid, 0, 'running', 'SELECT' ] ])
+
+  closeSession(second)
+  expect(rowsOf(executeBatch(first, `
+    SELECT COUNT(*) AS n FROM sys.dm_exec_sessions
+  `)).rows).toEqual([ [ 1 ] ])
+})
+
 test('use and session options', () => {
   const s = open()
   executeBatch(s, 'SET NOCOUNT ON')
@@ -1825,7 +1925,7 @@ test('system metadata procedures expose SQL Server-shaped result sets', () => {
     'spid', 'ecid', 'status', 'loginame', 'hostname', 'blk', 'dbname', 'cmd', 'request_id'
   ])
   expect(who.rows).toEqual([ [
-    s.spid, 0, 'running', 'sa', 'engine-host', '0', 'master', 'AWAITING COMMAND', 0
+    s.spid, 0, 'running', 'sa', 'engine-host', '0', 'master', 'EXEC', 0
   ] ])
 
   const databases = executeBatch(s, 'EXEC sp_helpdb N\'master\'')
