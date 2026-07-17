@@ -345,6 +345,10 @@ the engine:
   scalar UDF call, preserving one evaluation per operand, NULL propagation,
   integer division, 8134 divide-by-zero, and 8115 overflow. SUM uses checked
   32-bit state by default and 64-bit state for an explicit BIGINT argument.
+  Integer AVG uses a reversible exact sum/count aggregate so ordinary,
+  DISTINCT, window, PIVOT, and grouping-set forms truncate toward zero and
+  detect accumulator overflow; static hints keep AVG(bigint) and COUNT_BIG at
+  IntN(8), including NULL/empty results.
   When both ARITHABORT and ANSI_WARNINGS are OFF, these failures produce NULL;
   otherwise they enter normal TRY/CATCH / statement-error / XACT_ABORT flow.
 - **Stored procedures are interpreted AST** — `CREATE PROCEDURE` stores

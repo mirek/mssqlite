@@ -383,18 +383,23 @@ export const expression =
         ].includes(callName ?? '')) {
           return unsupported(`Special-type method '${callName}' is not supported.`)
         }
-        const input = expression_.args[0] === undefined ? undefined : Decimal.typeOf(ctx, expression_.args[0])
-        if ([ 'sum', 'avg', 'min', 'max' ].includes(callName ?? '') && input !== undefined) {
+        const input = expression_.args[0]
+        const decimalInput = input === undefined ? undefined : Decimal.typeOf(ctx, input)
+        if ([ 'sum', 'avg', 'min', 'max' ].includes(callName ?? '') && decimalInput !== undefined) {
           const output = Decimal.typeOf(ctx, expression_)
-          const value = expression_.args[0]
-          if (output !== undefined && value !== undefined) {
+          if (output !== undefined && input !== undefined) {
             return callName === 'min' || callName === 'max' ?
-              `mssqlite_decimal_${callName}(${expression(ctx, value)}, ${input.scale})` :
-              `mssqlite_decimal_${callName}(${expression(ctx, value)}, ${input.scale}, ` +
+              `mssqlite_decimal_${callName}(${expression(ctx, input)}, ${decimalInput.scale})` :
+              `mssqlite_decimal_${callName}(${expression(ctx, input)}, ${decimalInput.scale}, ` +
                 `${output.precision}, ${output.scale})`
           }
         }
-        const rendered = call(expression_, inner => expression(ctx, inner))
+        const inputType = input === undefined ? undefined : Implicit.typeOf(ctx, input)
+        const integerAverage = callName === 'avg' && input !== undefined && inputType !== undefined &&
+          Type.category(inputType) === 'integer' ?
+          `${inputType.name === 'bigint' ? 'mssqlite_avg_bigint' : 'mssqlite_avg'}(` +
+            `${expression(ctx, input)})` : undefined
+        const rendered = integerAverage ?? call(expression_, inner => expression(ctx, inner))
         if (expression_.distinct === true) {
           const name = rendered.slice(0, rendered.indexOf('('))
           const args = rendered.slice(rendered.indexOf('(') + 1)

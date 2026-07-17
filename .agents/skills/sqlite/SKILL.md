@@ -175,8 +175,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - SQLite returns NULL for division/modulo by zero and promotes overflowing
   integer scalar arithmetic. mssqlite therefore renders checked arithmetic UDFs
   that evaluate operands once and raise SQL Server 8134/8115 (or NULL only under
-  ARITHABORT OFF + ANSI_WARNINGS OFF). A custom SUM aggregate checks int/bigint
-  accumulator widths instead of waiting for SQLite's signed-64-bit overflow.
+  ARITHABORT OFF + ANSI_WARNINGS OFF). Custom SUM and integer AVG aggregates
+  check int/bigint accumulator widths instead of waiting for SQLite's
+  signed-64-bit overflow; AVG divides exact sum/count state toward zero and
+  supplies an inverse callback for window use rather than SQLite's REAL avg().
 - SQLite compares mixed storage classes by its own class ordering and numeric
   affinity may convert invalid text to zero. mssqlite therefore infers the
   higher-precedence T-SQL type before rendering predicates, CASE/IN/BETWEEN,

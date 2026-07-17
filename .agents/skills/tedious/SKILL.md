@@ -143,6 +143,9 @@ connection.execSql(request)
   visually identical subtotal NULL, distinguished by GROUPING(). The latter
   arrives as nullable-family `IntN(1)` metadata and a JavaScript number;
   grouped and aggregate columns retain their declared source-derived widths.
+- Integer AVG must arrive as IntN(4) or IntN(8), not SQLite's FloatN result,
+  and COUNT_BIG remains IntN(8) even for zero. Tedious exposes both bigint
+  aggregate values as strings regardless of their runtime magnitude.
 - FOR JSON arrives as one column named
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` with NVarChar(max) metadata.
   Test a value larger than 8 KiB so the server's PLP path is exercised;

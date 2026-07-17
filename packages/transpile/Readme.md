@@ -48,8 +48,10 @@ const { sql, variables } = statement(parseStatement(
 
 Integer arithmetic renders `mssqlite_arithmetic(op, left, right, width)` so
 operands execute once and the engine can enforce divide-by-zero/overflow and
-session options. SUM renders a checked int aggregate, with an explicit BIGINT
-argument selecting its 64-bit variant. DECIMAL/NUMERIC literals, casts,
+session options. SUM and integer AVG render checked int aggregates, with a
+BIGINT argument selecting their 64-bit variants; AVG truncates toward zero and
+supports window execution through an inverse step. COUNT_BIG and aggregate
+result hints retain bigint metadata even for zero. DECIMAL/NUMERIC literals, casts,
 arithmetic, comparisons, ordering, and aggregates render exact-decimal UDFs;
 operator results carry SQL Server-derived precision/scale hints to TDS. Every
 rendered statement reports the variables it binds.
