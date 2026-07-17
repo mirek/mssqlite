@@ -1115,6 +1115,37 @@ test('date validation and native constructor metadata cross tedious', async () =
     .toEqual([ { count: 0 } ])
 })
 
+test('JSON scalar values, fragments and errors cross tedious', async () => {
+  const values = await query(`
+    SELECT
+      ISJSON('42') AS scalar_json,
+      ISJSON('{}') AS object_json,
+      JSON_VALUE(N'{"n":42,"b":true,"o":{}}', '$.n') AS number_value,
+      JSON_VALUE(N'{"n":42,"b":true,"o":{}}', '$.b') AS boolean_value,
+      JSON_VALUE(N'{"n":42,"b":true,"o":{}}', '$.o') AS object_value,
+      JSON_QUERY(N'{"a": { "b": 1 }}', '$.a') AS query_value
+  `)
+  expect(values.rows).toEqual([ {
+    scalar_json: 0,
+    object_json: 1,
+    number_value: '42',
+    boolean_value: 'true',
+    object_value: null,
+    query_value: '{ "b": 1 }'
+  } ])
+  expect(values.columns.slice(2).map(column => [ column.type, column.length ]))
+    .toEqual(Array.from({ length: 4 }, () => [ 'NVarChar', 8000 ]))
+
+  await expect(query('SELECT JSON_VALUE(N\'{bad}\', \'$.a\')'))
+    .rejects.toMatchObject({ number: 13609, class: 16, state: 1 })
+  await expect(query('SELECT JSON_VALUE(N\'{"a":1}\', \'strict $.missing\')'))
+    .rejects.toMatchObject({ number: 13608, class: 16, state: 1 })
+  await expect(query('SELECT JSON_VALUE(N\'{"a":{}}\', \'strict $.a\')'))
+    .rejects.toMatchObject({ number: 13623, class: 16, state: 2 })
+  await expect(query('SELECT JSON_QUERY(N\'{"a":1}\', \'strict $.a\')'))
+    .rejects.toMatchObject({ number: 13624, class: 16, state: 2 })
+})
+
 test('table-valued functions over the wire include empty inputs', async () => {
   const split = await query(`
     SELECT value, ordinal

@@ -28,6 +28,7 @@ const database =
           `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ` +
           `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:` +
           `${String(second).padStart(2, '0')}.${String(millisecond).padStart(3, '0')}`)
+    db.function('mssqlite_json_query', (value, _path) => value)
     db.function('mssqlite_substring', (value, start, length) => {
       const source = String(value)
       const at = Number(start)

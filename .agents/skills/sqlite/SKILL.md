@@ -93,6 +93,12 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   schemas. Node's bundled SQLite does not expose the optional
   `generate_series` virtual table, so `GENERATE_SERIES` renders as a
   streaming recursive CTE with SQL Server's direction-sensitive default step.
+- Do not use JSON1 scalar extraction for JSON_VALUE/JSON_QUERY compatibility:
+  `json_extract` returns SQLite numeric types and normalizes object/array text.
+  mssqlite instead parses source-spanned nodes, returning lexical scalar text
+  or the exact selected fragment while enforcing SQL Server lax/strict errors
+  and JSON_VALUE's 4000 UTF-16-unit ceiling. OPENJSON remains a JSON1
+  table-source lowering and has its own strict-path backlog.
 - SQLite has no general LATERAL keyword, but eponymous virtual-table function
   arguments can reference earlier FROM sources. mssqlite uses that for
   correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
@@ -227,5 +233,5 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 
 Native SQLite shortcuts that still leak through the T-SQL compatibility
 boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
-2025 differentials cover text comparison/collation, JSON validation,
+2025 differentials cover text comparison/collation, OPENJSON path validation,
 scalar function contracts, and result metadata.

@@ -291,10 +291,10 @@ All deterministic.
 
 | Function | Syntax | Return | Behavior |
 |----------|--------|--------|----------|
-| JSON_VALUE | `JSON_VALUE(json, path)` | nvarchar(4000) | Scalar value. Lax: NULL if not found. Strict: error. |
-| JSON_QUERY | `JSON_QUERY(json [, path])` | nvarchar(max) | Object/array. NOT scalar. Default path = `$`. |
+| JSON_VALUE | `JSON_VALUE(json, path)` | nvarchar(4000) | Decoded/lexical scalar text; object/array is NULL in lax mode. Missing/wrong kind/over 4000 UTF-16 units raise in strict mode. |
+| JSON_QUERY | `JSON_QUERY(json [, path])` | nvarchar(4000) | Original object/array fragment, including interior whitespace. Scalar is NULL in lax mode. Default path = `$`. |
 | JSON_MODIFY | `JSON_MODIFY(json, path, val)` | nvarchar(max) | Update/insert. NULL val in lax = delete key. `append` for arrays. |
-| ISJSON | `ISJSON(expr [, type])` | int | 0/1. Types: VALUE, ARRAY, OBJECT, SCALAR. |
+| ISJSON | `ISJSON(expr [, type])` | int | Default form accepts only object/array roots; NULL propagates. Optional types: VALUE, ARRAY, OBJECT, SCALAR. |
 | OPENJSON | `OPENJSON(json [, path]) [WITH (...)]` | TABLE | Default: key/value/type. WITH: custom columns. Type values: 0=null,1=string,2=number,3=bool,4=array,5=object. |
 
 ### JSON Path Syntax

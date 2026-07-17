@@ -193,19 +193,14 @@ const handlers: Record<string, Handler> = {
   first_value: fixed('first_value'),
   last_value: fixed('last_value'),
   // JSON.
-  isjson: fixed('json_valid'),
-  json_value: fixed('json_extract'),
+  isjson: fixed('mssqlite_isjson'),
+  json_value: fixed('mssqlite_json_value'),
   json_query: (call, render) => {
     if (call.args.length < 1 || call.args.length > 2) {
       return unsupported('JSON_QUERY expects one or two arguments.')
     }
-    const value = arg(call, render, 0)
-    if (call.args.length === 1) {
-      return `(CASE WHEN json_type(${value}) IN ('object', 'array') THEN json(${value}) END)`
-    }
-    const path = arg(call, render, 1)
-    return `(CASE WHEN json_type(${value}, ${path}) IN ('object', 'array') ` +
-      `THEN json_extract(${value}, ${path}) END)`
+    return `mssqlite_json_query(${arg(call, render, 0)}, ` +
+      `${call.args.length === 1 ? string('$') : arg(call, render, 1)})`
   },
   // System.
   newid: fixed('mssqlite_newid'),

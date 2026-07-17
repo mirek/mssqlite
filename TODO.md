@@ -9,7 +9,6 @@ work is complete.
 - [SELECT INTO type preservation](todo/select-into-type-preservation.md) — Preserve expression type, width, nullability, and eligible identity properties.
 - [Scalar result metadata](todo/scalar-result-metadata.md) — Emit exact TDS types and sizes for literals, casts, operators, and functions.
 - [String comparison padding](todo/string-comparison-padding.md) — Match SQL Server trailing-space comparison behavior across collations.
-- [JSON scalar semantics](todo/json-scalar-semantics.md) — Match ISJSON, JSON_VALUE, and JSON_QUERY value and text behavior.
 - [Default text collation](todo/default-text-collation.md) — Apply default SQL text collation to expressions and set operations.
 
 ## Query and DDL surface

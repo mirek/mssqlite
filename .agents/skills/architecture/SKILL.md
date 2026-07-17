@@ -231,6 +231,14 @@ the engine:
   nested FOR JSON expressions are explicitly re-tagged as SQLite JSON after
   crossing the inner-query boundary. The output always has SQL Server's
   magic column name and nvarchar(max) hint.
+- **Scalar JSON preserves source spans** — ISJSON, JSON_VALUE and JSON_QUERY
+  use an engine reader rather than JSON1 extraction. It validates the complete
+  document while retaining each node's original slice. The default ISJSON form
+  accepts only object/array roots; JSON_VALUE returns decoded or lexical scalar
+  text with the 4000 UTF-16-unit lax/strict rule; JSON_QUERY returns the exact
+  object/array slice. BIN2-like path lookup maps malformed, missing, wrong-kind
+  and oversize failures to 13607/13608/13609/13623/13624/13625, while both
+  extraction functions carry `nvarchar(4000)` hints.
 - **User functions share persisted module infrastructure** — sys.objects uses
   `FN` for scalar and `IF` for inline TVFs; definitions live beside procedures
   in sys.sql_modules and reparse at server startup. Scalar names dispatch to
@@ -490,8 +498,8 @@ the engine:
 ## Known limitations (v1)
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
-The current differential backlog includes collation behavior, JSON validation
-and static result metadata.
+The current differential backlog includes collation behavior, OPENJSON strict
+path validation and static result metadata.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

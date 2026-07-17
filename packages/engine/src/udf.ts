@@ -7,6 +7,7 @@ import * as Implicit from './implicit.ts'
 import * as Identity from './identity.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
+import * as Json from './json.ts'
 import { nextSequenceValue } from './sequence.ts'
 import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
@@ -621,6 +622,9 @@ export const registerFunctions =
     define('mssqlite_datetimefromparts', (year, month, day, hour, minute, second, millisecond) =>
       Implicit.datetimeFromParts(
         year, month, day, hour, minute, second, millisecond) as Argument)
+    define('mssqlite_isjson', value => Json.isJson(value) as Argument)
+    define('mssqlite_json_value', (value, path) => Json.jsonValue(value, path) as Argument)
+    define('mssqlite_json_query', (value, path) => Json.jsonQuery(value, path) as Argument)
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]
