@@ -22,9 +22,9 @@ const connection = new Connection({
 })
 ```
 
-The CLI is plaintext for local development. Embedded use can require TLS by
-passing `{ tls: { key, cert } }` to `listen`; current `tedious` encryption
-defaults then connect without `encrypt: false`. See the
+The CLI is plaintext with authentication disabled for local development.
+Embedded use requires an explicit insecure or scrypt-backed authentication
+policy; password mode also requires TLS. See the
 [`@mssqlite/server` guide](packages/server) for certificate configuration.
 
 ## Packages
@@ -76,7 +76,8 @@ expanded `INFORMATION_SCHEMA` routine/view/constraint catalogs and live
 date/time with MSSQL boundary semantics, CAST/CONVERT with styles), MSSQL
 error numbers, offset-preserving `datetimeoffset` with UTC-normalized
 comparison and exact TDS round trips, and declared case/accent/BIN2 collation
-semantics.
+semantics. Embedded listeners support scrypt-hashed, hot-rotatable SQL logins
+over required TLS, with explicit insecure mode reserved for development.
 
 What's still missing is tracked in [TODO.md](TODO.md).
 

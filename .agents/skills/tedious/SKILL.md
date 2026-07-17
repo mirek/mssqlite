@@ -38,7 +38,10 @@ new Connection({
   so set a DNS `serverName` even when the TCP target is an IP.
 - `connection.connect(callback)` — the callback fires after LOGINACK +
   final DONE. `connection.state.name === 'LoggedIn'` confirms handshake.
-- Failed logins surface as `ConnectionError` from the ERROR token.
+- Failed logins surface as `ConnectionError` from the ERROR token. The
+  connection callback reports code `ELOGIN`; listen to the connection's
+  `errorMessage` event to assert the underlying 18456 token number. Password-
+  authenticated mssqlite listeners require `encrypt: true` and required TLS.
 
 ## How tedious talks to the server
 

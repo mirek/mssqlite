@@ -107,8 +107,20 @@ the engine:
   plaintext. Omitting TLS is the deliberate local-development mode and
   advertises `ENCRYPT_NOT_SUP`. Login-only TDS 7.x encryption and TLS-first
   TDS 8.0 are not implemented.
-- **Name flattening** (`transpile/quote.ts`) — database qualifiers and
-  `dbo` drop (`master.dbo.users` → `"users"`); `sys` /
+- **Authentication is explicit and precedes session creation** — every embedded
+  listener selects either development-only `insecure` mode or `password` mode.
+  Password mode stores only versioned scrypt hashes in configuration, requires
+  full-session required TLS, validates case-insensitive SQL login names, and
+  establishes the configured canonical name as the session/DMV identity. A
+  credential provider is validated at startup and re-read on every LOGIN7 for
+  atomic rotation without restart. Missing, malformed, unknown, and incorrect
+  credentials all run one fixed-cost scrypt (a random dummy hash hides user
+  existence), use `timingSafeEqual`, and receive generic 18456/state 1 before
+  any database lookup or session allocation. Provider failures fail closed;
+  hashes and submitted secrets are never logged or persisted in SQLite. SSPI,
+  NTLM/Kerberos, and federated authentication remain unsupported.
+- **Name flattening** (`transpile/quote.ts`) — database qualifiers become
+  encoded attachment aliases while `dbo` drops; `sys` /
   `INFORMATION_SCHEMA` become flat lowercase names (`"sys.tables"`) that
   are *real SQLite tables/views* created by the catalog — catalog queries
   need no interception; other schemas flatten (`"app.users"`); `#temp` →
@@ -360,8 +372,8 @@ the engine:
 See [TODO.md](../../../TODO.md) for the prioritized implementation briefs
 toward broader SQL Server compatibility.
 
-- No login-only TDS 7.x encryption or TLS-first TDS 8.0. No MARS, no
-  SSPI/FedAuth (any credentials accepted).
+- No login-only TDS 7.x encryption or TLS-first TDS 8.0. No MARS and no
+  SSPI/FedAuth; authenticated mode currently supports configured SQL logins.
 - Cursor variables, positioned updates, and live KEYSET/DYNAMIC visibility are
   unsupported. Sequence DECIMAL/NUMERIC precision is capped at 18, cache options
   are metadata-only, same-row duplicate NEXT VALUE references are not coalesced,

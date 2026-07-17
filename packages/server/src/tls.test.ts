@@ -85,6 +85,7 @@ beforeAll(async () => {
     path: ':memory:',
     port: 0,
     databaseName: 'master',
+    authentication: { type: 'insecure' },
     tls: { key: testKey, cert: testCertificate }
   })
 })
@@ -94,7 +95,9 @@ afterAll(async () => {
 })
 
 test('TLS requires a key and certificate', () => {
-  expect(() => listen({ port: 0, tls: { key: testKey } }))
+  expect(() => listen({
+    port: 0, authentication: { type: 'insecure' }, tls: { key: testKey }
+  }))
     .toThrow('TLS requires both key and cert options.')
 })
 
@@ -105,9 +108,10 @@ test('prelogin encryption modes negotiate on the wire', async () => {
 
   const optional = await listen({
     port: 0,
+    authentication: { type: 'insecure' },
     tls: { key: testKey, cert: testCertificate, mode: 'optional' }
   })
-  const plaintext = await listen({ port: 0 })
+  const plaintext = await listen({ port: 0, authentication: { type: 'insecure' } })
   try {
     expect(await negotiate(optional.port, Prelogin.Encryption.notSupported))
       .toBe(Prelogin.Encryption.notSupported)

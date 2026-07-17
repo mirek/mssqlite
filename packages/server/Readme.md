@@ -17,13 +17,18 @@ Or embedded:
 ```ts
 import { listen } from '@mssqlite/server'
 
-const server = await listen({ path: 'data.db', port: 1433 })
+const server = await listen({
+  path: 'data.db',
+  port: 1433,
+  authentication: { type: 'insecure' }
+})
 // ...
 await server.close()
 ```
 
-The command-line entry point deliberately starts a plaintext local-development
-server. Connect with encryption disabled:
+The command-line entry point deliberately starts a plaintext, authentication-
+disabled local-development server. Embedded callers must choose an explicit
+authentication policy. Connect to the CLI with encryption disabled:
 
 ```ts
 import { Connection } from 'tedious'
@@ -46,6 +51,7 @@ import { listen } from '@mssqlite/server'
 const server = await listen({
   path: 'data.db',
   port: 1433,
+  authentication: { type: 'insecure' },
   tls: {
     key: await readFile('server-key.pem'),
     cert: await readFile('server-cert.pem')
@@ -61,12 +67,49 @@ client. Omitting `tls` advertises `ENCRYPT_NOT_SUP` and is the explicit
 plaintext development mode. `requestClientCertificate` and
 `rejectUnauthorized` pass client-certificate policy to Node TLS.
 
+## Authentication
+
+Password authentication accepts only versioned scrypt hashes; plaintext
+passwords are never retained in server configuration or SQLite. Generate a
+hash offline with `hashPassword`, configure one or more case-insensitive SQL
+login names, and use required TLS:
+
+```ts
+import { hashPassword, listen } from '@mssqlite/server'
+
+const server = await listen({
+  path: 'data.db',
+  port: 1433,
+  authentication: {
+    type: 'password',
+    credentials: [ {
+      userName: 'sa',
+      passwordHash: hashPassword(process.env.MSSQLITE_SA_PASSWORD!)
+    } ]
+  },
+  tls: { key, cert }
+})
+```
+
+For rotation without restart, pass `credentials: () => currentCredentials`;
+the provider is re-read and validated for each LOGIN7. Replace the complete
+immutable array atomically. Unknown users, wrong/missing passwords, malformed
+names, and provider failures all perform the same fixed-parameter scrypt work
+and receive generic error 18456. Configured names become the session identity
+visible through `SUSER_SNAME()` and `sys.dm_exec_sessions`. SQL authentication
+is the only authenticated mode; SSPI/NTLM/Kerberos and federated authentication
+remain unsupported.
+
+`authentication: { type: 'insecure' }` accepts any LOGIN7 identity and is an
+explicit development-only opt-in. Password mode rejects absent or optional TLS
+because LOGIN7 password scrambling is not transport encryption.
+
 ## Protocol support
 
 - **Handshake** — PRELOGIN (version, OFF/ON/NOT_SUP/REQ encryption
   negotiation, MARS off), TDS 7.4 TLS handshake records wrapped in PRELOGIN
-  packets, then full-session encrypted transport; LOGIN7 decode (any
-  credentials accepted), login response with ENVCHANGE
+  packets, then full-session encrypted transport; LOGIN7 decode with explicit
+  insecure or scrypt-backed SQL-login validation, login response with ENVCHANGE
   database/collation/language/packet size and LOGINACK (TDS 7.4,
   "SQL Server 2019" 15.0.2000).
 - **SQL batch (0x01)** — full T-SQL batches through the engine;

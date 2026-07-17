@@ -140,7 +140,9 @@ const query =
     })
 
 beforeAll(async () => {
-  listening = await listen({ path: ':memory:', port: 0, databaseName: 'master' })
+  listening = await listen({
+    path: ':memory:', port: 0, databaseName: 'master', authentication: { type: 'insecure' }
+  })
   connection = await connect(listening.port)
 }, 20000)
 
