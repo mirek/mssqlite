@@ -26,6 +26,8 @@ const database =
     })
     db.function('mssqlite_left', (value, length) =>
       String(value).slice(0, Number(length)))
+    db.function('mssqlite_len', value =>
+      value === null ? null : String(value).replace(/ +$/, '').length)
     db.aggregate<number>('mssqlite_sum', {
       start: 0,
       step: (sum, value) => sum + Number(value ?? 0)

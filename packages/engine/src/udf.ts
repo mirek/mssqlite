@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
+import { Buffer } from 'node:buffer'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
 import * as Character from './character.ts'
 import * as Implicit from './implicit.ts'
@@ -25,6 +26,33 @@ const integerArgument =
   (value: Argument): number =>
     Math.trunc(Number(value))
 
+const utf16Text =
+  (value: Argument): string =>
+    value instanceof Uint8Array ?
+      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf16le') : text(value)
+
+const hasUnpairedSurrogate =
+  (value: string): boolean => {
+    for (let index = 0; index < value.length; index++) {
+      const unit = value.charCodeAt(index)
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = value.charCodeAt(index + 1)
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          index++
+        } else {
+          return true
+        }
+      } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+        return true
+      }
+    }
+    return false
+  }
+
+const utf16Result =
+  (value: string): string | Uint8Array =>
+    hasUnpairedSurrogate(value) ? Uint8Array.from(Buffer.from(value, 'utf16le')) : value
+
 const invalidStringLength =
   (name: string): MssqlError =>
     new MssqlError(
@@ -43,7 +71,7 @@ const substring =
     const at = integerArgument(start)
     const available = at < 1 ? Math.max(0, at + count - 1) : count
     const offset = Math.max(0, at - 1)
-    return text(value).slice(offset, offset + available)
+    return utf16Result(utf16Text(value).slice(offset, offset + available))
   }
 
 const leftString =
@@ -55,7 +83,7 @@ const leftString =
     if (count < 0) {
       throw invalidStringLength('left')
     }
-    return text(value).slice(0, count)
+    return utf16Result(utf16Text(value).slice(0, count))
   }
 
 const rightString =
@@ -67,7 +95,7 @@ const rightString =
     if (count < 0) {
       throw invalidStringLength('right')
     }
-    return count === 0 ? '' : text(value).slice(-count)
+    return count === 0 ? '' : utf16Result(utf16Text(value).slice(-count))
   }
 
 const quotePairs: Readonly<Record<string, readonly [ string, string ]>> = {
@@ -657,23 +685,40 @@ export const registerFunctions =
     define('mssqlite_substring', substring)
     define('mssqlite_left', leftString)
     define('mssqlite_right', rightString)
+    define('mssqlite_len', value =>
+      value === null ? null : utf16Text(value).replace(/ +$/, '').length)
+    define('mssqlite_unicode', value => {
+      if (value === null) {
+        return null
+      }
+      const source = utf16Text(value)
+      return source.length === 0 ? null : source.charCodeAt(0)
+    })
+    define('mssqlite_nchar', value => {
+      if (value === null) {
+        return null
+      }
+      const unit = integerArgument(value)
+      return unit < 0 || unit > 0xffff ? null : utf16Result(String.fromCharCode(unit))
+    })
     define('mssqlite_replicate', (value, count) =>
       value === null || count === null ?
         null :
         integerArgument(count) < 0 ? null : text(value).repeat(integerArgument(count)))
     define('mssqlite_quotename', quotename, { varargs: true })
     define('mssqlite_reverse', value =>
-      value === null ? null : [ ...text(value) ].reverse().join(''))
+      value === null ? null : utf16Result(utf16Text(value).split('').reverse().join('')))
     define('mssqlite_stuff', (value, start, length, replacement) => {
       if (value === null || start === null || length === null) {
         return null
       }
-      const source = text(value)
+      const source = utf16Text(value)
       const at = Number(start)
       if (at < 1 || at > source.length) {
         return null
       }
-      return source.slice(0, at - 1) + text(replacement ?? '') + source.slice((at - 1) + Number(length))
+      return utf16Result(
+        source.slice(0, at - 1) + utf16Text(replacement ?? '') + source.slice((at - 1) + Number(length)))
     })
     define('mssqlite_charindex', (needle, hay, start) => {
       if (needle === null || hay === null) {

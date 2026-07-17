@@ -129,7 +129,9 @@ rendered statement reports the variables it binds.
   ASCII and CHAR route through Windows-1252 UDFs instead of SQLite's Unicode
   `unicode()` and `char()` primitives. LIKE always routes through the effective
   SQL collation matcher so T-SQL bracket classes, ranges, negation, and ESCAPE
-  work for literals and every declared/runtime expression source.
+  work for literals and every declared/runtime expression source. LEN, UNICODE,
+  NCHAR, SUBSTRING, LEFT, RIGHT, STUFF, and REVERSE use UTF-16 code-unit UDFs
+  under the currently supported non-SC collations instead of SQLite code points.
   See the engine package for the UDF implementations.
 - **CAST/CONVERT** — affinity casts, plus date/time renderings
   (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles

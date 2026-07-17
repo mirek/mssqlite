@@ -96,6 +96,11 @@ The language pipeline lives in three packages:
   LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
   return NULL, and QUOTENAME accepts the documented delimiter pairs, doubles
   closing delimiters, and returns NULL for input longer than 128 characters.
+- Under every currently supported non-SC collation, LEN, UNICODE, NCHAR,
+  SUBSTRING, LEFT, RIGHT, STUFF, and REVERSE count or manipulate UTF-16 code
+  units. Supplementary characters therefore count as two; NCHAR accepts one
+  0-65535 unit; and boundary results may contain an unpaired surrogate. A future
+  implemented `_SC` collation must switch these operations to code points.
 - LIKE uses the effective or default SQL collation for literals, columns,
   variables, parameters, and computed expressions. Its matcher implements `%`,
   `_`, `[abc]`, `[a-c]`, `[^...]`, literal `[`, and ESCAPE; invalid ranges and

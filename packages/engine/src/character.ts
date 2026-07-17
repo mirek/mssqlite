@@ -112,15 +112,15 @@ export const dataLength =
     if (value === null) {
       return null
     }
+    if (value instanceof Uint8Array) {
+      return value.byteLength
+    }
     const family_ = typeName === undefined ? undefined : names[typeName]
     if (family_ !== undefined) {
       return encoded(family_, text(value)).byteLength
     }
     if (typeof value === 'string') {
       return value.length * 2
-    }
-    if (value instanceof Uint8Array) {
-      return value.byteLength
     }
     if (typeof value === 'bigint') {
       return 8

@@ -198,7 +198,7 @@ test('plus resolves to add, concat or dynamic dispatch', () => {
     'mssqlite_arithmetic(\'+\', 3, mssqlite_cast_integer(\'5\', \'int\', 0, 0, \'\'), 32)')
   expect(scalarOf('a + b')).toBe('mssqlite_add("a", "b")')
   expect(scalarOf('LEN(a) + 1')).toBe(
-    'mssqlite_arithmetic(\'+\', length(rtrim("a")), 1, 32)')
+    'mssqlite_arithmetic(\'+\', mssqlite_len("a"), 1, 32)')
 })
 
 test('compound update operators reuse add/concat/xor rendering', () => {
@@ -236,7 +236,9 @@ test('function mappings', () => {
   expect(scalarOf('GETDATE()')).toContain('strftime(\'%Y-%m-%d %H:%M:%f\', \'now\', \'localtime\')')
   expect(scalarOf('GETUTCDATE()')).toBe('strftime(\'%Y-%m-%d %H:%M:%f\', \'now\')')
   expect(scalarOf('ISNULL(a, 0)')).toBe('ifnull("a", 0)')
-  expect(scalarOf('LEN(x)')).toBe('length(rtrim("x"))')
+  expect(scalarOf('LEN(x)')).toBe('mssqlite_len("x")')
+  expect(scalarOf('UNICODE(x)')).toBe('mssqlite_unicode("x")')
+  expect(scalarOf('NCHAR(x)')).toBe('mssqlite_nchar("x")')
   expect(scalarOf('SUBSTRING(x, 2, 3)')).toBe('mssqlite_substring("x", 2, 3)')
   expect(scalarOf('CHARINDEX(\'a\', x)')).toBe('instr("x", \'a\')')
   expect(scalarOf('LEFT(x, 3)')).toBe('mssqlite_left("x", 3)')
