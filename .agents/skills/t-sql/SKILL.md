@@ -84,6 +84,15 @@ The language pipeline lives in three packages:
   `@@ROWCOUNT`. A nested procedure, trigger, or dynamic batch inherits the
   caller's setting and restores it on exit; changes within that scope govern
   each completion produced there.
+- Built-in system procedures use the same EXEC/RPC path as user procedures.
+  Argument binding accepts positional, named, and DEFAULT values and dispatches
+  the final name component case-insensitively. The implemented administration
+  surface is `sp_help`, `sp_helptext`, `sp_columns`, `sp_tables`, `sp_who`,
+  `sp_helpdb`, `sp_spaceused`, and `sp_rename`. Metadata procedures return
+  explicitly typed SQL Server/ODBC schemas instead of relying on SQLite
+  inference. `sp_rename` does not rewrite module text or dependent references,
+  and function renames remain unsupported because runtime function registration
+  cannot be changed atomically with SQLite schema and catalog state.
 - Computed column grammar is `name AS expression [PERSISTED [NOT NULL]]` with
   no declared type. mssqlite infers the result from referenced columns, casts,
   numeric precision/scale, and supported scalar expressions; PERSISTED maps to

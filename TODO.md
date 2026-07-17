@@ -6,7 +6,6 @@ work is complete.
 
 ## Protocol and operational surface
 
-- [System stored procedures](todo/system-stored-procedures.md) — Implement common metadata and administration procedures used by tools.
 - [Catalog coverage](todo/catalog-coverage.md) — Fill high-value `INFORMATION_SCHEMA` and `sys` metadata gaps.
 - [Multiple databases](todo/multiple-databases.md) — Design and implement database-scoped catalogs over SQLite attachments.
 - [Authentication](todo/authentication.md) — Optionally validate SQL logins while retaining explicit development modes.

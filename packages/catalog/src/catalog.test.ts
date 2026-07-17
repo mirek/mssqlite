@@ -5,7 +5,7 @@ import {
   addColumns, bootstrap, createFunction, createIndex, createSequence, createTable, createView,
   createTrigger, dropColumns, dropFunction, dropIndex, dropTable, dropTrigger,
   dropSequence, objectIdOf, rowversionValue, sequenceRows, tableColumns,
-  updateRowversionValue, updateSequenceValue
+  updateRowversionValue, updateSequenceValue, rename
 } from './index.ts'
 import type { Ast } from '@mssqlite/tsql'
 
@@ -125,6 +125,32 @@ test('indexes, views and alter column maintenance', () => {
   expect(tableColumns(db, objectId).map(column => column.name)).toContain('age')
   dropColumns(db, [ 'users' ], [ 'age' ])
   expect(tableColumns(db, objectId).map(column => column.name)).not.toContain('age')
+})
+
+test('rename moves physical tables, columns and indexes with catalog metadata', () => {
+  const db = open()
+  const objectId = createUsers(db)
+  createIndex(db, parseStatement('CREATE INDEX ix_users_name ON users (name)') as
+    Ast.Statement & { kind: 'createIndex' })
+  db.exec('CREATE TABLE users (id INTEGER, name TEXT, email TEXT, score TEXT, created TEXT)')
+  db.exec('CREATE INDEX ix_users_name ON users (name)')
+
+  rename(db, 'dbo.users.name', 'display_name', 'column')
+  rename(db, 'dbo.users.ix_users_name', 'ix_users_display_name', 'index')
+  rename(db, 'dbo.users', 'people', 'object')
+
+  expect(db.prepare('SELECT display_name FROM people').all()).toEqual([])
+  expect(db.prepare(
+    `SELECT o.name AS object_name, c.name AS column_name, i.name AS index_name
+      FROM "sys.objects" o
+      JOIN "sys.columns" c ON c.object_id = o.object_id
+      JOIN "sys.indexes" i ON i.object_id = o.object_id
+      WHERE o.object_id = ? AND c.column_id = 2 AND i.name = 'ix_users_display_name'`
+  ).get(objectId)).toEqual({
+    object_name: 'people',
+    column_name: 'display_name',
+    index_name: 'ix_users_display_name'
+  })
 })
 
 test('information schema views work', () => {

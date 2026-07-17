@@ -54,6 +54,8 @@ OUTPUT clause with `inserted.*` / `deleted.*` and OUTPUT ... INTO),
 MERGE (all WHEN arms with AND conditions, OUTPUT with `$action`),
 stored procedures (CREATE/ALTER/DROP PROCEDURE, EXEC with named/default/
 OUTPUT parameters, RETURN status, `sys.sql_modules` persistence),
+catalog and administration procedures (`sp_help`, `sp_helptext`, `sp_columns`,
+`sp_tables`, `sp_who`, `sp_helpdb`, `sp_spaceused`, and atomic `sp_rename`),
 statement-level AFTER and INSTEAD OF DML triggers with persisted definitions
 and multi-row `inserted` / `deleted` transition tables,
 session cursors with LOCAL/GLOBAL lifetime, scroll fetches, INTO assignment,

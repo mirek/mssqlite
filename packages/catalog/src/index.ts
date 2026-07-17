@@ -1,5 +1,6 @@
 export * as Schema from './schema.ts'
 export * as TypeRow from './type-row.ts'
+export { nameParts, rename, type RenameKind, type RenameResult } from './rename.ts'
 export { bootstrap } from './bootstrap.ts'
 export {
   addColumns,
