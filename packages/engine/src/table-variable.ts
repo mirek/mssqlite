@@ -7,6 +7,7 @@ import {
   validateRowversionColumns
 } from './rowversion.ts'
 import { functionKey } from './session.ts'
+import * as Character from './character.ts'
 import type { Ast } from '@mssqlite/tsql'
 import { stateForName } from './database.ts'
 import type { Session, TableVariable } from './session.ts'
@@ -37,9 +38,11 @@ const resolveExpression =
     switch (value.kind) {
       case 'variable': {
         const type = session.variables.get(value.name.toLowerCase())?.type
+        const character = type === undefined ? undefined : Character.normalize(type, 1)
         return type !== undefined &&
-          [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney', 'datetimeoffset' ].includes(type.name) ?
-          { kind: 'cast', expression: value, type, try_: false } : value
+          ([ 'decimal', 'numeric', 'dec', 'money', 'smallmoney', 'datetimeoffset' ].includes(type.name) ||
+            character !== undefined) ?
+          { kind: 'cast', expression: value, type: character ?? type, try_: false } : value
       }
       case 'unary':
         return { ...value, operand: resolveExpression(session, value.operand) }
@@ -154,7 +157,8 @@ const resolveGroupByItem =
       { ...item, sets: item.sets.map(set => resolveGroupingSetItem(session, set)) } :
       resolveGroupingSetItem(session, item)
 
-const typeNameOf =
+/** @returns declared T-SQL type reconstructed from one catalog column. */
+export const typeNameOfCatalogRow =
   (row: Catalog.ColumnRow): Ast.SourceColumn['type'] => {
     const type = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === row.user_type_id) ??
       Catalog.TypeRow.rows.find(candidate => candidate.systemTypeId === row.system_type_id)
@@ -202,7 +206,7 @@ const sourceColumns =
     const objectId = Catalog.objectIdOf(catalog, name)
     if (objectId !== undefined) {
       return Catalog.tableColumns(catalog, objectId).map(column => {
-        const type = typeNameOf(column)
+        const type = typeNameOfCatalogRow(column)
         return {
           name: column.name,
           ...type === undefined ? {} : { type },

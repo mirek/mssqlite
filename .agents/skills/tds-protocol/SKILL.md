@@ -105,3 +105,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   version 2 for Latin1_General_100, sort id 52 for linguistic collations, and
   Binary2 flag/sort-id 0 for BIN2. The login ENVCHANGE remains the default
   SQL_Latin1_General_CP1_CI_AS bytes.
+- Fixed-width result metadata uses BIGCHAR (0xAF) and NCHAR (0xEF), distinct
+  from BIGVARCHAR (0xA7) and NVARCHAR (0xE7). Unicode TYPE_INFO lengths are
+  encoded in bytes, so nchar(n)/nvarchar(n) advertise 2n while values retain
+  their character width.

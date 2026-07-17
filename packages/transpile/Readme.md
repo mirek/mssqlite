@@ -119,6 +119,10 @@ operator results carry SQL Server-derived precision/scale hints to TDS.
   (23, 101-126) via `strftime`. DATETIMEOFFSET casts instead use the exact
   offset-preserving codec UDF; comparisons, IN/BETWEEN, ORDER BY, uniqueness,
   and indexes render a UTC-normalized key while result hints retain scale.
+  Character casts retain char/varchar/nchar/nvarchar identity and width:
+  omitted declaration widths default to 1, omitted CAST/CONVERT widths to 30,
+  explicit casts truncate, and target-column storage rejects overflow with
+  error 2628. Result hints carry these widths into TDS metadata.
   SQL_VARIANT casts pack/unpack a persistent base-type envelope; XML casts
   accept Unicode text, and hierarchyid/geometry/geography casts accept only
   native binary serialization. Unsupported special-type operators and methods

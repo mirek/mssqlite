@@ -15,6 +15,7 @@ import {
   columnsOfTable,
   resolveTableVariableExpression,
   resolveTableVariables,
+  typeNameOfCatalogRow,
   withTableVariableScope,
   withTableVariableScopeAsync
 } from './table-variable.ts'
@@ -22,6 +23,7 @@ import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
+import * as CharacterExact from './character.ts'
 import positionalRows from './positional-rows.ts'
 import * as SystemProcedures from './system-procedures.ts'
 import * as Databases from './database.ts'
@@ -232,6 +234,7 @@ const decimalType =
 const storedType =
   (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
     decimalType(type) ??
+    (CharacterExact.family(type) === undefined ? undefined : type) ??
     ([ 'datetimeoffset', 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ]
       .includes(type.name) ? type : undefined)
 
@@ -265,6 +268,9 @@ const coercedValue =
       const scale = typeof type.args[0] === 'number' ? type.args[0] : 7
       return DateTimeOffsetExact.cast(String(value), scale, false)
     }
+    if (CharacterExact.family(type) !== undefined) {
+      return CharacterExact.cast(value, type)
+    }
     const shape = decimalShape(type)
     return shape === undefined ? value :
       DecimalExact.cast(decimalArgument(value), shape[0], shape[1], false)
@@ -296,16 +302,7 @@ const targetColumns =
       return []
     }
     return Catalog.tableColumns(db, objectId).map(column => {
-      const declared = Catalog.TypeRow.rows.find(candidate => candidate.userTypeId === column.user_type_id)
-      const opaque = declared !== undefined &&
-        [ 'sql_variant', 'xml', 'hierarchyid', 'geography', 'geometry' ].includes(declared.name) ?
-        { name: declared.name, args: [] } : undefined
-      const type = opaque ?? (column.system_type_id === 106 ? { name: 'decimal', args: [ column.precision, column.scale ] } :
-        column.system_type_id === 108 ? { name: 'numeric', args: [ column.precision, column.scale ] } :
-          column.system_type_id === 60 ? { name: 'money', args: [] } :
-            column.system_type_id === 122 ? { name: 'smallmoney', args: [] } :
-              column.system_type_id === 43 ? { name: 'datetimeoffset', args: [ column.scale ] } :
-                column.system_type_id === 189 ? { name: 'timestamp', args: [] } : undefined)
+      const type = typeNameOfCatalogRow(column)
       return {
         name: column.name,
         ...type === undefined ? {} : { type },
@@ -317,8 +314,25 @@ const targetColumns =
   }
 
 const storedCast =
-  (value: Ast.Expression, type: Ast.ColumnDefinition['type']): Ast.Expression =>
-    value.kind === 'default' ? value : { kind: 'cast', expression: value, type, try_: false }
+  (value: Ast.Expression, type: Ast.ColumnDefinition['type'], column = ''): Ast.Expression => {
+    if (value.kind === 'default') {
+      return value
+    }
+    if (CharacterExact.family(type) === undefined) {
+      return { kind: 'cast', expression: value, type, try_: false }
+    }
+    const width = CharacterExact.width(type, 1)
+    return {
+      kind: 'call',
+      name: [ 'mssqlite_store_character' ],
+      args: [
+        value,
+        { kind: 'string', value: type.name, national: false },
+        { kind: 'number', value: String(width) },
+        { kind: 'string', value: column, national: false }
+      ]
+    }
+  }
 
 const appendSelectItem =
   (select: Ast.Select, item: Ast.SelectItem): Ast.Select => ({
@@ -344,9 +358,12 @@ const resolveStoredDml =
         .map(column => column.name)
       const rowversionAt = rowversion === undefined ? -1 : names.findIndex(name =>
         name.toLowerCase() === rowversion.name.toLowerCase())
-      const types = names.map(name => storedType(
-        all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
-        { name: '', args: [] }))
+      const targets = names.map(name => ({
+        name,
+        type: storedType(
+          all.find(column => column.name.toLowerCase() === name.toLowerCase())?.type ??
+          { name: '', args: [] })
+      }))
       if (statement.source.kind === 'values') {
         const rows = statement.source.rows.map(row => row.map((value, index) => {
           if (index === rowversionAt) {
@@ -355,8 +372,8 @@ const resolveStoredDml =
             }
             return nextRowversionExpression()
           }
-          const type = types[index]
-          return type === undefined ? value : storedCast(value, type)
+          const target = targets[index]
+          return target?.type === undefined ? value : storedCast(value, target.type, target.name)
         }))
         if (rowversion !== undefined && rowversionAt < 0) {
           names = [ ...names, rowversion.name ]
@@ -378,9 +395,9 @@ const resolveStoredDml =
         const converted = {
           ...statement.source.select,
           items: statement.source.select.items.map((item, index) => {
-            const type = types[index]
-            return item.kind !== 'expression' || type === undefined ? item :
-              { ...item, expression: storedCast(item.expression, type) }
+            const target = targets[index]
+            return item.kind !== 'expression' || target?.type === undefined ? item :
+              { ...item, expression: storedCast(item.expression, target.type, target.name) }
           })
         }
         if (rowversion !== undefined) {
@@ -429,7 +446,7 @@ const resolveStoredDml =
           return assignment
         }
         if (assignment.operator === '=') {
-          return { ...assignment, value: storedCast(assignment.value, type) }
+          return { ...assignment, value: storedCast(assignment.value, type, name) }
         }
         return {
           ...assignment,
@@ -437,9 +454,9 @@ const resolveStoredDml =
           value: storedCast({
             kind: 'binaryOp',
             operator: assignment.operator.slice(0, -1),
-            left: storedCast(assignment.target, type),
-            right: storedCast(assignment.value, type)
-          }, type)
+            left: storedCast(assignment.target, type, name),
+            right: storedCast(assignment.value, type, name)
+          }, type, name)
         }
       })
       return {

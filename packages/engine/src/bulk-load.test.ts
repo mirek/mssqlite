@@ -129,6 +129,28 @@ test('bulk metadata, identity, null/default, conversion, and length invariants a
     'INSERT BULK identities ([id] int, [value] int) WITH (KEEPIDENTITY)')).toBeDefined()
 })
 
+test('bulk load enforces and pads declared character widths', () => {
+  const active = setup()
+  executeBatch(active, 'CREATE TABLE bulk_characters (id int PRIMARY KEY, value char(5))')
+  const plan = requiredPlan(prepareBulkLoad(active,
+    'INSERT BULK bulk_characters ([id] int, [value] char(5))'))
+  const columns: readonly TdsBulkLoad.Column[] = [
+    { name: 'id', userType: 0, flags: 0, typeInfo: TypeInfo.intN(4) },
+    { name: 'value', userType: 0, flags: 0, typeInfo: TypeInfo.char(5) }
+  ]
+  const loaded = beginBulkLoad(plan, columns)
+  writeBulkRows(loaded, [ [ 1, 'a' ] ])
+  finishBulkLoad(loaded)
+  expect(executeBatch(active,
+    'SELECT value, DATALENGTH(value) AS bytes FROM bulk_characters')[0])
+    .toMatchObject({ rows: [ [ 'a    ', 5 ] ] })
+
+  const overlong = beginBulkLoad(plan, columns)
+  expect(() => writeBulkRows(overlong, [ [ 2, 'toolong' ] ]))
+    .toThrowError(expect.objectContaining({ number: 2628 }) as Error)
+  abortBulkLoad(overlong)
+})
+
 test('empty, transactional, and cross-database bulk requests retain engine semantics', () => {
   const active = setup()
   const plan = requiredPlan(prepareBulkLoad(active, sql))

@@ -173,4 +173,8 @@ test('type info encode/decode round trips', () => {
 test('nvarchar type info matches spec wire format', () => {
   expect(TypeInfo.encode(TypeInfo.varchar(3)))
     .toEqual(Hex.of('A7 03 00 09 04 D0 00 34'))
+  expect(TypeInfo.encode(TypeInfo.char(3)))
+    .toEqual(Hex.of('AF 03 00 09 04 D0 00 34'))
+  expect(TypeInfo.encode(TypeInfo.nchar(3)))
+    .toEqual(Hex.of('EF 06 00 09 04 D0 00 34'))
 })

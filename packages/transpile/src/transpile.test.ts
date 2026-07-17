@@ -272,12 +272,19 @@ test('catalog function rewrites', () => {
 
 test('cast and convert', () => {
   expect(scalarOf('CAST(x AS int)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
-  expect(scalarOf('CAST(x AS nvarchar(50))')).toBe('CAST("x" AS TEXT)')
+  expect(scalarOf('CAST(x AS nvarchar(50))'))
+    .toBe('mssqlite_cast_character("x", \'nvarchar\', 50, 0)')
+  expect(scalarOf('CAST(x AS varchar)'))
+    .toBe('mssqlite_cast_character("x", \'varchar\', 30, 0)')
   expect(scalarOf('CAST(x AS date)')).toBe('date("x")')
   expect(scalarOf('CAST(x AS bit)')).toBe('(CAST("x" AS NUMERIC) <> 0)')
   expect(scalarOf('CONVERT(varchar(10), d, 120)'))
-    .toBe('substr(strftime(\'%Y-%m-%d %H:%M:%S\', "d"), 1, 10)')
+    .toBe('mssqlite_cast_character(strftime(\'%Y-%m-%d %H:%M:%S\', "d"), \'varchar\', 10, 0)')
   expect(scalarOf('CONVERT(int, x)')).toBe('mssqlite_cast_integer("x", \'int\', 0)')
+  expect(scalarOf('DATALENGTH(CAST(x AS varchar(3)))'))
+    .toBe('mssqlite_datalength(mssqlite_cast_character("x", \'varchar\', 3, 0), \'varchar\')')
+  expect(scalarOf('ISNULL(CAST(NULL AS varchar(3)), \'abcdef\')'))
+    .toBe('mssqlite_cast_character(ifnull(mssqlite_cast_character(NULL, \'varchar\', 3, 0), \'abcdef\'), \'varchar\', 3, 0)')
 })
 
 test('case, in, like, between, exists', () => {

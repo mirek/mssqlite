@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
+import * as Character from './character.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
@@ -504,6 +505,15 @@ export const registerFunctions =
       deterministic: false
     })
     define('mssqlite_cast_integer', castInteger)
+    define('mssqlite_cast_character', (value, name, width, _try) =>
+      Character.cast(value, {
+        name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]
+      }) as Argument)
+    define('mssqlite_store_character', (value, name, width, column) =>
+      Character.store(
+        value,
+        { name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ] },
+        text(column)) as Argument)
     define('mssqlite_string_split', (value, separator) => {
       if (value === null || separator === null || value === '') {
         return '[]'
@@ -576,16 +586,9 @@ export const registerFunctions =
         })
         .join('')
     })
-    define('mssqlite_datalength', value =>
-      value === null ?
-        null :
-        typeof value === 'string' ?
-          value.length * 2 :
-          value instanceof Uint8Array ?
-            value.byteLength :
-            typeof value === 'bigint' ?
-              8 :
-              Number.isInteger(value) ? 4 : 8)
+    define('mssqlite_datalength', (value, type) =>
+      Character.dataLength(value, type === undefined || type === null ? undefined : text(type)),
+    { varargs: true })
     define('mssqlite_round', (value, digits, truncate) => {
       if (value === null || digits === null) {
         return null

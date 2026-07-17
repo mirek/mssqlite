@@ -78,6 +78,22 @@ export const varchar =
     collation
   })
 
+/** @returns fixed-width char(n). */
+export const char =
+  (maxLength = 1, collation: Collation.t = Collation.default_): TypeInfo => ({
+    type: DataType.DataType.bigChar,
+    maxLength,
+    collation
+  })
+
+/** @returns fixed-width nchar(n). */
+export const nchar =
+  (maxLength = 1, collation: Collation.t = Collation.default_): TypeInfo => ({
+    type: DataType.DataType.nchar,
+    maxLength: maxLength * 2,
+    collation
+  })
+
 /** @returns varbinary(n) — `maxLength` in bytes, `'max'` for varbinary(max). */
 export const varbinary =
   (maxLength: number | 'max' = 8000): TypeInfo => ({

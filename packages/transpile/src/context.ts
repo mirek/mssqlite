@@ -9,6 +9,7 @@ export type Context = {
   readonly variables: string[]
   readonly columnTypes: ReadonlyMap<string, TypeName.t>[]
   readonly columnCollations: ReadonlyMap<string, string>[]
+  readonly columnNullability: ReadonlyMap<string, boolean>[]
   generated: boolean
   nextSource: number
 }
@@ -20,7 +21,8 @@ export type t =
 export const of =
   (): Context =>
     ({
-      variables: [], columnTypes: [], columnCollations: [], generated: false, nextSource: 1
+      variables: [], columnTypes: [], columnCollations: [], columnNullability: [],
+      generated: false, nextSource: 1
     })
 
 /** Runs expression rendering in SQLite generated-column mode. */
@@ -65,6 +67,21 @@ const sourceCollations =
     ])
   }
 
+const sourceNullability =
+  (source: Ast.TableSource): readonly { readonly key: string, readonly nullable: boolean }[] => {
+    if (source.kind === 'join') {
+      return [ ...sourceNullability(source.left), ...sourceNullability(source.right) ]
+    }
+    if (source.kind !== 'table' || source.columns === undefined) {
+      return []
+    }
+    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
+    return source.columns.flatMap(column => [
+      { key: column.name.toLowerCase(), nullable: column.nullable !== false },
+      { key: `${qualifier}.${column.name.toLowerCase()}`, nullable: column.nullable !== false }
+    ])
+  }
+
 /** Runs a SELECT renderer with its source-column types in lexical scope. */
 export const withSourceTypes =
   <T>(ctx: Context, source: Ast.TableSource | undefined, run: () => T): T => {
@@ -81,13 +98,22 @@ export const withSourceTypes =
     const scopedCollations = new Map(collations
       .filter(column => column.key.includes('.') || collationCounts.get(column.key) === 1)
       .map(column => [ column.key, column.collation ]))
+    const nullability = source === undefined ? [] : sourceNullability(source)
+    const nullabilityCounts = new Map<string, number>()
+    nullability.forEach(column =>
+      nullabilityCounts.set(column.key, (nullabilityCounts.get(column.key) ?? 0) + 1))
+    const scopedNullability = new Map(nullability
+      .filter(column => column.key.includes('.') || nullabilityCounts.get(column.key) === 1)
+      .map(column => [ column.key, column.nullable ]))
     ctx.columnTypes.push(types)
     ctx.columnCollations.push(scopedCollations)
+    ctx.columnNullability.push(scopedNullability)
     try {
       return run()
     } finally {
       ctx.columnTypes.pop()
       ctx.columnCollations.pop()
+      ctx.columnNullability.pop()
     }
   }
 
@@ -110,6 +136,19 @@ export const columnType =
     const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
     for (let i = ctx.columnTypes.length - 1; i >= 0; i--) {
       const found = ctx.columnTypes[i]?.get(key)
+      if (found !== undefined) {
+        return found
+      }
+    }
+    return undefined
+  }
+
+/** @returns declared nullability of a column in the innermost visible source. */
+export const columnNullable =
+  (ctx: Context, name: Ast.QualifiedName): boolean | undefined => {
+    const key = name.slice(-2).map(part => part.toLowerCase()).join('.')
+    for (let i = ctx.columnNullability.length - 1; i >= 0; i--) {
+      const found = ctx.columnNullability[i]?.get(key)
       if (found !== undefined) {
         return found
       }

@@ -749,6 +749,38 @@ test('string function edge cases cross the tedious boundary', async () => {
     .rejects.toMatchObject({ number: 536 })
 })
 
+test('character widths and fixed families cross the tedious boundary', async () => {
+  const casts = await query(`
+    SELECT
+      CAST('abcdef' AS varchar(3)) AS varchar_value,
+      CAST(N'abcdef' AS nvarchar(3)) AS nvarchar_value,
+      CAST('a' AS char(3)) AS char_value,
+      CAST(N'a' AS nchar(3)) AS nchar_value
+  `)
+  expect(casts.rows).toEqual([ {
+    varchar_value: 'abc',
+    nvarchar_value: 'abc',
+    char_value: 'a  ',
+    nchar_value: 'a  '
+  } ])
+  expect(casts.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'VarChar', 3 ], [ 'NVarChar', 6 ], [ 'Char', 3 ], [ 'NChar', 6 ]
+  ])
+
+  await query('CREATE TABLE wire_width (id int PRIMARY KEY, value varchar(3))')
+  await expect(query('INSERT wire_width VALUES (1, \'toolong\')'))
+    .rejects.toMatchObject({ number: 2628 })
+  const count = await query('SELECT COUNT(*) AS count FROM wire_width')
+  expect(count.rows).toEqual([ { count: 0 } ])
+
+  const parameter = await query(`
+    DECLARE @value varchar(3) = @input
+    SELECT @value AS value
+  `, [ { name: 'input', type: TYPES.NVarChar, value: 'abcdef' } ])
+  expect(parameter.rows).toEqual([ { value: 'abc' } ])
+  expect(parameter.columns).toMatchObject([ { type: 'VarChar', length: 3 } ])
+})
+
 test('transactions via tedious api', async () => {
   await new Promise<void>((resolve, reject) => {
     connection.beginTransaction(error => error ? reject(error) : resolve())

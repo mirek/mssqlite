@@ -174,6 +174,11 @@ the engine:
   explicit supported SQL collations choose BINARY/NOCASE plus deterministic
   Unicode keys for case, accent and BIN2 behavior across predicates, ordering,
   uniqueness and indexes.
+- **Character widths cross the SQLite boundary explicitly** — the transpiler
+  retains char/varchar/nchar/nvarchar family and declared width. Explicit
+  casts truncate through a UDF, while target-column writes and bulk rows use a
+  storage UDF that raises 2628 before SQLite can accept overlong TEXT. Fixed
+  families pad on conversion, and inferred result hints preserve wire widths.
 - **Variables are SQLite parameters** — `@x` passes through (SQLite
   supports `@`-parameters natively); each rendered statement carries its
   used-variable list so the engine binds exactly those. Globals map to
@@ -287,6 +292,9 @@ the engine:
   negative LEFT/RIGHT/SUBSTRING lengths with error 536, return NULL for
   negative REPLICATE/SPACE counts, and enforce QUOTENAME's delimiter and
   128-character contracts.
+  Character coercion UDFs encode varchar/char as Windows-1252 and
+  nvarchar/nchar as UTF-16LE, so truncation, padding, overflow checks, and
+  DATALENGTH share the same byte semantics.
 - **Catalog functions become subqueries** — `OBJECT_ID('t')` →
   `(SELECT object_id FROM "sys.objects" WHERE …)`; UDFs cannot re-enter
   the database connection.
@@ -427,8 +435,8 @@ the engine:
 ## Known limitations (v1)
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
-The current differential backlog includes scalar function edge cases,
-character-width and collation behavior, date/JSON validation, aggregate and
+The current differential backlog includes collation behavior, date/JSON
+validation, aggregate and
 CAST semantics, UNIQUE NULL handling, LIKE classes, and static result metadata.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not

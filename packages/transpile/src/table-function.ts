@@ -8,7 +8,8 @@ import type { Ast, TypeName } from '@mssqlite/tsql'
 export type ColumnHint = {
   readonly name: string,
   readonly type: TypeName.t,
-  readonly nullable: boolean
+  readonly nullable: boolean,
+  readonly collation?: string
 }
 
 type FunctionSource =
