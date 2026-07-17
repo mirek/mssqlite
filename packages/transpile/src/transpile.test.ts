@@ -383,7 +383,11 @@ test('create table', () => {
     '"age" INTEGER DEFAULT (0), ' +
     '"email" TEXT COLLATE NOCASE UNIQUE, ' +
     '"team_id" INTEGER REFERENCES "teams" ("id") ON DELETE CASCADE, ' +
-    'CONSTRAINT "uq_name" UNIQUE ("name"))'
+    'CONSTRAINT "uq_name" UNIQUE ("name")); ' +
+    'CREATE UNIQUE INDEX "__mssqlite_users_unique_0" ON "users" ' +
+    '(("email" IS NULL), ifnull("email", 0)); ' +
+    'CREATE UNIQUE INDEX "__mssqlite_users_unique_1" ON "users" ' +
+    '(("name" IS NULL), ifnull("name", 0))'
   )
 })
 
@@ -422,8 +426,9 @@ test('collations render normalized predicates, ordering and uniqueness', () => {
   `)).toBe(
     'CREATE TABLE "names" (' +
     '"value" TEXT COLLATE NOCASE UNIQUE, "exact" TEXT COLLATE BINARY); ' +
-    'CREATE UNIQUE INDEX "__mssqlite_names_collation_0" ON "names" (' +
-    'mssqlite_collation_key("value", \'latin1_general_100_ci_ai\'))'
+    'CREATE UNIQUE INDEX "__mssqlite_names_unique_0" ON "names" (' +
+    '(mssqlite_collation_key("value", \'latin1_general_100_ci_ai\') IS NULL), ' +
+    'ifnull(mssqlite_collation_key("value", \'latin1_general_100_ci_ai\'), 0))'
   )
   expect(() => sqlOf('CREATE TABLE bad (value NVARCHAR(10) COLLATE Unknown_Collation)'))
     .toThrow(UnsupportedError)
@@ -436,7 +441,9 @@ test('identity via table-level primary key', () => {
 
 test('indexes and views', () => {
   expect(sqlOf('CREATE UNIQUE INDEX ix ON t (a, b DESC) WHERE a > 0'))
-    .toBe('CREATE UNIQUE INDEX "ix" ON "t" ("a", "b" DESC) WHERE ("a" > 0)')
+    .toBe('CREATE UNIQUE INDEX "ix" ON "t" ' +
+      '(("a" IS NULL), ifnull("a", 0), ("b" IS NULL) DESC, ifnull("b", 0) DESC) ' +
+      'WHERE ("a" > 0)')
   expect(sqlOf('DROP INDEX ix ON t')).toBe('DROP INDEX "ix"')
   expect(sqlOf('CREATE VIEW v AS SELECT 1 AS x')).toBe('CREATE VIEW "v" AS SELECT 1 AS "x"')
   expect(sqlOf('DROP TABLE IF EXISTS a, b')).toBe('DROP TABLE IF EXISTS "a"; DROP TABLE IF EXISTS "b"')

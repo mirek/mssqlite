@@ -438,9 +438,11 @@ indexed-column := { column-name | expr } [COLLATE collation-name] [ASC|DESC]
 - NULLs are distinct (any number of NULLs allowed in a unique-indexed
   column). Matches PostgreSQL / Oracle / MySQL behavior; differs from MSSQL
   (which by default treats NULLs as equal, allowing only one).
-  To emulate MSSQL: `CREATE UNIQUE INDEX ix ON t(col) WHERE col IS NOT NULL`
-  to permit many NULLs, or add a separate `NOT NULL` if the MSSQL column is
-  not nullable.
+  To emulate MSSQL while preserving nullable columns, use an expression key:
+  `CREATE UNIQUE INDEX ix ON t((col IS NULL), ifnull(col, 0))`. Expand both
+  expressions for every composite-key component; the null flag makes the
+  arbitrary sentinel collision-free. Keep an intended partial-index WHERE
+  predicate unchanged.
 
 ### Partial indexes (`WHERE`)
 

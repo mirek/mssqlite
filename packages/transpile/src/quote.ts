@@ -71,6 +71,25 @@ export const objectName =
       identifier(single)
   }
 
+/** SQLite requires the schema on the index name, not its ON-table name. */
+export const indexTarget =
+  (index: string, table: Ast.QualifiedName): { readonly index: string, readonly table: string } => {
+    if (table.length >= 3) {
+      const database = table[table.length - 3] ?? ''
+      const schema = table[table.length - 2] ?? 'dbo'
+      const object = table[table.length - 1] ?? ''
+      return {
+        index: `${identifier(databaseAlias(database))}.${identifier(index)}`,
+        table: identifier(schemaObject(schema, object))
+      }
+    }
+    const object = table[table.length - 1] ?? ''
+    if (table.length === 1 && object.startsWith('#')) {
+      return { index: `temp.${identifier(index)}`, table: identifier(object) }
+    }
+    return { index: identifier(index), table: objectName(table) }
+  }
+
 /** @returns dotted column reference — all but the last part form the table qualifier. */
 export const columnName =
   (name: Ast.QualifiedName): string => {

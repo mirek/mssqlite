@@ -812,6 +812,12 @@ const tableConstraint =
     }
   }
 
+const nullSafeKey =
+  (value: string, descending = false): readonly string[] => {
+    const order = descending ? ' DESC' : ''
+    return [ `(${value} IS NULL)${order}`, `ifnull(${value}, 0)${order}` ]
+  }
+
 const createTable =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createTable' }): string => {
     const members = [
@@ -830,14 +836,27 @@ const createTable =
     ]
     const table = Quote.objectName(statement_.name)
     const byName = new Map(statement_.columns.map(column => [ column.name.toLowerCase(), column ]))
-    const uniqueColumns: readonly (readonly { readonly name: string }[])[] = [
+    const uniqueColumns: readonly (readonly { readonly name: string, readonly descending?: boolean }[])[] = [
       ...statement_.columns.filter(column => column.unique === true).map(column => [ column ]),
-      ...statement_.constraints.filter(constraint =>
-        constraint.kind === 'primaryKey' || constraint.kind === 'unique')
-        .map(constraint => constraint.kind === 'primaryKey' || constraint.kind === 'unique' ?
-          constraint.columns : [])
+      ...statement_.constraints.filter(constraint => constraint.kind === 'unique')
+        .map(constraint => constraint.kind === 'unique' ? constraint.columns : [])
     ]
-    const indexes = uniqueColumns.flatMap((columns, index) => {
+    const uniqueIndexes = uniqueColumns.map((columns, index) => {
+      const keys = columns.flatMap(column => {
+        const definition = byName.get(column.name.toLowerCase())
+        const rendered = Quote.identifier(column.name)
+        const value = definition?.collate !== undefined ?
+          Collation.expressionKey(rendered, definition.collate) :
+          definition?.type.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
+        return nullSafeKey(value, column.descending)
+      })
+      const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
+      const target = Quote.indexTarget(`__mssqlite_${tableName}_unique_${index}`, statement_.name)
+      return `CREATE UNIQUE INDEX ${target.index} ON ${target.table} (${keys.join(', ')})`
+    })
+    const primaryColumns = statement_.constraints.filter(constraint => constraint.kind === 'primaryKey')
+      .flatMap(constraint => constraint.kind === 'primaryKey' ? [ constraint.columns ] : [])
+    const primaryIndexes = primaryColumns.flatMap((columns, index) => {
       const definitions = columns.map(column => byName.get(column.name.toLowerCase()))
       if (!definitions.some(column =>
         column?.collate !== undefined || column?.type.name === 'datetimeoffset')) {
@@ -851,29 +870,32 @@ const createTable =
           definition?.type.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
       })
       const tableName = statement_.name[statement_.name.length - 1] ?? 'table'
-      const indexName = Quote.identifier(`__mssqlite_${tableName}_collation_${index}`)
-      return [ `CREATE UNIQUE INDEX ${indexName} ON ${table} (${keys.join(', ')})` ]
+      const target = Quote.indexTarget(`__mssqlite_${tableName}_collation_${index}`, statement_.name)
+      return [ `CREATE UNIQUE INDEX ${target.index} ON ${target.table} (${keys.join(', ')})` ]
     })
-    return [ `CREATE TABLE ${table} (${members.join(', ')})`, ...indexes ].join('; ')
+    return [ `CREATE TABLE ${table} (${members.join(', ')})`, ...uniqueIndexes, ...primaryIndexes ].join('; ')
   }
 
 const createIndex =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createIndex' }): string => {
     const unique = statement_.unique ? 'UNIQUE ' : ''
+    const target = Quote.indexTarget(statement_.name, statement_.table)
     const columns = statement_.columns
-      .map(column => {
+      .flatMap(column => {
         const value = Quote.identifier(column.name)
         const key = column.collation !== undefined ?
           Collation.expressionKey(value, column.collation) :
           column.type?.name === 'datetimeoffset' ? DateTimeOffset.key(value) : value
-        return `${key}${column.descending ? ' DESC' : ''}`
+        return statement_.unique ?
+          nullSafeKey(key, column.descending) :
+          [ `${key}${column.descending ? ' DESC' : ''}` ]
       })
       .join(', ')
     const where = statement_.where === undefined ?
       '' :
       ` WHERE ${expression(ctx, statement_.where)}`
     // INCLUDE columns have no SQLite equivalent — indexes still work, so drop them.
-    return `CREATE ${unique}INDEX ${Quote.identifier(statement_.name)} ON ${Quote.objectName(statement_.table)} (${columns})${where}`
+    return `CREATE ${unique}INDEX ${target.index} ON ${target.table} (${columns})${where}`
   }
 
 /** Rendered statement with the variables it binds. */

@@ -54,7 +54,9 @@ column_name AS expression [PERSISTED [NOT NULL]]
 ### Semantic Rules
 - One PRIMARY KEY per table → creates clustered index by default.
 - One IDENTITY column per table: tinyint, smallint, int, bigint, decimal(p,0), numeric(p,0). Default (1,1).
-- UNIQUE allows one NULL; creates nonclustered index by default.
+- UNIQUE treats NULL as a comparable key component: a single-column key allows
+  one NULL, while a composite key rejects only a repeated complete tuple with
+  the same NULL positions. Creates a nonclustered index by default.
 - CHECK cannot reference other tables or contain subqueries.
 - MAX 999 nonclustered indexes per table.
 - Composite key: max 32 columns.
@@ -111,7 +113,8 @@ CREATE [UNIQUE] [CLUSTERED | NONCLUSTERED] INDEX index_name
 ### Key Rules
 - CLUSTERED: physically reorders data. One per table. No clustered = heap.
 - NONCLUSTERED (default): separate structure. Up to 999 per table.
-- UNIQUE: one NULL per column allowed.
+- UNIQUE: NULL participates in the complete key tuple; repeated tuples with
+  matching NULL positions are duplicates.
 - INCLUDE: non-key columns at leaf level for covering queries.
 - Filtered: WHERE with comparisons, IS [NOT] NULL, AND, OR, IN, BETWEEN. No subqueries or functions.
 - Composite: max 32 columns. Key size: 900 bytes (clustered), 1700 bytes (nonclustered).

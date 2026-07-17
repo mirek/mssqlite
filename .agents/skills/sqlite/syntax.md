@@ -452,8 +452,11 @@ Default ordering places NULLs first for ASC, last for DESC; override with
 
 NULLs are **distinct** in a `UNIQUE` index — any number of rows may have
 NULL in a UNIQUE column. This differs from MSSQL, which treats NULLs as
-duplicates in a UNIQUE index. To emulate MSSQL behavior, add a `CHECK
-(col IS NOT NULL)` or use a partial unique index excluding NULLs.
+duplicates in a UNIQUE index. A null-safe expression key such as
+`(col IS NULL), ifnull(col, 0)` emulates SQL Server without forbidding NULL;
+the first component prevents the sentinel from colliding with a real value.
+For composite keys, expand every component independently and retain any
+collation-normalization expression inside the pair.
 
 ### NULL in Primary Keys
 
