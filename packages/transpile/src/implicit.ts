@@ -128,6 +128,12 @@ export const typeOf =
         ])
       case 'call': {
         const name = value.name[value.name.length - 1]?.toLowerCase()
+        if (name === 'datefromparts') {
+          return { name: 'date', args: [] }
+        }
+        if (name === 'datetimefromparts') {
+          return { name: 'datetime', args: [] }
+        }
         if (name === 'count') {
           return { name: 'int', args: [] }
         }

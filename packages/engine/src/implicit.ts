@@ -1,4 +1,4 @@
-import { TypeInfo, Value as TdsValue } from '@mssqlite/tds'
+import { DateTime, TypeInfo, Value as TdsValue } from '@mssqlite/tds'
 import { MssqlError } from './error.ts'
 import type { Value } from './session.ts'
 
@@ -117,9 +117,10 @@ const dateParts =
     const hour = Number(hour_)
     const minute = Number(minute_)
     const second = Number(second_)
-    const date = new Date(Date.UTC(year, month - 1, day))
-    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
-      date.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) {
+    const roundTrip = DateTime.civilFromDays(DateTime.daysFromCivil(year, month, day))
+    if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 ||
+      roundTrip.year !== year || roundTrip.month !== month || roundTrip.day !== day ||
+      hour > 23 || minute > 59 || second > 59) {
       return undefined
     }
     const fraction = fraction_.length === 0 ? '' : `.${fraction_}`
@@ -149,6 +150,111 @@ export const temporal =
     throw new MssqlError(
       'Conversion failed when converting date and/or time from character string.',
       241, 16, 1, { statementTerminating: true })
+  }
+
+/** @returns strict temporal conversion, or NULL for a TRY conversion failure. */
+export const tryTemporal =
+  (value: Value, target: string, try_: boolean): Value => {
+    try {
+      return temporal(value, target)
+    } catch (error) {
+      if (try_) {
+        return null
+      }
+      throw error
+    }
+  }
+
+const constructorPart =
+  (value: Value): number =>
+    Number(integer(value, 'int', true))
+
+const validCivilDate =
+  (year: number, month: number, day: number): boolean => {
+    if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1) {
+      return false
+    }
+    const result = DateTime.civilFromDays(DateTime.daysFromCivil(year, month, day))
+    return result.year === year && result.month === month && result.day === day
+  }
+
+const constructorError =
+  (type: 'date' | 'datetime'): MssqlError =>
+    new MssqlError(
+      `Cannot construct data type ${type}, some of the arguments have values which are not valid.`,
+      289, 16, type === 'datetime' ? 3 : 1, { statementTerminating: true })
+
+const roundedDateTime =
+  (
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    second: number,
+    millisecond: number
+  ): string | undefined => {
+    const thirdsPerDay = 25920000
+    const inputMinutes = (hour * 60) + minute
+    const inputSeconds = (inputMinutes * 60) + second
+    const inputMilliseconds = (inputSeconds * 1000) + millisecond
+    const thirds = Math.round(inputMilliseconds * 3 / 10)
+    const carry = Math.floor(thirds / thirdsPerDay)
+    const inDay = thirds - (carry * thirdsPerDay)
+    const outputMilliseconds = Math.round(inDay * 10 / 3)
+    const civil = DateTime.civilFromDays(DateTime.daysFromCivil(year, month, day) + carry)
+    if (civil.year < 1753 || civil.year > 9999) {
+      return undefined
+    }
+    const outputSeconds = Math.floor(outputMilliseconds / 1000)
+    return `${DateTime.formatDate(civil)} ` +
+      `${String(Math.floor(outputSeconds / 3600)).padStart(2, '0')}:` +
+      `${String(Math.floor(outputSeconds / 60) % 60).padStart(2, '0')}:` +
+      `${String(outputSeconds % 60).padStart(2, '0')}.` +
+      `${String(outputMilliseconds % 1000).padStart(3, '0')}`
+  }
+
+/** @returns a validated DATEFROMPARTS value. */
+export const dateFromParts =
+  (year_: Value, month_: Value, day_: Value): Value => {
+    if (year_ === null || month_ === null || day_ === null) {
+      return null
+    }
+    const year = constructorPart(year_)
+    const month = constructorPart(month_)
+    const day = constructorPart(day_)
+    if (!validCivilDate(year, month, day)) {
+      throw constructorError('date')
+    }
+    return DateTime.formatDate({ year, month, day })
+  }
+
+/** @returns a validated DATETIMEFROMPARTS value. */
+export const datetimeFromParts =
+  (
+    year_: Value,
+    month_: Value,
+    day_: Value,
+    hour_: Value,
+    minute_: Value,
+    second_: Value,
+    millisecond_: Value
+  ): Value => {
+    const values = [ year_, month_, day_, hour_, minute_, second_, millisecond_ ]
+    if (values.some(value => value === null)) {
+      return null
+    }
+    const [ year, month, day, hour, minute, second, millisecond ] =
+      values.map(value => constructorPart(value)) as [ number, number, number, number, number, number, number ]
+    if (!validCivilDate(year, month, day) || year < 1753 || hour < 0 || hour > 23 || minute < 0 ||
+      minute > 59 || second < 0 || second > 59 || millisecond < 0 || millisecond > 999) {
+      throw constructorError('datetime')
+    }
+    const result = roundedDateTime(year, month, day, hour, minute, second, millisecond)
+    if (result === undefined) {
+      throw constructorError('datetime')
+    }
+    return result
   }
 
 /** @returns canonical uniqueidentifier text or SQL error 8169. */

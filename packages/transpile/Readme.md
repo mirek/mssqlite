@@ -142,8 +142,9 @@ rendered statement reports the variables it binds.
   NCHAR, SUBSTRING, LEFT, RIGHT, STUFF, and REVERSE use UTF-16 code-unit UDFs
   under the currently supported non-SC collations instead of SQLite code points.
   See the engine package for the UDF implementations.
-- **CAST/CONVERT** — affinity casts, plus date/time renderings
-  (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles
+- **CAST/CONVERT** — affinity casts, plus strict date/time conversion UDFs
+  that validate civil/time ranges, preserve error 241, and return NULL for TRY
+  variants. CONVERT datetime styles
   (23, 101-126) via `strftime`. DATETIMEOFFSET casts instead use the exact
   offset-preserving codec UDF; comparisons, IN/BETWEEN, ORDER BY, uniqueness,
   and indexes render a UTC-normalized key while result hints retain scale.
@@ -155,5 +156,8 @@ rendered statement reports the variables it binds.
   accept Unicode text, and hierarchyid/geometry/geography casts accept only
   native binary serialization. Unsupported special-type operators and methods
   fail explicitly instead of inheriting SQLite TEXT/BLOB behavior.
+- **Date constructors** — DATEFROMPARTS and DATETIMEFROMPARTS render validated,
+  NULL-propagating engine UDFs instead of SQLite `printf`; expression hints
+  retain native date/datetime TDS metadata for values and NULL results.
 - **DATEADD parts** — the bare datepart argument (`month`, `dd`, …)
   normalizes to a canonical literal at transpile time.

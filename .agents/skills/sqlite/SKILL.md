@@ -129,6 +129,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   the offset or fractional precision. Do not use SQLite `datetime()` or
   `julianday()` for this type: they normalize/format with lower precision and
   cannot retain the original offset.
+- SQLite `date()` and `strftime()` may normalize impossible civil dates and
+  therefore are not conversion validators. Ordinary T-SQL date/time casts and
+  declared storage use `mssqlite_temporal_cast` / `mssqlite_implicit_temporal`,
+  which round-trip year/month/day through proleptic civil-day math, validate
+  time ranges, raise 241, and return NULL for TRY conversions. FROMPARTS
+  constructors use separate NULL-propagating UDFs and raise 289 for invalid
+  component ranges.
 - T-SQL computed columns lower to `GENERATED ALWAYS AS`: VIRTUAL for ordinary
   definitions and STORED for PERSISTED. CREATE supports both; SQLite permits
   ALTER TABLE ADD only for VIRTUAL generated columns. Expressions may reference
@@ -220,5 +227,5 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 
 Native SQLite shortcuts that still leak through the T-SQL compatibility
 boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
-2025 differentials cover text comparison/collation, date/JSON validation,
+2025 differentials cover text comparison/collation, JSON validation,
 scalar function contracts, and result metadata.

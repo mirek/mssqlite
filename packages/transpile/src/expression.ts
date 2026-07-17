@@ -122,11 +122,10 @@ const cast =
     }
     switch (Type.category(expression_.type)) {
       case 'date':
-        return `date(${inner})`
       case 'time':
-        return `time(${inner})`
       case 'datetime':
-        return `strftime('%Y-%m-%d %H:%M:%f', ${inner})`
+        return `mssqlite_temporal_cast(${inner}, ${Quote.string(expression_.type.name)}, ` +
+          `${expression_.try_ ? 1 : 0})`
       case 'bit':
         return `(CAST(${inner} AS NUMERIC) <> 0)`
       case 'guid':

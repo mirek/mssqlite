@@ -770,7 +770,8 @@ const columnDefinition =
       const default_ = column.default_
       const signed = default_.kind === 'unary' && [ '+', '-' ].includes(default_.operator) &&
         default_.operand.kind === 'number' ? `${default_.operator}${default_.operand.value}` : undefined
-      const rendered_ = column.type.name === 'datetimeoffset' ?
+      const temporal = [ 'date', 'time', 'datetime' ].includes(Type.category(column.type) ?? '')
+      const rendered_ = column.type.name === 'datetimeoffset' || temporal ?
         expression(ctx, { kind: 'cast', expression: default_, type: column.type, try_: false }) :
         Type.category(column.type) === 'decimal' && default_.kind === 'number' ?
           Quote.string(default_.value) : Type.category(column.type) === 'decimal' && signed !== undefined ?
