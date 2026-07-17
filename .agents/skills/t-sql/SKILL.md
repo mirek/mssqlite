@@ -86,6 +86,11 @@ The language pipeline lives in three packages:
   LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
   return NULL, and QUOTENAME accepts the documented delimiter pairs, doubles
   closing delimiters, and returns NULL for input longer than 128 characters.
+- Character declarations default an omitted width to 1; CAST/CONVERT default
+  it to 30. Explicit char/varchar/nchar/nvarchar conversions truncate and
+  fixed-width families pad, while assignment into table storage rejects
+  encoded overflow with error 2628. ISNULL retains its first argument's
+  family and width; COALESCE follows character precedence and widens.
 - SET NOCOUNT takes effect at statement execution time: ON suppresses the
   affected-row value in TDS DONE-family tokens but does not change execution or
   `@@ROWCOUNT`. A nested procedure, trigger, or dynamic batch inherits the
@@ -248,8 +253,8 @@ AT TIME ZONE, ALTER TABLE ALTER COLUMN.
 ### Compatibility audit findings
 
 The live TDS audit at commit `bcad53b` found additional semantic gaps now
-tracked in [`TODO.md`](../../../TODO.md): character widths are not enforced,
-mixed-type comparisons do not consistently apply T-SQL precedence, IDENTITY
+tracked in [`TODO.md`](../../../TODO.md): mixed-type comparisons do not
+consistently apply T-SQL precedence, IDENTITY
 allocation ignores custom seed/increment and reuses rolled-back values, unique
 keys permit repeated NULLs, and SELECT INTO loses expression types. It also
 confirmed missing VALUES-derived tables, general APPLY lowering, strict

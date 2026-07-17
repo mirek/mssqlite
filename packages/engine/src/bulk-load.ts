@@ -3,8 +3,10 @@ import { BulkLoad as TdsBulkLoad, DataType, TypeInfo, Value as TdsValue } from '
 import * as Transpile from '@mssqlite/transpile'
 import { assertWritable, stateForName, withState } from './database.ts'
 import { MssqlError } from './error.ts'
+import * as Character from './character.ts'
 import { executeSql, type Parameter } from './execute.ts'
 import { typeInfoOfCatalogRow } from './metadata.ts'
+import { typeNameOfCatalogRow } from './table-variable.ts'
 import { flushRowversion } from './rowversion.ts'
 import {
   beginRequest,
@@ -357,6 +359,10 @@ const converted =
     const type = column.typeInfo
     if (type.type === DataType.DataType.intN) {
       return integer(value, type.maxLength ?? 4)
+    }
+    const declared = typeNameOfCatalogRow(column.row)
+    if (declared !== undefined && Character.family(declared) !== undefined) {
+      return Character.store(String(value), declared, column.row.name)
     }
     try {
       const bytes = TdsValue.encodeBare(type, value)

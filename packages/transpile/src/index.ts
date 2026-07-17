@@ -1,4 +1,5 @@
 export * as Context from './context.ts'
+export * as Character from './character.ts'
 export * as DatePart from './date-part.ts'
 export * as DateTimeOffset from './datetimeoffset.ts'
 export * as Functions from './functions.ts'

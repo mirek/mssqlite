@@ -56,17 +56,19 @@ export const typeInfoOfCatalogRow =
       case 98:
         return TypeInfo.sqlVariant()
       case 167:
-      case 175:
       case 35:
         return TypeInfo.varchar(
           row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length,
           Collation.ofName(row.collation_name))
+      case 175:
+        return TypeInfo.char(row.max_length, Collation.ofName(row.collation_name))
       case 231:
-      case 239:
       case 99:
         return TypeInfo.nvarchar(
           row.max_length === -1 || row.max_length === 16 ? 'max' : row.max_length / 2,
           Collation.ofName(row.collation_name))
+      case 239:
+        return TypeInfo.nchar(row.max_length / 2, Collation.ofName(row.collation_name))
       case 165:
       case 173:
       case 34:
@@ -203,7 +205,7 @@ const hintedColumn =
       max_length: type.maxLength,
       precision: type.precision,
       scale: type.scale,
-      collation_name: type.collationName,
+      collation_name: hint.collation ?? type.collationName,
       is_nullable: hint.nullable ? 1 : 0,
       is_identity: 0,
       is_computed: 0

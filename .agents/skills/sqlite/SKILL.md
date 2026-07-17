@@ -53,6 +53,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - **`COLLATE NOCASE` on char/text columns** for MSSQL's case-insensitive
   default collation — comparisons and UNIQUE constraints follow the
   column collation; LIKE is ASCII-case-insensitive anyway.
+- **Application-enforced character widths** because SQLite TEXT affinity does
+  not enforce varchar lengths. Transpiled explicit conversions call a
+  truncating character UDF; DML/default/computed and bulk storage call a
+  rejecting UDF before binding. Both use Windows-1252 bytes for non-Unicode
+  families and UTF-16LE code units for Unicode families.
 - **`INTEGER PRIMARY KEY AUTOINCREMENT`** as the IDENTITY mapping
   (never-reused ids); TRUNCATE deletes the `sqlite_sequence` row to reset.
 - **Native functions**: `concat`/`concat_ws` (NULL-as-empty matches

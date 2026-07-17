@@ -1,5 +1,6 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
+import * as Character from './character.ts'
 import * as Decimal from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import * as Quote from './quote.ts'
@@ -41,7 +42,9 @@ const cast =
       source.kind === 'column' ? Context.columnType(ctx, source.name) :
         source.kind === 'unary' && source.operand.kind === 'number' ? numberSourceType(source.operand.value) :
           source.kind === 'number' ? numberSourceType(source.value) :
-            source.kind === 'string' ? { name: 'nvarchar', args: [ source.value.length ] } :
+            source.kind === 'string' ? {
+              name: source.national ? 'nvarchar' : 'varchar', args: [ Math.max(1, source.value.length) ]
+            } :
               source.kind === 'binary' ? { name: 'varbinary', args: [ Math.ceil((source.value.length - 2) / 2) ] } :
                 undefined
     const signedLiteral = source.kind === 'unary' && [ '+', '-' ].includes(source.operator) &&
@@ -70,11 +73,11 @@ const cast =
       const style = expression_.style.kind === 'number' ? Number(expression_.style.value) : undefined
       const format = style === undefined ? undefined : convertStyle(style)
       if (format !== undefined && (Type.category(expression_.type) === 'text' || Type.category(expression_.type) === 'ntext')) {
-        const length = expression_.type.args[0]
-        return typeof length === 'number' ?
-          `substr(strftime('${format}', ${inner}), 1, ${length})` :
-          `strftime('${format}', ${inner})`
+        return Character.cast(`strftime('${format}', ${inner})`, expression_.type, expression_.try_)
       }
+    }
+    if (Character.family(expression_.type) !== undefined) {
+      return Character.cast(inner, expression_.type, expression_.try_)
     }
     if (Type.category(expression_.type) === 'integer') {
       return `mssqlite_cast_integer(${inner}, ${Quote.string(expression_.type.name)}, ` +
@@ -276,6 +279,21 @@ export const expression =
         return binaryOp(ctx, expression_)
       case 'call': {
         const callName = expression_.name[expression_.name.length - 1]?.toLowerCase()
+        if (callName === 'datalength' && expression_.args[0] !== undefined) {
+          const value = expression_.args[0]
+          const type = Character.typeOf(ctx, value)
+          return type === undefined ?
+            `mssqlite_datalength(${expression(ctx, value)})` :
+            `mssqlite_datalength(${expression(ctx, value)}, ${Quote.string(type.name)})`
+        }
+        if (callName === 'isnull' && expression_.args.length === 2) {
+          const type = Character.typeOf(ctx, expression_.args[0])
+          if (type !== undefined) {
+            const first = expression(ctx, expression_.args[0] ?? { kind: 'null' })
+            const replacement = expression(ctx, expression_.args[1] ?? { kind: 'null' })
+            return Character.cast(`ifnull(${first}, ${replacement})`, type, false, 1)
+          }
+        }
         if (expression_.name.length > 1 && [
           'query', 'value', 'exist', 'nodes', 'modify',
           'starea', 'stdistance', 'stintersects', 'stcontains', 'stastext', 'tostring',

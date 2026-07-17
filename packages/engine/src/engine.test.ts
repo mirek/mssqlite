@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { DataType, SqlVariant } from '@mssqlite/tds'
+import { Collation, DataType, SqlVariant } from '@mssqlite/tds'
 import {
   BatchError, closeServer, closeSession, executeBatch, executeSql, MssqlError, server, session, syncSession
 } from './index.ts'
@@ -1290,6 +1290,141 @@ test('string udf edge cases match SQL Server values and errors', () => {
       expect.objectContaining({ number: 536 }) as Error
     )
   }
+})
+
+test('character widths govern casts, assignment, storage, defaults and metadata', () => {
+  const s = open()
+  const casts = rowsOf(executeBatch(s, `
+    SELECT
+      CAST('abcdef' AS varchar(3)) AS varchar_value,
+      CAST(N'abcdef' AS nvarchar(3)) AS nvarchar_value,
+      CAST('a' AS char(3)) AS char_value,
+      CAST(N'a' AS nchar(3)) AS nchar_value
+  `))
+  expect(casts.rows).toEqual([ [ 'abc', 'abc', 'a  ', 'a  ' ] ])
+  expect(casts.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ])).toEqual([
+    [ DataType.DataType.bigVarchar, 3 ],
+    [ DataType.DataType.nvarchar, 6 ],
+    [ DataType.DataType.bigChar, 3 ],
+    [ DataType.DataType.nchar, 6 ]
+  ])
+
+  const mixed = rowsOf(executeBatch(s, `
+    SELECT CAST('a' AS varchar(3)) COLLATE Latin1_General_100_BIN2 AS value, 1 AS number
+  `))
+  expect(mixed.columns).toMatchObject([
+    {
+      typeInfo: {
+        type: DataType.DataType.bigVarchar,
+        maxLength: 3,
+        collation: Collation.ofName('Latin1_General_100_BIN2')
+      }
+    },
+    { typeInfo: { type: DataType.DataType.intN, maxLength: 4 } }
+  ])
+
+  const nullCast = rowsOf(executeBatch(s, 'SELECT CAST(NULL AS varchar(3)) AS value'))
+  expect(nullCast.rows).toEqual([ [ null ] ])
+  expect(nullCast.columns).toMatchObject([
+    { nullable: true, typeInfo: { type: DataType.DataType.bigVarchar, maxLength: 3 } }
+  ])
+
+  const defaultItems = executeBatch(s, `
+    DECLARE @declared varchar = 'abcdef'
+    DECLARE @wide varchar(max) = REPLICATE('x', 8100)
+    SELECT @declared AS declared_value
+    SELECT LEN(@wide) AS max_length
+    SELECT CAST('abcdefghijklmnopqrstuvwxyz1234567890' AS varchar) AS cast_value
+    SELECT ISNULL(CAST(NULL AS varchar(3)), 'abcdef') AS isnull_value
+    SELECT COALESCE(CAST(NULL AS varchar(3)), 'abcdef') AS coalesce_value
+  `)
+  const defaultRows = defaultItems.filter((item): item is Rows => item.kind === 'rows')
+  expect(defaultRows.map(result => result.rows)).toEqual([
+    [ [ 'a' ] ], [ [ 8100 ] ], [ [ 'abcdefghijklmnopqrstuvwxyz1234' ] ],
+    [ [ 'abc' ] ], [ [ 'abcdef' ] ]
+  ])
+  expect(defaultRows[0]?.columns).toMatchObject([
+    { typeInfo: { type: DataType.DataType.bigVarchar, maxLength: 1 } }
+  ])
+  expect(defaultRows[4]?.columns).toMatchObject([
+    { typeInfo: { type: DataType.DataType.bigVarchar, maxLength: 6 } }
+  ])
+
+  executeBatch(s, `
+    CREATE PROCEDURE width_parameter @value varchar(3)
+    AS
+    SELECT @value AS value
+  `)
+  const procedure = rowsOf(executeBatch(s, 'EXEC width_parameter \'abcdef\''))
+  expect(procedure.rows).toEqual([ [ 'abc' ] ])
+  expect(procedure.columns).toMatchObject([
+    { typeInfo: { type: DataType.DataType.bigVarchar, maxLength: 3 } }
+  ])
+
+  executeBatch(s, `
+    CREATE TABLE width_values (
+      id int PRIMARY KEY,
+      value varchar(3),
+      unicode_value nvarchar(3),
+      fixed_value char(5),
+      fixed_unicode nchar(5)
+    )
+    INSERT INTO width_values VALUES (1, '€', N'é', 'a', N'b')
+  `)
+  const stored = rowsOf(executeBatch(s, `
+    SELECT value, DATALENGTH(value), unicode_value, DATALENGTH(unicode_value),
+      fixed_value, LEN(fixed_value), DATALENGTH(fixed_value),
+      fixed_unicode, LEN(fixed_unicode), DATALENGTH(fixed_unicode)
+    FROM width_values
+  `))
+  expect(stored.rows).toEqual([ [ '€', 1, 'é', 2, 'a    ', 1, 5, 'b    ', 1, 10 ] ])
+
+  for (const sql of [
+    'INSERT INTO width_values VALUES (2, \'toolong\', N\'ok\', \'x\', N\'y\')',
+    'UPDATE width_values SET value = \'toolong\' WHERE id = 1'
+  ]) {
+    expect(() => executeBatch(s, sql)).toThrowError(
+      expect.objectContaining({ number: 2628 }) as Error
+    )
+  }
+  expect(rowsOf(executeBatch(s, 'SELECT value FROM width_values')).rows).toEqual([ [ '€' ] ])
+  executeBatch(s, 'CREATE TABLE default_declaration_width (value varchar)')
+  expect(() => executeBatch(s,
+    'INSERT default_declaration_width VALUES (\'ab\')'))
+    .toThrowError(expect.objectContaining({ number: 2628 }) as Error)
+
+  const caught = rowsOf(executeBatch(s, `
+    BEGIN TRY
+      INSERT INTO width_values VALUES (3, 'toolong', N'ok', 'x', N'y')
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS number
+    END CATCH
+  `))
+  expect(caught.rows).toEqual([ [ 2628 ] ])
+
+  executeBatch(s, `
+    DECLARE @table TABLE(value varchar(2), fixed char(3))
+    INSERT @table VALUES ('ok', 'x')
+  `)
+  expect(() => executeBatch(s, `
+    DECLARE @table TABLE(value varchar(2))
+    INSERT @table VALUES ('bad')
+  `)).toThrowError(expect.objectContaining({ number: 2628 }) as Error)
+
+  executeBatch(s, `
+    CREATE TABLE computed_width (
+      value varchar(3),
+      expanded AS CAST(value + 'xyz' AS varchar(4)) PERSISTED
+    )
+    INSERT computed_width(value) VALUES ('a')
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT expanded FROM computed_width')).rows)
+    .toEqual([ [ 'axyz' ] ])
+
+  executeBatch(s, 'CREATE TABLE default_width (value varchar(3) DEFAULT \'toolong\')')
+  expect(() => executeBatch(s, 'INSERT default_width DEFAULT VALUES'))
+    .toThrowError(expect.objectContaining({ number: 2628 }) as Error)
 })
 
 test('table-valued functions return rows and metadata through the engine', () => {

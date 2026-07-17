@@ -6,7 +6,6 @@ work is complete.
 
 ## Semantics and type fidelity
 
-- [Character width enforcement](todo/character-width-enforcement.md) — Enforce declared string sizes, CAST/CONVERT defaults, ISNULL sizing, and encoded DATALENGTH.
 - [Implicit type conversions](todo/implicit-type-conversions.md) — Apply T-SQL precedence consistently to mixed-type operators and predicates.
 - [IDENTITY semantics](todo/identity-semantics.md) — Honor seed/increment, explicit-insert protection, and rollback-independent allocation.
 - [Unique NULL semantics](todo/unique-null-semantics.md) — Treat repeated NULL-containing keys as duplicates in unique constraints and indexes.

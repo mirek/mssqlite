@@ -1,5 +1,6 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
+import * as Character from './character.ts'
 import * as Decimal from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import * as ForJson from './for-json.ts'
@@ -671,7 +672,9 @@ const columnDefinition =
       }
       const generated = Context.withSourceTypes(ctx, source, () =>
         Context.withGenerated(ctx, () => expression(ctx, column.computed?.expression ?? { kind: 'null' })))
-      parts.push(`GENERATED ALWAYS AS (${generated}) ${column.computed.persisted ? 'STORED' : 'VIRTUAL'}`)
+      const converted = Character.family(column.type) === undefined ?
+        generated : Character.cast(generated, column.type, false, 1)
+      parts.push(`GENERATED ALWAYS AS (${converted}) ${column.computed.persisted ? 'STORED' : 'VIRTUAL'}`)
       if (column.nullable === false) {
         parts.push('NOT NULL')
       }
@@ -709,11 +712,13 @@ const columnDefinition =
       const default_ = column.default_
       const signed = default_.kind === 'unary' && [ '+', '-' ].includes(default_.operator) &&
         default_.operand.kind === 'number' ? `${default_.operator}${default_.operand.value}` : undefined
-      const rendered = column.type.name === 'datetimeoffset' ?
+      const rendered_ = column.type.name === 'datetimeoffset' ?
         expression(ctx, { kind: 'cast', expression: default_, type: column.type, try_: false }) :
         Type.category(column.type) === 'decimal' && default_.kind === 'number' ?
           Quote.string(default_.value) : Type.category(column.type) === 'decimal' && signed !== undefined ?
             Quote.string(signed) : expression(ctx, default_)
+      const rendered = Character.family(column.type) === undefined ?
+        rendered_ : Character.store(rendered_, column.type, column.name)
       parts.push(`DEFAULT (${rendered})`)
     }
     if (column.check !== undefined) {
@@ -898,7 +903,8 @@ export const statement =
     const columns = statement_.kind === 'select' ?
       ForJson.selectHints(statement_) ?? TableFunction.selectHints(statement_) ??
         TableTransform.selectHints(statement_) ??
-        Grouping.selectHints(statement_) ?? DateTimeOffset.selectHints(statement_) ??
+        Grouping.selectHints(statement_) ?? Character.selectHints(statement_) ??
+        DateTimeOffset.selectHints(statement_) ??
         Decimal.selectHints(statement_) :
       undefined
     return {

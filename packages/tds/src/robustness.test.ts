@@ -59,21 +59,25 @@ test('random and truncated bytes never throw or hang the decoders', () => {
     for (let j = 0; j < length; j++) {
       bytes[j] = next()
     }
-    expect(() => Login7.decode(bytes)).not.toThrow()
-    expect(() => Prelogin.decode(bytes)).not.toThrow()
-    expect(() => Rpc.decode(bytes)).not.toThrow()
-    expect(() => AllHeaders.decode(bytes)).not.toThrow()
-    expect(() => TransactionManager.decode(bytes)).not.toThrow()
+    Login7.decode(bytes)
+    Prelogin.decode(bytes)
+    Rpc.decode(bytes)
+    AllHeaders.decode(bytes)
+    TransactionManager.decode(bytes)
     // Message.push may throw only the malformed-length signal, never hang.
     try {
       Message.push(Message.initial, bytes)
     } catch (error) {
-      expect((error as Error).message).toMatch(/[Mm]alformed/)
+      if (!(error instanceof Error) || !/[Mm]alformed/.test(error.message)) {
+        throw error
+      }
     }
     try {
       Smp.push(Smp.initial, bytes)
     } catch (error) {
-      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) {
+        throw error
+      }
     }
   }
 })
