@@ -239,3 +239,14 @@ The language pipeline lives in three packages:
 WAITFOR, GOTO, BULK INSERT ... FROM file, source columns in MERGE OUTPUT,
 FOR XML, COLLATE as expression operator,
 AT TIME ZONE, ALTER TABLE ALTER COLUMN.
+
+### Compatibility audit findings
+
+The live TDS audit at commit `bcad53b` found additional semantic gaps now
+tracked in [`TODO.md`](../../../TODO.md): character widths are not enforced,
+mixed-type comparisons do not consistently apply T-SQL precedence, IDENTITY
+allocation ignores custom seed/increment and reuses rolled-back values, unique
+keys permit repeated NULLs, and SELECT INTO loses expression types. It also
+confirmed missing VALUES-derived tables, general APPLY lowering, strict
+OPENJSON paths, and SQL Server's MERGE validation rules. Treat the individual
+`todo/*.md` briefs as the executable scope and ground-truth checklist.
