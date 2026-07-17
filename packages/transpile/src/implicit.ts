@@ -103,6 +103,16 @@ export const typeOf =
         }
       case 'binary':
         return { name: 'varbinary', args: [ Math.max(1, Math.ceil((value.value.length - 2) / 2)) ] }
+      case 'subquery':
+        if (value.select.forXml !== undefined) {
+          return value.select.forXml.type ? { name: 'xml', args: [] } :
+            { name: 'nvarchar', args: [ 'max' ] }
+        }
+        if (value.select.forJson !== undefined) {
+          return { name: 'nvarchar', args: [ 'max' ] }
+        }
+        return value.select.items.length === 1 && value.select.items[0]?.kind === 'expression' ?
+          typeOf(ctx, value.select.items[0].expression) : undefined
       case 'cast':
       case 'convert':
         return { ...value.type, name: canonical(value.type.name) }

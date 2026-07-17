@@ -1579,6 +1579,28 @@ test('for json streams large nvarchar max output over the wire', async () => {
   } ])
 })
 
+test('for xml streams large text and native TYPE output over tedious', async () => {
+  const xmlColumn = 'XML_F52E2B61-18A1-11d1-B105-00805F49916B'
+  const text = await query(`
+    SELECT REPLICATE(N'x&', 5000) AS [text()]
+    FOR XML PATH('payload'), ROOT('root')
+  `)
+  expect(text.rows).toHaveLength(1)
+  expect(String(text.rows[0]?.[xmlColumn])).toBe(
+    `<root><payload>${'x&amp;'.repeat(5000)}</payload></root>`)
+  expect(text.columns).toEqual([ {
+    name: xmlColumn, type: 'NVarChar', length: 65535
+  } ])
+
+  const typed = await query(`
+    SELECT 1 AS [@id], N'a&b' AS value FOR XML PATH('row'), TYPE
+  `)
+  expect(Object.values(typed.rows[0] ?? {})).toEqual([
+    '<row id="1"><value>a&amp;b</value></row>'
+  ])
+  expect(typed.columns).toEqual([ { name: '', type: 'Xml', length: undefined } ])
+})
+
 test('update and delete counts', async () => {
   const update = await query('UPDATE users SET age = 31 WHERE name = N\'Alice\'')
   expect(update.rowCount).toBe(1)

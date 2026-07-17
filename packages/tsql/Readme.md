@@ -45,9 +45,11 @@ const statements = parse(`
   with aliases/positional column aliases and `OPENJSON ... WITH (...)`;
   CROSS/OUTER APPLY preserve lateral source order in the AST; resolved derived
   sources may carry projection metadata for aliases, stars, and wire types.
-  PIVOT / UNPIVOT are postfix table-source transforms with required aliases. SELECT
-  tails accept FOR JSON PATH/AUTO with ROOT, INCLUDE_NULL_VALUES, and
-  WITHOUT_ARRAY_WRAPPER options.
+  PIVOT / UNPIVOT are postfix table-source transforms with required aliases.
+  SELECT tails accept FOR JSON PATH/AUTO with ROOT, INCLUDE_NULL_VALUES, and
+  WITHOUT_ARRAY_WRAPPER options, plus FOR XML PATH/RAW with ROOT, ELEMENTS
+  [XSINIL], BINARY BASE64, and TYPE. WITH XMLNAMESPACES accepts prefixed and
+  default URI declarations.
 - **Expressions** — full T-SQL operator precedence, unary `- + ~ NOT`,
   arithmetic, concat `+`, bitwise `& ^ |`, comparisons (incl. `!=`, `!<`,
   `!>`), `IS [NOT] NULL`, `[NOT] LIKE ... ESCAPE`, `[NOT] IN (list|subquery)`,

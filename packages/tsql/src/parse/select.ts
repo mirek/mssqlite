@@ -315,6 +315,92 @@ const forJson: Parser.t<Ast.ForJson> =
     })
   }
 
+type ForXmlOption =
+  | { readonly kind: 'root', readonly name: string }
+  | { readonly kind: 'elements', readonly value: 'elements' | 'xsinil' }
+  | { readonly kind: 'binaryBase64' }
+  | { readonly kind: 'type' }
+  | { readonly kind: 'unsupported', readonly value: 'xmldata' | 'xmlschema' }
+
+const xmlStringArgument =
+  (keyword: string, fallback?: string): Parser.t<string | undefined> =>
+    reader => {
+      const start = C.keyword(keyword)(reader)
+      if (Result.failed(start)) {
+        return start
+      }
+      const value = C.maybe(C.parens(expression))(start.reader)
+      if (Result.failed(value)) {
+        return value
+      }
+      if (value.value !== undefined && value.value.kind !== 'string') {
+        return Result.fail(start.reader, `FOR XML ${keyword.toUpperCase()} expects a string literal.`)
+      }
+      return Result.ok(value.reader,
+        value.value?.kind === 'string' ? value.value.value : fallback)
+    }
+
+const forXmlOption: Parser.t<ForXmlOption> =
+  C.first(
+    C.map(xmlStringArgument('root', 'root'), name => ({
+      kind: 'root' as const, name: name ?? 'root'
+    })),
+    C.map(
+      C.seq(
+        C.keyword('elements'),
+        C.maybe(C.first(C.keyword('xsinil'), C.keyword('absent')))
+      ),
+      ([ , directive ]) => ({
+        kind: 'elements' as const,
+        value: directive?.toLowerCase() === 'xsinil' ? 'xsinil' as const : 'elements' as const
+      })
+    ),
+    C.map(C.keywords('binary', 'base64'), () => ({ kind: 'binaryBase64' as const })),
+    C.map(C.keyword('type'), () => ({ kind: 'type' as const })),
+    C.map(C.keyword('xmldata'), () => ({
+      kind: 'unsupported' as const, value: 'xmldata' as const
+    })),
+    C.map(xmlStringArgument('xmlschema'), () => ({
+      kind: 'unsupported' as const, value: 'xmlschema' as const
+    }))
+  )
+
+const forXml: Parser.t<Ast.ForXml> =
+  reader => {
+    const parsed = C.seq(
+      C.keywords('for', 'xml'),
+      C.first(
+        C.map(xmlStringArgument('raw', 'row'), rowName => ({ mode: 'raw' as const, rowName })),
+        C.map(xmlStringArgument('path', 'row'), rowName => ({ mode: 'path' as const, rowName })),
+        C.map(C.keyword('auto'), () => ({ mode: 'auto' as const })),
+        C.map(C.keyword('explicit'), () => ({ mode: 'explicit' as const }))
+      ),
+      C.many0(C.map(C.seq(C.punct(','), forXmlOption), ([ , option ]) => option))
+    )(reader)
+    if (Result.failed(parsed)) {
+      return parsed
+    }
+    const [ , mode, options ] = parsed.value
+    if (new Set(options.map(option => option.kind)).size !== options.length) {
+      return Result.fail(reader, 'FOR XML options cannot be repeated.')
+    }
+    const root = options.find((option): option is ForXmlOption & { kind: 'root' } =>
+      option.kind === 'root')
+    const elements = options.find((option): option is ForXmlOption & { kind: 'elements' } =>
+      option.kind === 'elements')
+    const unsupported_ = options.find((option): option is ForXmlOption & { kind: 'unsupported' } =>
+      option.kind === 'unsupported')
+    return Result.ok(parsed.reader, {
+      mode: mode.mode,
+      ...'rowName' in mode && mode.rowName !== undefined ? { rowName: mode.rowName } : {},
+      ...root === undefined ? {} : { root: root.name },
+      elements: elements?.value ?? 'absent',
+      binaryBase64: options.some(option => option.kind === 'binaryBase64'),
+      type: options.some(option => option.kind === 'type'),
+      ...unsupported_ === undefined ? {} : { unsupported: unsupported_.value }
+    })
+  }
+
 const joinKind: Parser.t<'inner' | 'left' | 'right' | 'full' | 'cross' | 'crossApply' | 'outerApply'> =
   C.first(
     C.map(C.seq(C.keyword('cross'), C.keyword('apply')), () => 'crossApply' as const),
@@ -435,6 +521,33 @@ const cte: Parser.t<Ast.Cte> =
     })
   )
 
+const xmlNamespace: Parser.t<Ast.XmlNamespace> =
+  reader => {
+    const default_ = C.seq(C.keyword('default'), expression)(reader)
+    if (!Result.failed(default_)) {
+      const value = default_.value[1]
+      return value.kind === 'string' ? Result.ok(default_.reader, { uri: value.value }) :
+        Result.fail(reader, 'XML namespace URI must be a string literal.')
+    }
+    const prefixed = C.seq(expression, C.keyword('as'), C.anyIdentifier)(reader)
+    if (Result.failed(prefixed)) {
+      return prefixed
+    }
+    const value = prefixed.value[0]
+    return value.kind === 'string' ? Result.ok(prefixed.reader, {
+      uri: value.value, prefix: prefixed.value[2]
+    }) : Result.fail(reader, 'XML namespace URI must be a string literal.')
+  }
+
+const xmlNamespaces: Parser.t<readonly Ast.XmlNamespace[]> =
+  C.map(
+    C.seq(
+      C.keywords('with', 'xmlnamespaces'),
+      C.parens(C.sepBy1(xmlNamespace, C.punct(',')))
+    ),
+    ([ , values ]) => values
+  )
+
 const selectCore: Parser.t<Ast.Select> =
   reader => {
     const start = C.seq(
@@ -499,10 +612,14 @@ const unionKind: Parser.t<'union' | 'unionAll' | 'except' | 'intersect'> =
 /** Full SELECT parser — CTEs, set operations, ORDER BY with OFFSET/FETCH. */
 export const select: Parser.t<Ast.Select> =
   reader => {
+    const namespaces = C.maybe(xmlNamespaces)(reader)
+    if (Result.failed(namespaces)) {
+      return namespaces
+    }
     const ctes = C.maybe(C.map(
       C.seq(C.keyword('with'), C.sepBy1(cte, C.punct(','))),
       ([ , values ]) => values
-    ))(reader)
+    ))(namespaces.reader)
     if (Result.failed(ctes)) {
       return ctes
     }
@@ -565,12 +682,19 @@ export const select: Parser.t<Ast.Select> =
         offsetFetch = { offset: offsetFetch.offset, fetch: fetch.value[2] }
       }
     }
-    const json = C.maybe(forJson)(current)
-    if (Result.failed(json)) {
-      return json
+    const serialization = C.maybe(C.first(
+      C.map(forJson, value => ({ kind: 'json' as const, value })),
+      C.map(forXml, value => ({ kind: 'xml' as const, value }))
+    ))(current)
+    if (Result.failed(serialization)) {
+      return serialization
     }
-    current = json.reader
-    const withCtes = ctes.value === undefined ? core : { ...core, ctes: ctes.value }
+    current = serialization.reader
+    const withCtes = {
+      ...core,
+      ...ctes.value === undefined ? {} : { ctes: ctes.value },
+      ...namespaces.value === undefined ? {} : { xmlNamespaces: namespaces.value }
+    }
     return Result.ok(current, {
       ...withCtes,
       ...orderBy.value === undefined ? {} : { orderBy: orderBy.value },
@@ -578,7 +702,8 @@ export const select: Parser.t<Ast.Select> =
         offset: offsetFetch.offset,
         ...offsetFetch.fetch === undefined ? {} : { fetch: offsetFetch.fetch }
       },
-      ...json.value === undefined ? {} : { forJson: json.value }
+      ...serialization.value?.kind === 'json' ? { forJson: serialization.value.value } : {},
+      ...serialization.value?.kind === 'xml' ? { forXml: serialization.value.value } : {}
     })
   }
 

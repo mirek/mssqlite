@@ -131,6 +131,9 @@ because LOGIN7 password scrambling is not transport encryption.
   uint64 row count without removing completion tokens or changing
   `@@ROWCOUNT`. FOR JSON PATH/AUTO returns the SQL Server magic-named
   `nvarchar(max)` JSON column and streams large values with PLP framing.
+  FOR XML PATH/RAW uses the same magic-named `nvarchar(max)` PLP result for
+  text mode, while TYPE returns native XML TYPE_INFO and XML PLP values;
+  both paths cover payloads larger than one TDS packet.
   Persisted scalar and inline table-valued user functions execute through the
   same engine and expose their declared return/source metadata. Ordinary scalar
   projections carry the same exact TYPE_INFO (family, width, precision/scale,

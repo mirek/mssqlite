@@ -8,6 +8,7 @@ import * as Identity from './identity.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import * as Json from './json.ts'
+import * as Xml from './xml.ts'
 import { nextSequenceValue } from './sequence.ts'
 import { nextRowversionValue } from './rowversion.ts'
 import { MssqlError } from './error.ts'
@@ -677,6 +678,10 @@ export const registerFunctions =
       }
       return rows
     })
+    define('mssqlite_for_xml_row', Xml.row, {
+      varargs: true, useBigIntArguments: true
+    })
+    define('mssqlite_for_xml_document', Xml.document)
     define('mssqlite_cast_character', (value, name, width, _try) =>
       Character.cast(value, {
         name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ]

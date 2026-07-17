@@ -209,6 +209,27 @@ test('for json renders one nvarchar max result and validates projected names', (
   expect(() => sqlOf('SELECT 1 AS a FOR JSON AUTO')).toThrow(UnsupportedError)
 })
 
+test('for xml renders serializer calls with XML or nvarchar max metadata', () => {
+  const rendered = statement(parseStatement(`
+    SELECT id AS [@id], name FROM users ORDER BY id
+    FOR XML PATH('user'), ROOT('users'), TYPE
+  `))
+  expect(rendered.sql).toContain('mssqlite_for_xml_row')
+  expect(rendered.sql).toContain('mssqlite_for_xml_document')
+  expect(rendered.sql).toContain('AS ""')
+  expect(rendered.columns).toEqual([ {
+    name: '', type: { name: 'xml', args: [] }, nullable: true
+  } ])
+  const text = statement(parseStatement('SELECT 1 AS value FOR XML RAW'))
+  expect(text.columns).toEqual([ {
+    name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B',
+    type: { name: 'nvarchar', args: [ 'max' ] }, nullable: true
+  } ])
+  expect(() => sqlOf('SELECT 1 AS value FOR XML AUTO')).toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT 1 AS value FOR XML EXPLICIT')).toThrow(UnsupportedError)
+  expect(() => sqlOf('SELECT 1 AS value FOR XML RAW, XMLDATA')).toThrow(UnsupportedError)
+})
+
 test('union and ctes', () => {
   expect(sqlOf('SELECT 1 AS n UNION ALL SELECT 2 ORDER BY n'))
     .toBe('SELECT 1 AS "n" UNION ALL SELECT 2 ORDER BY "n"')

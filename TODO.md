@@ -4,16 +4,6 @@ Open work toward closer SQL Server compatibility. Each linked file is a
 self-contained implementation brief; delete it and its index entry when the
 work is complete.
 
-## Semantics and type fidelity
-
-- [Scalar result metadata](todo/scalar-result-metadata.md) — Emit exact TDS types and sizes for literals, casts, operators, and functions.
-- [String comparison padding](todo/string-comparison-padding.md) — Match SQL Server trailing-space comparison behavior across collations.
-- [Default text collation](todo/default-text-collation.md) — Apply default SQL text collation to expressions and set operations.
-
-## Query and DDL surface
-
-- [FOR XML](todo/for-xml.md) — Add common SQL Server XML serialization modes and wire metadata.
-
 ## Compatibility testing
 
 - [SQL Server differential suite](todo/sql-server-differential-suite.md) — Run one typed query corpus against mssqlite and SQL Server 2025.

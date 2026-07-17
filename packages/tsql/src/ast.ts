@@ -201,6 +201,23 @@ export type ForJson = {
   readonly withoutArrayWrapper: boolean
 }
 
+/** FOR XML output mode and serialization options. */
+export type ForXml = {
+  readonly mode: 'raw' | 'auto' | 'explicit' | 'path',
+  readonly rowName?: string,
+  readonly root?: string,
+  readonly elements: 'absent' | 'elements' | 'xsinil',
+  readonly binaryBase64: boolean,
+  readonly type: boolean,
+  readonly unsupported?: 'xmldata' | 'xmlschema'
+}
+
+/** One static WITH XMLNAMESPACES declaration. */
+export type XmlNamespace = {
+  readonly uri: string,
+  readonly prefix?: string
+}
+
 /** Common table expression. */
 export type Cte = {
   readonly name: string,
@@ -212,6 +229,7 @@ export type Cte = {
 export type Select = {
   readonly kind: 'select',
   readonly ctes?: readonly Cte[],
+  readonly xmlNamespaces?: readonly XmlNamespace[],
   readonly distinct: boolean,
   readonly top?: { readonly count: Expression, readonly percent: boolean, readonly withTies?: boolean },
   readonly items: readonly SelectItem[],
@@ -224,6 +242,7 @@ export type Select = {
   readonly offset?: Expression,
   readonly fetch?: Expression,
   readonly forJson?: ForJson,
+  readonly forXml?: ForXml,
   readonly union?: {
     readonly kind: 'union' | 'unionAll' | 'except' | 'intersect',
     readonly select: Select

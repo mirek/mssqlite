@@ -80,6 +80,12 @@ const items = executeBatch(s, `
 - **FOR JSON PATH / AUTO** — rendered queries return one SQL Server-named
   `nvarchar(max)` column. PATH supports dotted nesting and nested JSON
   subqueries; AUTO supports a single source or one root/child join level.
+- **FOR XML PATH / RAW** — engine serializers escape XML text and attributes,
+  encode binary values as base64, build nested PATH aliases, omit NULLs or
+  emit XSINIL elements, and attach declared namespaces and optional roots.
+  Typed nested fragments remain markup instead of being escaped. Empty inputs
+  return NULL; text output has the magic `nvarchar(max)` result name and TYPE
+  output exposes native XML metadata.
 - **Scalar JSON** — a recursive source-spanned parser backs one-argument
   ISJSON, JSON_VALUE and JSON_QUERY. Scalar values remain nvarchar lexical
   text, strings decode escapes, object/array scalar requests become NULL in
@@ -287,6 +293,7 @@ decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `substring`,
 `replicate`, `quotename`, `reverse`,
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), collation-aware LIKE
 with bracket classes/ranges/ESCAPE and error 506 validation, `translate`,
+FOR XML row/document serialization,
 character cast/storage coercion, Windows-1252 `ascii` / `char`,
 UTF-16-unit `len` / `unicode` / `nchar` and boundary transforms,
 type-aware `datalength`,

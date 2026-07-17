@@ -3039,6 +3039,124 @@ test('for json returns one nvarchar max value with nested path objects', () => {
   })
 })
 
+test('for xml path and raw serialize rows, directives, nesting and native metadata', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE engine_xml_people (
+      id int PRIMARY KEY, name nvarchar(20), note nvarchar(20), payload varbinary(4)
+    )
+    INSERT engine_xml_people VALUES
+      (1, N'a&<"é', NULL, 0x0102), (2, N'two', N'note', 0x0304)
+  `)
+  const path = rowsOf(executeBatch(s, `
+    SELECT id AS [@id], name, note
+    FROM engine_xml_people ORDER BY id
+    FOR XML PATH('person'), ROOT('people'), ELEMENTS XSINIL
+  `))
+  expect(path.rows).toEqual([ [
+    '<people xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+    '<person id="1"><name>a&amp;&lt;"é</name><note xsi:nil="true"/></person>' +
+    '<person id="2"><name>two</name><note>note</note></person></people>'
+  ] ])
+  expect(path.columns[0]).toMatchObject({
+    name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B',
+    typeInfo: { type: DataType.DataType.nvarchar, maxLength: 0xffff }
+  })
+  expect(rowsOf(executeBatch(s, `
+    SELECT id, name FROM engine_xml_people ORDER BY id FOR XML RAW
+  `)).rows).toEqual([ [ '<row id="1" name="a&amp;&lt;&quot;é"/><row id="2" name="two"/>' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id, name FROM engine_xml_people WHERE id = 1 FOR XML RAW('person'), ELEMENTS
+  `)).rows).toEqual([ [ '<person><id>1</id><name>a&amp;&lt;"é</name></person>' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT payload AS data FROM engine_xml_people WHERE id = 1
+    FOR XML PATH('row'), BINARY BASE64
+  `)).rows).toEqual([ [ '<row><data>AQI=</data></row>' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT payload AS data FROM engine_xml_people WHERE id = 1 FOR XML PATH('row')
+  `)).rows).toEqual([ [ '<row><data>AQI=</data></row>' ] ])
+  expect(() => executeBatch(s, `
+    SELECT payload AS data FROM engine_xml_people FOR XML RAW
+  `)).toThrowError(expect.objectContaining({ number: 6829 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT payload AS data FROM engine_xml_people WHERE id = 1 FOR XML RAW, BINARY BASE64
+  `)).rows).toEqual([ [ '<row data="AQI="/>' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id AS [person/@id], name AS [person/name]
+    FROM engine_xml_people WHERE id = 1 FOR XML PATH('row')
+  `)).rows).toEqual([ [ '<row><person id="1"><name>a&amp;&lt;"é</name></person></row>' ] ])
+  expect(rowsOf(executeBatch(s, `
+    WITH XMLNAMESPACES ('urn:people' AS p, DEFAULT 'urn:default')
+    SELECT 1 AS [@p:id], N'value' AS [p:name]
+    FOR XML PATH('p:person'), ROOT('p:people')
+  `)).rows).toEqual([ [
+    '<p:people xmlns="urn:default" xmlns:p="urn:people">' +
+    '<p:person p:id="1"><p:name>value</p:name></p:person></p:people>'
+  ] ])
+})
+
+test('for xml handles empty, joined, nested TYPE and large results', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE engine_xml_parent (id int PRIMARY KEY)
+    CREATE TABLE engine_xml_child (parent_id int, value nvarchar(20))
+    INSERT engine_xml_parent VALUES (1), (2)
+    INSERT engine_xml_child VALUES (1, N'a'), (1, N'b')
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM engine_xml_parent WHERE 1 = 0 FOR XML PATH('row')
+  `)).rows).toEqual([ [ null ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM engine_xml_parent WHERE 1 = 0 FOR XML PATH('row'), ROOT('root')
+  `)).rows).toEqual([ [ null ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT p.id AS [@id], c.value
+    FROM engine_xml_parent p LEFT JOIN engine_xml_child c ON c.parent_id = p.id
+    ORDER BY p.id, c.value FOR XML PATH('row')
+  `)).rows).toEqual([ [
+    '<row id="1"><value>a</value></row><row id="1"><value>b</value></row><row id="2"/>'
+  ] ])
+  const nested = rowsOf(executeBatch(s, `
+    SELECT p.id AS [@id], (
+      SELECT c.value AS [@value] FROM engine_xml_child c
+      WHERE c.parent_id = p.id ORDER BY c.value FOR XML PATH('child'), TYPE
+    ) AS children
+    FROM engine_xml_parent p ORDER BY p.id FOR XML PATH('parent')
+  `))
+  expect(nested.rows).toEqual([ [
+    '<parent id="1"><children><child value="a"/><child value="b"/></children></parent>' +
+    '<parent id="2"/>'
+  ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT (SELECT 1 AS [@id] FOR XML PATH('child')) AS children
+    FOR XML PATH('parent')
+  `)).rows).toEqual([ [
+    '<parent><children>&lt;child id="1"/&gt;</children></parent>'
+  ] ])
+  const typed = rowsOf(executeBatch(s, 'SELECT 1 AS value FOR XML PATH(\'row\'), TYPE'))
+  expect(typed.rows).toEqual([ [ '<row><value>1</value></row>' ] ])
+  expect(typed.columns[0]).toMatchObject({
+    name: '', typeInfo: { type: DataType.DataType.xml }
+  })
+  const large = rowsOf(executeBatch(s, `
+    SELECT value AS [text()] FROM GENERATE_SERIES(1, 5000)
+    FOR XML PATH('value'), TYPE
+  `))
+  expect(String(large.rows[0]?.[0]).length).toBeGreaterThan(8192)
+})
+
+test('for xml unsupported modes reach compatibility errors after parsing', () => {
+  const s = open()
+  for (const sql of [
+    'SELECT 1 AS value FOR XML AUTO',
+    'SELECT 1 AS value FOR XML EXPLICIT',
+    'SELECT 1 AS value FOR XML RAW, XMLDATA'
+  ]) {
+    expect(() => executeBatch(s, sql))
+      .toThrowError(expect.objectContaining({ number: 40000 }) as Error)
+  }
+})
+
 test('JSON scalar functions preserve SQL Server values, paths and metadata', () => {
   const s = open()
   const values = rowsOf(executeBatch(s, `
