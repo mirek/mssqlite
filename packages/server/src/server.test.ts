@@ -533,6 +533,20 @@ test('default Unicode collation and padding govern relational operations over te
   await query('INSERT wire_default_unique VALUES (1, N\'É\'), (2, N\'a\')')
   await expect(query('INSERT wire_default_unique VALUES (3, N\'é   \')'))
     .rejects.toMatchObject({ number: 2627 })
+
+  await query(`
+    CREATE TABLE wire_padded_parent (code nvarchar(10) UNIQUE)
+    CREATE TABLE wire_padded_child (
+      code nvarchar(10) REFERENCES wire_padded_parent(code) ON DELETE CASCADE
+    )
+    INSERT wire_padded_parent VALUES (N'É')
+    INSERT wire_padded_child VALUES (N'é   ')
+  `)
+  await expect(query('INSERT wire_padded_child VALUES (N\'E\')'))
+    .rejects.toMatchObject({ number: 547 })
+  await query('DELETE wire_padded_parent WHERE code = N\'É\'')
+  expect((await query('SELECT COUNT(*) AS count FROM wire_padded_child')).rows)
+    .toEqual([ { count: 0 } ])
 })
 
 test('NULL-containing unique keys and error origins cross tedious', async () => {

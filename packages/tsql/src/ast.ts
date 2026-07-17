@@ -371,6 +371,8 @@ export type Statement =
   | {
       readonly kind: 'update',
       readonly target: QualifiedName,
+      /** Runtime target metadata populated before storage-sensitive rendering. */
+      readonly targetColumns?: readonly SourceColumn[],
       readonly top?: Expression,
       readonly set: readonly Assignment[],
       readonly output?: Output,
@@ -380,6 +382,8 @@ export type Statement =
   | {
       readonly kind: 'delete',
       readonly target: QualifiedName,
+      /** Runtime target metadata populated before storage-sensitive rendering. */
+      readonly targetColumns?: readonly SourceColumn[],
       readonly top?: Expression,
       readonly output?: Output,
       readonly from?: TableSource,
