@@ -156,7 +156,10 @@ const items = executeBatch(s, `
   canonical fallback for literals and default-collated columns. The same
   Unicode case-insensitive/accent-sensitive, U+0020-trimmed key drives scalar
   comparisons, joins, grouping, distinctness, set operators, ordering, and
-  index lookup while original text remains available for result rows.
+  index lookup while original text remains available for result rows. Text
+  foreign keys use durable SQLite triggers for padded child matching and
+  NO ACTION/CASCADE/SET NULL/SET DEFAULT parent operations; DML target filters
+  receive the same catalog collation metadata as SELECT sources.
 - **Databases** — CREATE/DROP DATABASE owns an independent in-memory store or
   deterministic sibling file; ALTER DATABASE supports MODIFY NAME and
   READ_ONLY/READ_WRITE. USE switches the session's primary handle. Three-part

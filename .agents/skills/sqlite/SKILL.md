@@ -159,7 +159,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   BIN2 behavior. Accent-insensitive keys use Unicode NFD with combining marks
   removed; only trailing U+0020 spaces are ignored as SQL comparison padding.
   The original value is projected from grouped/set wrappers, so normalization
-  does not leak into client rows. LIKE remains on its dedicated matcher.
+  does not leak into client rows. LIKE remains on its dedicated matcher. Native
+  SQLite foreign keys cannot call a UDF, so text-bearing foreign keys omit the
+  native clause and install persistent triggers for child validation and parent
+  NO ACTION/CASCADE/SET NULL/SET DEFAULT behavior over the same key.
 - SQLite UNIQUE indexes treat NULLs as distinct, unlike SQL Server. mssqlite
   expands each nullable logical key `k` to `(k IS NULL), ifnull(k, 0)` in a
   unique expression index. The flag separates real values from the arbitrary

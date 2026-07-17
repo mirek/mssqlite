@@ -31,6 +31,7 @@ import positionalRows from './positional-rows.ts'
 import * as SystemProcedures from './system-procedures.ts'
 import * as Databases from './database.ts'
 import { localize } from './database-name.ts'
+import { installTextForeignKeys, prepareTextForeignKeyDrop } from './foreign-key.ts'
 import {
   flushRowversion,
   installRowversionTriggers,
@@ -284,6 +285,7 @@ const targetColumns =
   (session: Session, name: Ast.QualifiedName): readonly {
     readonly name: string,
     readonly type?: Ast.ColumnDefinition['type'],
+    readonly collation?: string,
     readonly computed?: boolean,
     readonly identity?: boolean,
     readonly rowversion?: boolean
@@ -295,6 +297,7 @@ const targetColumns =
       return variable.columns.map(column => ({
         name: column.name,
         type: column.type,
+        ...column.collate === undefined ? {} : { collation: column.collate },
         ...column.computed === undefined ? {} : { computed: true },
         ...column.identity === undefined ? {} : { identity: true },
         ...isRowversionType(column.type) ? { rowversion: true } : {}
@@ -310,6 +313,7 @@ const targetColumns =
       return {
         name: column.name,
         ...type === undefined ? {} : { type },
+        ...column.collation_name === null ? {} : { collation: column.collation_name },
         ...column.is_computed === 0 ? {} : { computed: true },
         ...column.is_identity === 0 ? {} : { identity: true },
         ...column.system_type_id === 189 ? { rowversion: true } : {}
@@ -516,6 +520,11 @@ const resolveStoredDml =
       })
       return {
         ...statement,
+        targetColumns: columns.map(column => ({
+          name: column.name,
+          ...column.type === undefined ? {} : { type: column.type },
+          ...column.collation === undefined ? {} : { collation: column.collation }
+        })),
         set: rowversion === undefined ? set : [
           ...set,
           {
@@ -524,6 +533,16 @@ const resolveStoredDml =
             value: nextRowversionExpression()
           }
         ]
+      }
+    }
+    if (statement.kind === 'delete') {
+      return {
+        ...statement,
+        targetColumns: targetColumns(session, statement.target).map(column => ({
+          name: column.name,
+          ...column.type === undefined ? {} : { type: column.type },
+          ...column.collation === undefined ? {} : { collation: column.collation }
+        }))
       }
     }
     return statement
@@ -1417,6 +1436,7 @@ const executeStatementInner =
         Catalog.createTable(
           catalogDatabase(session, resolved.name), resolved,
           expression => Transpile.scalar(expression).sql)
+        installTextForeignKeys(catalogDatabase(session, resolved.name), resolved)
         Identity.reloadIdentities(Databases.stateForName(session, resolved.name))
         const rowversion = resolved.columns.find(column => isRowversionType(column.type))
         if (rowversion !== undefined) {
@@ -1425,6 +1445,8 @@ const executeStatementInner =
         return undefined
       }
       case 'dropTable':
+        prepareTextForeignKeyDrop(
+          catalogDatabase(session, statement.names[0] ?? []), statement.names)
         session.db.exec(Transpile.statement(statement).sql)
         for (const name of statement.names) {
           const target = procedureKey(name)

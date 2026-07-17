@@ -480,9 +480,12 @@ test('default text collation governs scalar and relational comparison keys', () 
       CASE WHEN 'a' < 'b   ' THEN 1 ELSE 0 END AS padded_order,
       CASE WHEN 'a' COLLATE Latin1_General_100_CS_AS = 'A' THEN 1 ELSE 0 END AS case_sensitive,
       CASE WHEN 'a ' COLLATE Latin1_General_100_BIN2 = 'a' THEN 1 ELSE 0 END AS binary_padding,
-      CASE WHEN N'É' COLLATE Latin1_General_100_CI_AI = N'E' THEN 1 ELSE 0 END AS accent_folded
+      CASE WHEN N'É' COLLATE Latin1_General_100_CI_AI = N'E' THEN 1 ELSE 0 END AS accent_folded,
+      CASE WHEN N'é' COLLATE Latin1_General_100_CS_AI = N'e' THEN 1 ELSE 0 END AS cs_accent_folded,
+      CASE WHEN CAST('a' AS char(4)) = CAST('a ' AS varchar(8)) THEN 1 ELSE 0 END AS char_varchar,
+      CASE WHEN CAST(N'' AS nchar(3)) = CAST(N' ' AS nvarchar(5)) THEN 1 ELSE 0 END AS nchar_nvarchar
   `))
-  expect(scalar.rows).toEqual([ [ 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1 ] ])
+  expect(scalar.rows).toEqual([ [ 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 ] ])
 
   executeBatch(s, `
     CREATE TABLE default_collation_values (id int PRIMARY KEY, value nvarchar(10))
@@ -563,6 +566,103 @@ test('default text collation governs scalar and relational comparison keys', () 
     'mssqlite_collation_key(\'é\', \'sql_latin1_general_cp1_ci_as\')'
   ).all() as { detail: string }[]
   expect(plan.some(row => row.detail.includes('ix_default_order'))).toBe(true)
+})
+
+test('text foreign keys compare parent collation keys and preserve referential actions', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE padded_fk_parent (
+      tenant int,
+      code nvarchar(10) COLLATE Latin1_General_100_CI_AI,
+      CONSTRAINT uq_padded_fk_parent UNIQUE (tenant, code)
+    )
+    CREATE TABLE padded_fk_child (
+      id int PRIMARY KEY,
+      tenant int,
+      code nvarchar(10) COLLATE Latin1_General_100_CI_AI,
+      CONSTRAINT fk_padded_text FOREIGN KEY (tenant, code)
+        REFERENCES padded_fk_parent (tenant, code)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+    INSERT padded_fk_parent VALUES (1, N'café')
+    INSERT padded_fk_child VALUES (1, 1, N'CAFE   ')
+  `)
+  expect(() => executeBatch(s, 'INSERT padded_fk_child VALUES (2, 2, N\'café\')'))
+    .toThrowError(expect.objectContaining({ number: 547 }) as Error)
+  executeBatch(s, 'UPDATE padded_fk_parent SET code = N\'next\' WHERE tenant = 1')
+  expect(rowsOf(executeBatch(s, 'SELECT tenant, code FROM padded_fk_child')).rows)
+    .toEqual([ [ 1, 'next' ] ])
+  executeBatch(s, 'DELETE padded_fk_parent WHERE tenant = 1')
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) FROM padded_fk_child')).rows).toEqual([ [ 0 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE padded_fk_exact (
+      code char(4) COLLATE Latin1_General_100_CS_AS UNIQUE
+    )
+    CREATE TABLE padded_fk_restrict (
+      code char(4) COLLATE Latin1_General_100_CS_AS REFERENCES padded_fk_exact(code)
+    )
+    INSERT padded_fk_exact VALUES ('a')
+    INSERT padded_fk_restrict VALUES (N'a   ')
+  `)
+  expect(() => executeBatch(s, 'INSERT padded_fk_restrict VALUES (\'A\')'))
+    .toThrowError(expect.objectContaining({ number: 547 }) as Error)
+  expect(() => executeBatch(s, 'DELETE padded_fk_exact WHERE code = \'a\''))
+    .toThrowError(expect.objectContaining({ number: 547 }) as Error)
+  expect(() => executeBatch(s, 'DROP TABLE padded_fk_exact'))
+    .toThrowError(expect.objectContaining({ number: 3726 }) as Error)
+  executeBatch(s, 'DROP TABLE padded_fk_restrict')
+  executeBatch(s, 'DROP TABLE padded_fk_exact')
+
+  executeBatch(s, `
+    CREATE TABLE padded_fk_defaults (code nvarchar(10) UNIQUE)
+    CREATE TABLE padded_fk_set_default (
+      code nvarchar(10) DEFAULT N'keep'
+        REFERENCES padded_fk_defaults(code) ON DELETE SET DEFAULT
+    )
+    INSERT padded_fk_defaults VALUES (N'keep'), (N'drop')
+    INSERT padded_fk_set_default VALUES (N'drop   ')
+    DELETE padded_fk_defaults WHERE code = N'drop'
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT code FROM padded_fk_set_default')).rows)
+    .toEqual([ [ 'keep' ] ])
+
+  executeBatch(s, `
+    CREATE TABLE padded_fk_nullable_parent (code nvarchar(10) UNIQUE)
+    CREATE TABLE padded_fk_set_null (
+      code nvarchar(10) REFERENCES padded_fk_nullable_parent(code) ON UPDATE SET NULL
+    )
+    INSERT padded_fk_nullable_parent VALUES (N'old')
+    INSERT padded_fk_set_null VALUES (N'OLD   ')
+    UPDATE padded_fk_nullable_parent SET code = N'new' WHERE code = N'old '
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT code FROM padded_fk_set_null')).rows)
+    .toEqual([ [ null ] ])
+})
+
+test('text foreign-key triggers survive database restart', () => {
+  const path = join(tmpdir(), `mssqlite-text-foreign-key-${randomUUID()}.db`)
+  try {
+    const firstServer = server({ path })
+    executeBatch(session(firstServer), `
+      CREATE TABLE persistent_fk_parent (code nvarchar(10) UNIQUE)
+      CREATE TABLE persistent_fk_child (
+        code nvarchar(10) REFERENCES persistent_fk_parent(code) ON DELETE CASCADE
+      )
+      INSERT persistent_fk_parent VALUES (N'a')
+      INSERT persistent_fk_child VALUES (N'A   ')
+    `)
+    closeServer(firstServer)
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    executeBatch(second, 'DELETE persistent_fk_parent WHERE code = N\'a \'')
+    expect(rowsOf(executeBatch(second, 'SELECT COUNT(*) FROM persistent_fk_child')).rows)
+      .toEqual([ [ 0 ] ])
+    closeServer(secondServer)
+  } finally {
+    rmSync(path, { force: true })
+  }
 })
 
 test('unique constraints and indexes treat NULL keys as duplicate values', () => {

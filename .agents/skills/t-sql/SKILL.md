@@ -148,6 +148,9 @@ The language pipeline lives in three packages:
   accent sensitivity. Other Unicode space characters remain significant.
   LIKE is deliberately separate: a trailing blank in the pattern is
   significant, while trailing source blanks may match a shorter pattern.
+  UPDATE/DELETE targets carry runtime type and collation metadata so their
+  predicates use the same rule. Text foreign keys compare the referenced
+  column's key for child validation and every referential action.
 - CREATE [OR ALTER] PROC[EDURE] owns the rest of the batch as its body
   (MSSQL requires it to be alone in a batch); `parse()` patches the
   statement's `definition` with the trimmed batch source for

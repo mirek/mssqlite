@@ -131,7 +131,9 @@ rendered statement reports the variables it binds.
   effective or default `SQL_Latin1_General_CP1_CI_AS` collation. The key folds
   Unicode case, applies the declared accent/BIN2 sensitivity, and removes only
   comparison-padding U+0020 suffixes; LIKE keeps its asymmetric trailing-blank
-  rule and never uses the padded-comparison key.
+  rule and never uses the padded-comparison key. Runtime metadata also supplies
+  UPDATE/DELETE target types. Text-bearing foreign keys omit SQLite's native
+  clause so the engine can install key-aware enforcement/action triggers.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,
   or the `mssqlite_add` UDF for dynamic dispatch when types are unknown.
 - **IDENTITY** — renders as an ordinary typed, non-null SQLite column;

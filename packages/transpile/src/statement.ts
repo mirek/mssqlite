@@ -761,7 +761,13 @@ const insert =
     }
   }
 
-const update =
+const targetTypeSource =
+  (target: Ast.QualifiedName, columns: readonly Ast.SourceColumn[] | undefined): Ast.TableSource => ({
+    kind: 'table', name: target,
+    ...columns === undefined ? {} : { columns }
+  })
+
+const updateCore =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'update' }): string => {
     if (statement_.top !== undefined && statement_.from !== undefined) {
       return unsupported('UPDATE TOP with a FROM clause is not supported.')
@@ -808,6 +814,11 @@ const update =
     return `UPDATE ${target} SET ${assignments}${from}${where}${returning}`
   }
 
+const update =
+  (ctx: Context.t, statement_: Ast.Statement & { kind: 'update' }): string =>
+    Context.withSourceTypes(ctx, targetTypeSource(statement_.target, statement_.targetColumns),
+      () => updateCore(ctx, statement_))
+
 /** @returns the plain-table leaves of a join tree. */
 const tableLeaves =
   (source: Ast.TableSource): readonly (Ast.TableSource & { kind: 'table' })[] =>
@@ -817,7 +828,7 @@ const tableLeaves =
         [ ...tableLeaves(source.left), ...tableLeaves(source.right) ] :
         []
 
-const delete_ =
+const deleteCore =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'delete' }): string => {
     if (statement_.top !== undefined && statement_.from !== undefined) {
       return unsupported('DELETE TOP with a second FROM clause is not supported.')
@@ -850,6 +861,11 @@ const delete_ =
     return `DELETE FROM ${target}${where}${returning}`
   }
 
+const delete_ =
+  (ctx: Context.t, statement_: Ast.Statement & { kind: 'delete' }): string =>
+    Context.withSourceTypes(ctx, targetTypeSource(statement_.target, statement_.targetColumns),
+      () => deleteCore(ctx, statement_))
+
 const referentialAction =
   (action: Ast.ReferentialAction): string =>
     ({
@@ -858,6 +874,10 @@ const referentialAction =
       setNull: 'SET NULL',
       setDefault: 'SET DEFAULT'
     })[action]
+
+const textType =
+  (type: TypeName.t | undefined): boolean =>
+    type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '')
 
 const referencesClause =
   (references: NonNullable<Ast.ColumnDefinition['references']>): string => {
@@ -931,14 +951,18 @@ const columnDefinition =
     if (column.check !== undefined) {
       parts.push(`CHECK (${expression(ctx, column.check)})`)
     }
-    if (column.references !== undefined) {
+    if (column.references !== undefined && !textType(column.type)) {
       parts.push(referencesClause(column.references))
     }
     return parts.join(' ')
   }
 
 const tableConstraint =
-  (ctx: Context.t, constraint: Ast.TableConstraint): string => {
+  (
+    ctx: Context.t,
+    constraint: Ast.TableConstraint,
+    columns: ReadonlyMap<string, Ast.ColumnDefinition>
+  ): string | undefined => {
     const name = constraint.name === undefined ?
       '' :
       `CONSTRAINT ${Quote.identifier(constraint.name)} `
@@ -953,6 +977,9 @@ const tableConstraint =
           .map(column => `${Quote.identifier(column.name)}${column.descending ? ' DESC' : ''}`)
           .join(', ')})`
       case 'foreignKey':
+        if (constraint.columns.some(column => textType(columns.get(column.toLowerCase())?.type))) {
+          return undefined
+        }
         return `${name}FOREIGN KEY (${constraint.columns.map(Quote.identifier).join(', ')}) ${referencesClause(constraint.references)}`
       case 'check':
         return `${name}CHECK (${expression(ctx, constraint.expression)})`
@@ -970,12 +997,13 @@ const nullSafeKey =
 const indexKey =
   (rendered: string, type: TypeName.t | undefined, collation: string | undefined): string =>
     collation !== undefined ||
-    (type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '')) ?
+    textType(type) ?
       Collation.expressionKey(rendered, collation ?? Collation.default_) :
       type?.name === 'datetimeoffset' ? DateTimeOffset.key(rendered) : rendered
 
 const createTable =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createTable' }): string => {
+    const byName = new Map(statement_.columns.map(column => [ column.name.toLowerCase(), column ]))
     const members = [
       ...statement_.columns.map(column => columnDefinition(
         ctx,
@@ -988,10 +1016,9 @@ const createTable =
         }))
       )),
       ...statement_.constraints
-        .map(constraint => tableConstraint(ctx, constraint))
+        .flatMap(constraint => tableConstraint(ctx, constraint, byName) ?? [])
     ]
     const table = Quote.objectName(statement_.name)
-    const byName = new Map(statement_.columns.map(column => [ column.name.toLowerCase(), column ]))
     const uniqueColumns: readonly (readonly { readonly name: string, readonly descending?: boolean }[])[] = [
       ...statement_.columns.filter(column => column.unique === true).map(column => [ column ]),
       ...statement_.constraints.filter(constraint => constraint.kind === 'unique')

@@ -454,7 +454,10 @@ the engine:
   into predicate and ORDER BY rendering. BINARY/NOCASE provide a baseline,
   while `mssqlite_collation_key` applies the supported case/accent/BIN2 matrix
   consistently to equality/range/IN, joins, ordering/grouping, DISTINCT,
-  UNION/EXCEPT/INTERSECT, uniqueness, and expression indexes. Missing names use
+  UNION/EXCEPT/INTERSECT, uniqueness, foreign keys, and expression indexes. Text
+  foreign keys use persistent validation/action triggers because SQLite's
+  native comparator cannot invoke the key; parent DELETE/UPDATE actions and
+  child INSERT/UPDATE checks share the referenced column's collation. Missing names use
   `SQL_Latin1_General_CP1_CI_AS`; keys fold Unicode case and trim only trailing
   U+0020 comparison padding. LIKE uses the same sensitivity matrix through its
   separate matcher because SQL Server's trailing-blank rule is asymmetric.
