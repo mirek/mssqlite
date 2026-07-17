@@ -234,7 +234,8 @@ engine consumers still receive the existing `Rows.rows` array shape.
 decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `substring`, `left`, `right`,
 `replicate`, `quotename`, `reverse`,
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), `translate`,
-character cast/storage coercion, type-aware `datalength`,
+character cast/storage coercion, Windows-1252 `ascii` / `char`,
+type-aware `datalength`,
 `round` (negative digits, truncate flag), `isnumeric`,
 `isdate`, `name`, `dateadd`/`datediff`/`datepart`/`datename`/`eomonth`
 (civil-calendar math with MSSQL boundary semantics, including offset-preserving

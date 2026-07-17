@@ -121,6 +121,8 @@ rendered statement reports the variables it binds.
   `substring`, `left`, `right`, `replicate`, `quotename`, `reverse`, `stuff`, `patindex`,
   `round`, `rand`, `datalength`, `isnumeric`, `isdate`,
   `scope_identity`, `ident_current`, `db_name`, `suser_sname`, `serverproperty`, …).
+  ASCII and CHAR route through Windows-1252 UDFs instead of SQLite's Unicode
+  `unicode()` and `char()` primitives.
   See the engine package for the UDF implementations.
 - **CAST/CONVERT** — affinity casts, plus date/time renderings
   (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles

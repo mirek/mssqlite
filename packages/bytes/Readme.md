@@ -17,6 +17,8 @@ where the protocol needs them (e.g. collation sort ids).
 - `Decode` — decoders and combinators.
 - `Encode` — pure builders producing `Uint8Array` chunks.
 - `Ucs2` — UTF-16LE string encode/decode.
+- `Cp1252` — Windows-1252 encode/decode used by SQL_Latin1_General_CP1
+  varchar/char values, including printable extension bytes and C1 slots.
 - `Hex` — hex string to bytes and back, whitespace tolerant (handy for tests
   against annotated protocol dumps).
 

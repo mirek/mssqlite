@@ -301,7 +301,8 @@ the engine:
   128-character contracts.
   Character coercion UDFs encode varchar/char as Windows-1252 and
   nvarchar/nchar as UTF-16LE, so truncation, padding, overflow checks, and
-  DATALENGTH share the same byte semantics.
+  DATALENGTH share the same byte semantics. ASCII reads the first encoded
+  byte; CHAR decodes one byte and returns varchar(1).
 - **Catalog functions become subqueries** — `OBJECT_ID('t')` →
   `(SELECT object_id FROM "sys.objects" WHERE …)`; UDFs cannot re-enter
   the database connection.
@@ -444,7 +445,8 @@ the engine:
   cancellation; FIN and socket close abort without emitting late output.
 - **varchar/char/text use Windows-1252** (`@mssqlite/bytes` `Cp1252`), matching
   the advertised `SQL_Latin1_General_CP1` collation — `€`, em dash and smart
-  quotes round-trip instead of corrupting as ISO-8859-1.
+  quotes round-trip instead of corrupting as ISO-8859-1. Undefined extension
+  positions round-trip as their C1 controls.
 
 ## Known limitations (v1)
 
