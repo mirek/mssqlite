@@ -1767,6 +1767,110 @@ test('procedures reload from sys.sql_modules on server restart', () => {
   }
 })
 
+test('system metadata procedures expose SQL Server-shaped result sets', () => {
+  const s = open()
+  s.userName = 'sa'
+  s.hostName = 'engine-host'
+  executeBatch(s, `
+    CREATE TABLE dbo.system_items (
+      id INT IDENTITY(3,2) PRIMARY KEY,
+      title NVARCHAR(40) NOT NULL,
+      amount DECIMAL(10,2) NULL
+    )
+    CREATE INDEX ix_system_title ON system_items (title)
+    INSERT INTO system_items (title, amount) VALUES (N'one', 1.25), (N'two', NULL)
+  `)
+  executeBatch(s, `
+    CREATE PROCEDURE dbo.system_definition @value INT AS
+      SELECT @value AS value
+  `)
+
+  const summary = rowsOf(executeBatch(s, 'EXEC sys.sp_help'))
+  expect(summary.columns.map(column => column.name)).toEqual([ 'Name', 'Owner', 'Object_type' ])
+  expect(summary.rows).toContainEqual([ 'system_items', 'dbo', 'user table' ])
+
+  const help = executeBatch(s, 'EXEC SP_HELP N\'dbo.system_items\'')
+    .filter((item): item is Rows => item.kind === 'rows')
+  expect(help.map(result => result.columns[0]?.name)).toEqual([
+    'Name', 'Column_name', 'Identity', 'index_name', 'constraint_type'
+  ])
+  expect(help[1]?.rows.map(row => row[0])).toEqual([ 'id', 'title', 'amount' ])
+  expect(help[2]?.rows).toEqual([ [ 'id', '3', '2', 0 ] ])
+
+  const text = rowsOf(executeBatch(s, 'EXEC sp_helptext N\'dbo.system_definition\''))
+  expect(text.columns[0]?.name).toBe('Text')
+  expect(text.rows.map(row => row[0]).join('')).toContain('CREATE PROCEDURE')
+
+  const columns = rowsOf(executeBatch(s, `
+    EXEC sp_columns @table_name = N'system_%', @table_owner = N'dbo', @ODBCVer = 3
+  `))
+  expect(columns.columns).toHaveLength(19)
+  expect(columns.columns.map(column => column.name)).toContain('SS_DATA_TYPE')
+  expect(columns.rows.map(row => [ row[3], row[5], row[10], row[17] ])).toEqual([
+    [ 'id', 'int', 0, 'NO' ],
+    [ 'title', 'nvarchar', 0, 'NO' ],
+    [ 'amount', 'decimal', 1, 'YES' ]
+  ])
+
+  const tables = rowsOf(executeBatch(s, `
+    EXEC sp_tables @table_name = N'system_%', @table_type = N'''TABLE'''
+  `))
+  expect(tables.columns.map(column => column.name)).toEqual([
+    'TABLE_QUALIFIER', 'TABLE_OWNER', 'TABLE_NAME', 'TABLE_TYPE', 'REMARKS'
+  ])
+  expect(tables.rows).toEqual([ [ 'master', 'dbo', 'system_items', 'TABLE', null ] ])
+
+  const who = rowsOf(executeBatch(s, 'EXEC sp_who N\'ACTIVE\''))
+  expect(who.columns.map(column => column.name)).toEqual([
+    'spid', 'ecid', 'status', 'loginame', 'hostname', 'blk', 'dbname', 'cmd', 'request_id'
+  ])
+  expect(who.rows).toEqual([ [
+    s.spid, 0, 'running', 'sa', 'engine-host', '0', 'master', 'AWAITING COMMAND', 0
+  ] ])
+
+  const databases = executeBatch(s, 'EXEC sp_helpdb N\'master\'')
+    .filter((item): item is Rows => item.kind === 'rows')
+  expect(databases).toHaveLength(2)
+  expect(databases[0]?.rows[0]?.[0]).toBe('master')
+  expect(databases[1]?.columns.map(column => column.name)).toContain('filename')
+
+  const space = rowsOf(executeBatch(s, 'EXEC sp_spaceused N\'dbo.system_items\''))
+  expect(space.columns.map(column => column.name)).toEqual([
+    'name', 'rows', 'reserved', 'data', 'index_size', 'unused'
+  ])
+  expect(space.rows[0]?.slice(0, 2)).toEqual([ 'system_items', '2' ])
+})
+
+test('sp_rename updates SQLite objects and every catalog identity atomically', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE dbo.rename_source (id INT, old_name NVARCHAR(20))
+    CREATE INDEX ix_rename_old ON rename_source (old_name)
+    INSERT INTO rename_source VALUES (1, N'value')
+  `)
+
+  const column = executeBatch(s,
+    'EXEC sp_rename N\'dbo.rename_source.old_name\', N\'new_name\', N\'COLUMN\'')
+  expect(column).toContainEqual(expect.objectContaining({ kind: 'message' }))
+  executeBatch(s,
+    'EXEC sp_rename N\'dbo.rename_source.ix_rename_old\', N\'ix_rename_new\', N\'INDEX\'')
+  executeBatch(s,
+    'EXEC sp_rename N\'dbo.rename_source\', N\'rename_target\', N\'OBJECT\'')
+
+  expect(rowsOf(executeBatch(s, 'SELECT id, new_name FROM rename_target')).rows)
+    .toEqual([ [ 1, 'value' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT o.name, c.name, i.name
+    FROM sys.objects o
+    JOIN sys.columns c ON c.object_id = o.object_id
+    JOIN sys.indexes i ON i.object_id = o.object_id
+    WHERE o.name = N'rename_target' AND c.name = N'new_name' AND i.name IS NOT NULL
+  `)).rows).toEqual([ [ 'rename_target', 'new_name', 'ix_rename_new' ] ])
+  expect(() => executeBatch(s,
+    'EXEC sp_rename N\'dbo.missing\', N\'still_missing\', N\'OBJECT\''))
+    .toThrowError(expect.objectContaining({ number: 15248 }) as Error)
+})
+
 test('scalar functions persist, alter, recurse and isolate local scope', () => {
   const s = open()
   executeBatch(s, `

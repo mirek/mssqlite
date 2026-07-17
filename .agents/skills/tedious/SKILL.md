@@ -46,6 +46,7 @@ new Connection({
 |---|---|---|
 | `execSql(request)` without params | SQL batch (0x01) | `engine.executeBatch` |
 | `execSql(request)` with params | RPC `sp_executesql` (by name) | `engine.executeSql` |
+| `callProcedure(request)` | RPC by procedure name | system/user procedure dispatch, result sets + return status |
 | `prepare(request)` / `execute(request, params)` | RPC `sp_prepare` (0xFFFF + id 11) / `sp_execute` (12) | handle map in `server/connection.ts` |
 | `beginTransaction/commitTransaction/rollbackTransaction` | Transaction manager (0x0E) types 5/7/8 | engine transactions + ENVCHANGE 8/9/10 |
 | `cancel()` | Attention (0x06) | DONE with DONE_ATTN |
@@ -113,6 +114,11 @@ connection.execSql(request)
 - User-function e2e tests should cover a scalar declared return type (BIGINT
   arrives as IntN(8) and a string) and an inline TVF used as an ordinary FROM
   source. CREATE FUNCTION definitions must be sent in their own request/batch.
+- System-procedure e2e tests should use `Request.callProcedure()` with named
+  parameters and collect every `columnMetadata`/`row` group: `sp_help`,
+  `sp_helpdb`, and `sp_spaceused` can emit multiple result sets. Procedure names
+  and `sys.` aliases are case-insensitive. Test `sp_rename` by querying the
+  renamed SQLite object afterward, not only by inspecting its return status.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,

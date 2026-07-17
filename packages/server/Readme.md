@@ -86,8 +86,10 @@ plaintext development mode. `requestClientCertificate` and
   same engine and expose their declared return/source metadata.
 - **RPC (0x03)** — `sp_executesql` (by id and name; how tedious sends
   parameterized queries), `sp_prepare` / `sp_execute` / `sp_unprepare`
-  handles, `sp_reset_connection`, OUTPUT parameters via RETURNVALUE,
-  RETURNSTATUS + DONEPROC framing.
+  handles, `sp_reset_connection`, user procedures, and the common system
+  procedures `sp_help`, `sp_helptext`, `sp_columns`, `sp_tables`, `sp_who`,
+  `sp_helpdb`, `sp_spaceused`, and `sp_rename`; OUTPUT parameters use
+  RETURNVALUE with RETURNSTATUS + DONEPROC framing.
 - **Transaction manager (0x0E)** — begin/commit/rollback/save mapped to
   engine transactions with ENVCHANGE type 8/9/10 descriptors (how tedious
   `beginTransaction()` works).

@@ -14,6 +14,11 @@ type WireColumn = {
   readonly length: number | undefined
 }
 
+type ProcedureResult = {
+  readonly columns: readonly string[],
+  readonly rows: readonly (readonly unknown[])[]
+}
+
 const connect =
   (port: number, useColumnNames = true): Promise<Connection> =>
     new Promise((resolve, reject) => {
@@ -64,6 +69,29 @@ const queryArrays =
         }))
       })
       connection_.execSql(request)
+    })
+
+const callSystem =
+  (name: string, parameters: readonly { readonly name: string, readonly value: unknown }[] = []):
+  Promise<readonly ProcedureResult[]> =>
+    new Promise((resolve, reject) => {
+      const result: { columns: string[], rows: unknown[][] }[] = []
+      const request = new Request(name, error => error ? reject(error) : resolve(result))
+      for (const parameter of parameters) {
+        request.addParameter(parameter.name, TYPES.NVarChar, parameter.value)
+      }
+      request.on('columnMetadata', metadata => {
+        result.push({
+          columns: Object.values(metadata).map(column => column.colName),
+          rows: []
+        })
+      })
+      request.on('row', row => {
+        result[result.length - 1]?.rows.push(
+          Object.values(row as Record<string, { value: unknown }>).map(column => column.value)
+        )
+      })
+      connection.callProcedure(request)
     })
 
 const query =
@@ -736,6 +764,61 @@ test('stored procedures execute over the wire via RPC callProcedure', async () =
     connection.callProcedure(request)
   })
   expect(outcome.outputs['sum']).toBe(42)
+})
+
+test('system stored procedures execute through RPC with ODBC-style metadata', async () => {
+  await query(`
+    CREATE TABLE wire_system_items (
+      id INT IDENTITY(1,1) PRIMARY KEY,
+      label NVARCHAR(30) NOT NULL
+    )
+    INSERT INTO wire_system_items (label) VALUES (N'one'), (N'two')
+  `)
+  await query(`
+    CREATE PROCEDURE dbo.wire_system_definition AS SELECT 1 AS one
+  `)
+
+  const help = await callSystem('SP_HELP', [ { name: 'objname', value: 'wire_system_items' } ])
+  expect(help[0]?.columns).toEqual([ 'Name', 'Owner', 'Type', 'Created_datetime' ])
+  expect(help[1]?.rows.map(row => row[0])).toEqual([ 'id', 'label' ])
+
+  const helptext = await callSystem('sp_helptext', [
+    { name: 'objname', value: 'dbo.wire_system_definition' }
+  ])
+  expect(helptext[0]?.columns).toEqual([ 'Text' ])
+  expect(helptext[0]?.rows.map(row => row[0]).join('')).toContain('CREATE PROCEDURE')
+
+  const columns = await callSystem('sp_columns', [
+    { name: 'table_name', value: 'wire_system_items' }
+  ])
+  expect(columns[0]?.columns).toHaveLength(19)
+  expect(columns[0]?.rows.map(row => row[3])).toEqual([ 'id', 'label' ])
+
+  const tables = await callSystem('sp_tables', [
+    { name: 'table_name', value: 'wire_system_items' }
+  ])
+  expect(tables[0]?.rows).toContainEqual([ 'master', 'dbo', 'wire_system_items', 'TABLE', null ])
+
+  const who = await callSystem('sp_who')
+  expect(who[0]?.columns).toContain('spid')
+  expect(who[0]?.rows[0]?.[3]).toBe('sa')
+
+  const helpdb = await callSystem('sp_helpdb', [ { name: 'dbname', value: 'master' } ])
+  expect(helpdb).toHaveLength(2)
+  expect(helpdb[0]?.rows[0]?.[0]).toBe('master')
+
+  const space = await callSystem('sp_spaceused', [
+    { name: 'objname', value: 'wire_system_items' }
+  ])
+  expect(space[0]?.rows[0]?.slice(0, 2)).toEqual([ 'wire_system_items', '2' ])
+
+  await callSystem('sp_rename', [
+    { name: 'objname', value: 'dbo.wire_system_items.label' },
+    { name: 'newname', value: 'renamed_label' },
+    { name: 'objtype', value: 'COLUMN' }
+  ])
+  expect((await query('SELECT renamed_label FROM wire_system_items ORDER BY id')).rows)
+    .toEqual([ { renamed_label: 'one' }, { renamed_label: 'two' } ])
 })
 
 test('scalar and inline table functions execute over the wire', async () => {

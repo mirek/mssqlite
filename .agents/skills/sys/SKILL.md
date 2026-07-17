@@ -58,6 +58,13 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   `sys.computed_columns_extra`, exposing normalized definition text,
   `uses_database_collation`, and `is_persisted`. CREATE/ALTER/DROP maintain
   both stores; the catalog's inferred type fields drive result metadata.
+- Common catalog procedures are implemented directly over these stores:
+  `sp_help`, `sp_helptext`, `sp_columns`, `sp_tables`, `sp_who`, `sp_helpdb`,
+  and `sp_spaceused` return SQL Server/ODBC-shaped typed result sets through
+  both EXEC and RPC. `sp_rename` keeps supported object, column, and user-index
+  names synchronized with SQLite under a savepoint; module source is retained
+  verbatim, matching SQL Server's warning that stored definitions and dependent
+  references are not rewritten.
 - Not yet populated: extended properties.
 
 ---

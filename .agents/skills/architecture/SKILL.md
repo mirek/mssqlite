@@ -214,6 +214,18 @@ the engine:
   RETURN status and `@@NESTLEVEL` (cap 32). The RPC fallback renders
   `EXEC name @p = @p OUTPUT` over `executeSql` so driver `callProcedure`
   round-trips OUTPUT values and return status.
+- **System procedures dispatch before user procedures** — the engine recognizes
+  the final identifier case-insensitively, so `sp_help`, `sys.sp_help`, and RPC
+  aliases share one implementation. `sp_help`, `sp_helptext`, `sp_columns`,
+  `sp_tables`, `sp_who`, `sp_helpdb`, and `sp_spaceused` project typed result
+  sets from the catalog and SQLite statistics. `sp_rename` changes the physical
+  SQLite object and catalog identity under one savepoint, then updates the
+  in-memory procedure, trigger, or sequence registry. The rename surface covers
+  tables/views/modules/sequences, columns, and user indexes; function renames
+  and dependency-text rewriting are deliberately unsupported. `sp_who` exposes
+  only the current connection until the server owns a shared session registry,
+  and `sp_spaceused` reports local SQLite page estimates rather than SQL Server
+  allocation-unit detail.
 - **MERGE is decomposed, not rendered** (`engine/merge.ts`) — one
   snapshot temp table computed against the pre-merge state joins source
   to target (LEFT JOIN, or FULL JOIN through a never-null source marker

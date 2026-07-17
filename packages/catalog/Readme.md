@@ -35,6 +35,9 @@ no query interception.
     persists as decimal text in the singleton `sys.rowversion_state` table;
     computed columns populate `is_computed` plus definition/persistence rows
     behind `sys.computed_columns`; `addColumns` / `dropColumns`.
+  - `rename(db, oldName, newName, kind)` uses a savepoint to rename a physical
+    SQLite table/view, column, or user index together with its `sys.objects`,
+    `sys.columns`, or `sys.indexes` identity. A failure rolls both layers back.
 - Lookups — `objectIdOf(db, name)` (schema-aware, case-insensitive),
   `tableColumns(db, objectId)` (the engine derives TDS column metadata from
   these rows), `schemaIdOf`, `allocateId`.

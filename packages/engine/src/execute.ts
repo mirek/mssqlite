@@ -22,6 +22,7 @@ import { columnsOf, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import positionalRows from './positional-rows.ts'
+import * as SystemProcedures from './system-procedures.ts'
 import {
   flushRowversion,
   installRowversionTriggers,
@@ -1840,6 +1841,18 @@ const executeProcedure =
           }
         }
       })
+      return undefined
+    }
+    const systemItems = SystemProcedures.execute(session, name, statement.args.map(argument => ({
+      ...argument.name === undefined ? {} : { name: argument.name },
+      value: argument.value.kind === 'default' ? undefined : evaluate(session, argument.value)
+    })))
+    if (systemItems !== undefined) {
+      items.push(...systemItems)
+      session.lastReturnStatus = 0
+      if (statement.result !== undefined) {
+        applyAssign(session, statement.result, '=', 0)
+      }
       return undefined
     }
     const procedure = session.server.procedures.get(procedureKey(statement.procedure))

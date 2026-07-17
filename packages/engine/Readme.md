@@ -111,6 +111,12 @@ const items = executeBatch(s, `
 - **EXEC sp_executesql** — full support from T-SQL and (via `executeSql`)
   from RPC. User procedures registered by CREATE PROCEDURE execute
   interpreted; unknown procedures report error 2812.
+- **System procedures** — `sp_help`, `sp_helptext`, `sp_columns`, `sp_tables`,
+  `sp_who`, `sp_helpdb`, `sp_spaceused`, and `sp_rename` dispatch before the
+  user-procedure registry through both EXEC and RPC. Metadata procedures expose
+  explicitly typed SQL Server/ODBC result schemas. Renames of tables/views,
+  modules/sequences, columns, and user indexes update SQLite and the catalog
+  atomically; dependent SQL text is not rewritten.
 - **User functions** — CREATE/ALTER/DROP persists scalar (`FN`) and inline
   table-valued (`IF`) definitions in `sys.objects`/`sys.sql_modules` and
   reloads them on server startup. Scalar callbacks enter isolated parameter
