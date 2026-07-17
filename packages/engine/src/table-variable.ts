@@ -8,6 +8,7 @@ import {
 } from './rowversion.ts'
 import { functionKey } from './session.ts'
 import * as Character from './character.ts'
+import * as Identity from './identity.ts'
 import type { Ast } from '@mssqlite/tsql'
 import { stateForName } from './database.ts'
 import type { Session, TableVariable } from './session.ts'
@@ -625,10 +626,14 @@ export const declareTableVariable =
     }
     const columns = Transpile.Computed.columns(declaration.columns)
     validateRowversionColumns(columns)
+    Identity.validateColumns(columns)
+    const physical = [ `#__mssqlite_table_${session.spid}_${session.nextTableVariable}` ]
+    const identity = Identity.temporaryIdentity(physical, columns)
     const table: TableVariable = {
-      table: [ `#__mssqlite_table_${session.spid}_${session.nextTableVariable}` ],
+      table: physical,
       columns,
-      constraints: declaration.constraints
+      constraints: declaration.constraints,
+      ...identity === undefined ? {} : { identity }
     }
     session.nextTableVariable++
     session.tableVariables.set(key, table)

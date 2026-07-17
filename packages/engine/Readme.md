@@ -91,8 +91,11 @@ const items = executeBatch(s, `
   string/binary widths, apply defaults unless KEEP_NULLS is present, and use
   cached insert statements inside a savepoint. Empty loads commit with count
   zero; decode, conversion, constraint, disconnect, and cancellation failures
-  roll back the whole request. KEEPIDENTITY is required for explicit identity
-  input; FIRE_TRIGGERS routes rows through interpreted INSERT execution.
+  roll back the whole request. Omitted identity columns allocate from the same
+  database-owned counter as ordinary INSERT; KEEPIDENTITY accepts explicit
+  values and reseeds directionally. FIRE_TRIGGERS routes rows through
+  interpreted INSERT execution. Failed and canceled loads keep consumed
+  identity gaps while rolling back their rows.
 - **Statement errors** — mapped constraint/conversion/arithmetic failures,
   RAISERROR below severity 20, and cursor/sequence runtime errors continue at
   the next statement while preserving ordered rows/counts/errors. Syntax,
@@ -112,8 +115,17 @@ const items = executeBatch(s, `
   INSERT/UPDATE/MERGE assignments; conversion failures retain 245/241/8114/
   8169/8115 and incompatible operands raise 206/402 before SQLite affinity can
   change the comparison.
+- **IDENTITY** — each database owns exact bigint-backed state hydrated from
+  `sys.identity_columns`. INSERT, MERGE, table variables, and bulk load honor
+  signed seed/increment definitions independently of SQLite rowid. Allocation
+  is shared across sessions, survives restart, and is not rolled back after a
+  failed statement or transaction. Explicit values require session-scoped
+  `SET IDENTITY_INSERT`, one table at a time; `@@IDENTITY`,
+  `SCOPE_IDENTITY()`, `IDENT_CURRENT`, trigger/procedure scopes, bounds, and
+  directional reseeding follow SQL Server behavior.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
-  same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
+  same step. DELETE retains identity state; TRUNCATE transactionally resets
+  the next value to the declared seed.
 - **Databases** — CREATE/DROP DATABASE owns an independent in-memory store or
   deterministic sibling file; ALTER DATABASE supports MODIFY NAME and
   READ_ONLY/READ_WRITE. USE switches the session's primary handle. Three-part

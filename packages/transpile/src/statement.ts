@@ -699,7 +699,6 @@ const columnDefinition =
   (
     ctx: Context.t,
     column: Ast.ColumnDefinition,
-    primaryKeyColumns: readonly string[],
     sourceColumns: readonly Ast.SourceColumn[] = []
   ): string => {
     const parts: string[] = [ Quote.identifier(column.name) ]
@@ -722,29 +721,16 @@ const columnDefinition =
       }
       return parts.join(' ')
     }
-    const isPrimaryKey = column.primaryKey === true ||
-      (primaryKeyColumns.length === 1 && primaryKeyColumns[0]?.toLowerCase() === column.name.toLowerCase())
-    if (column.identity !== undefined) {
-      if (Type.category(column.type) !== 'integer') {
-        return unsupported('IDENTITY requires an integer column.')
-      }
-      if (!isPrimaryKey) {
-        return unsupported('IDENTITY is only supported on the primary key column.')
-      }
-      // Rowid alias with AUTOINCREMENT gives MSSQL-like never-reused ids.
-      parts.push('INTEGER PRIMARY KEY AUTOINCREMENT')
-    } else {
-      const type = Type.columnType(column.type, column.collate)
-      if (type !== '') {
-        parts.push(type)
-      }
-      if (column.primaryKey === true) {
-        parts.push('PRIMARY KEY')
-      }
+    const type = Type.columnType(column.type, column.collate)
+    if (type !== '') {
+      parts.push(type)
+    }
+    if (column.primaryKey === true) {
+      parts.push('PRIMARY KEY')
     }
     // SQLite triggers populate rowversion after INSERT, so the physical BLOB
     // must accept the transient NULL even when catalog metadata is NOT NULL.
-    if (column.nullable === false && column.identity === undefined && !rowversion) {
+    if ((column.nullable === false || column.identity !== undefined) && !rowversion) {
       parts.push('NOT NULL')
     }
     if (column.unique === true) {
@@ -773,18 +759,12 @@ const columnDefinition =
   }
 
 const tableConstraint =
-  (ctx: Context.t, constraint: Ast.TableConstraint, columnsWithIdentity: readonly string[]): string | undefined => {
+  (ctx: Context.t, constraint: Ast.TableConstraint): string => {
     const name = constraint.name === undefined ?
       '' :
       `CONSTRAINT ${Quote.identifier(constraint.name)} `
     switch (constraint.kind) {
       case 'primaryKey': {
-        // A single-column PK over the identity column is already declared inline.
-        if (constraint.columns.length === 1 &&
-          columnsWithIdentity.some(column =>
-            column.toLowerCase() === constraint.columns[0]?.name.toLowerCase())) {
-          return undefined
-        }
         return `${name}PRIMARY KEY (${constraint.columns
           .map(column => `${Quote.identifier(column.name)}${column.descending ? ' DESC' : ''}`)
           .join(', ')})`
@@ -804,19 +784,10 @@ const tableConstraint =
 
 const createTable =
   (ctx: Context.t, statement_: Ast.Statement & { kind: 'createTable' }): string => {
-    const primaryKey = statement_.constraints.find(
-      (constraint): constraint is Ast.TableConstraint & { kind: 'primaryKey' } =>
-        constraint.kind === 'primaryKey'
-    )
-    const primaryKeyColumns = primaryKey?.columns.map(column => column.name) ?? []
-    const identityColumns = statement_.columns
-      .filter(column => column.identity !== undefined)
-      .map(column => column.name)
     const members = [
       ...statement_.columns.map(column => columnDefinition(
         ctx,
         column,
-        primaryKeyColumns,
         statement_.columns.map(candidate => ({
           name: candidate.name,
           type: candidate.type,
@@ -825,8 +796,7 @@ const createTable =
         }))
       )),
       ...statement_.constraints
-        .map(constraint => tableConstraint(ctx, constraint, identityColumns))
-        .filter((rendered): rendered is string => rendered !== undefined)
+        .map(constraint => tableConstraint(ctx, constraint))
     ]
     const table = Quote.objectName(statement_.name)
     const byName = new Map(statement_.columns.map(column => [ column.name.toLowerCase(), column ]))
@@ -928,7 +898,7 @@ export const statement =
           switch (statement_.action.kind) {
             case 'addColumns':
               return statement_.action.columns
-                .map(column => `ALTER TABLE ${table} ADD COLUMN ${columnDefinition(ctx, column, [])}`)
+                .map(column => `ALTER TABLE ${table} ADD COLUMN ${columnDefinition(ctx, column)}`)
                 .join('; ')
             case 'dropColumns':
               return statement_.action.columns

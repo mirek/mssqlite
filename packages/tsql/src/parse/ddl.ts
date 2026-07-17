@@ -133,17 +133,18 @@ export const columnDefinition: Parser.t<Ast.ColumnDefinition> =
       )(current)
       if (!Result.failed(identity)) {
         const args = identity.value[1]
-        const numberOf = (value: Ast.Expression): number => {
+        const numberOf = (value: Ast.Expression): string => {
           if (value.kind === 'number') {
-            return Number(value.value)
+            return value.value
           }
-          if (value.kind === 'unary' && value.operator === '-' && value.operand.kind === 'number') {
-            return -Number(value.operand.value)
+          if (value.kind === 'unary' && [ '+', '-' ].includes(value.operator) &&
+            value.operand.kind === 'number') {
+            return `${value.operator}${value.operand.value}`
           }
-          return 1
+          return '1'
         }
         column.identity = args === undefined ?
-          { seed: 1, increment: 1 } :
+          { seed: '1', increment: '1' } :
           { seed: numberOf(args[0]), increment: numberOf(args[1]) }
         current = identity.reader
         continue

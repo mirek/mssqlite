@@ -4,6 +4,7 @@ import { bindings } from './bind.ts'
 import { emitOutput, expandOutputStars, query } from './output.ts'
 import { MssqlError } from './error.ts'
 import { stateForName } from './database.ts'
+import * as Identity from './identity.ts'
 import * as Storage from './storage.ts'
 import { typeNameOfCatalogRow } from './table-variable.ts'
 import type { Ast } from '@mssqlite/tsql'
@@ -164,14 +165,6 @@ const resolveRowversion =
         }
       })
     }
-  }
-
-const hasIdentity =
-  (session: Session, table: Ast.QualifiedName): boolean => {
-    const catalog = catalogOf(session, table)
-    const objectId = Catalog.objectIdOf(catalog, table)
-    return objectId !== undefined &&
-      Catalog.tableColumns(catalog, objectId).some(column => column.is_identity === 1)
   }
 
 const storageColumns =
@@ -358,24 +351,40 @@ const applyArm =
       }
       default: {
         const record = capture ? session.db.prepare(`INSERT INTO ${INSERTED} VALUES (?)`) : undefined
+        const identity = Identity.resolve(session, statement.target)
+        const identityArgument = Transpile.Quote.string(statement.target.join('.'))
         if (when.action.values === undefined) {
           // INSERT DEFAULT VALUES — one insert per unmatched source row.
           const counted = session.db.prepare(
             `SELECT COUNT(*) AS n FROM ${SNAPSHOT} WHERE "__mssqlite_action" = ${tag}`
           ).get() as { n: number }
-          const insert = session.db.prepare(`INSERT INTO ${table} DEFAULT VALUES`)
+          const insert = session.db.prepare(identity === undefined ?
+            `INSERT INTO ${table} DEFAULT VALUES` :
+            `INSERT INTO ${table} (${Transpile.Quote.identifier(identity.column)}) ` +
+              `VALUES (mssqlite_next_identity(${identityArgument}))`)
           for (let row = 0; row < counted.n; row++) {
             const result = insert.run()
             record?.run(result.lastInsertRowid)
           }
           return counted.n
         }
-        const columns = when.action.columns === undefined ?
-          '' :
-          ` (${when.action.columns.map(Transpile.Quote.identifier).join(', ')})`
-        const values = when.action.values
+        let names = when.action.columns ?? storageColumns(session, statement.target)
+          .filter(column => column.insertable).map(column => column.name)
+        const identityAt = identity === undefined ? -1 : names.findIndex(column =>
+          column.toLowerCase() === identity.column.toLowerCase())
+        let valueExpressions = when.action.values
           .map((_value, position) => `"__mssqlite_v${index}_${position}"`)
-          .join(', ')
+        if (identity !== undefined) {
+          if (identityAt >= 0) {
+            valueExpressions = valueExpressions.map((value, position) => position === identityAt ?
+              `mssqlite_explicit_identity(${identityArgument}, ${value})` : value)
+          } else {
+            names = [ ...names, identity.column ]
+            valueExpressions = [ ...valueExpressions, `mssqlite_next_identity(${identityArgument})` ]
+          }
+        }
+        const columns = ` (${names.map(Transpile.Quote.identifier).join(', ')})`
+        const values = valueExpressions.join(', ')
         const insert = `INSERT INTO ${table}${columns} SELECT ${values} FROM ${SNAPSHOT} WHERE "__mssqlite_action" = ${tag}`
         if (record === undefined) {
           return Number(session.db.prepare(insert).run().changes)
@@ -599,10 +608,27 @@ const outputSelect =
 export const executeMerge =
   (session: Session, statement_: Merge, items: Item[]): void => {
     const statement = resolveRowversion(session, statement_)
+    const identity = Identity.resolve(session, statement.target)
     validateArms(statement.whens)
     for (const when of statement.whens) {
       if (when.action.kind === 'insert') {
         insertColumnCount(session, statement, when.action)
+        const names = when.action.columns ?? storageColumns(session, statement.target)
+          .filter(column => column.insertable).map(column => column.name)
+        if (identity !== undefined) {
+          const identityAt = names.findIndex(column =>
+            column.toLowerCase() === identity.column.toLowerCase())
+          if (identityAt >= 0) {
+            Identity.assertExplicitAllowed(session, statement.target)
+            if (when.action.values?.[identityAt]?.kind === 'default') {
+              throw new MssqlError('An explicit value for the identity column must be specified.', 545, 16)
+            }
+          }
+        }
+      } else if (when.action.kind === 'update' && identity !== undefined &&
+        when.action.set.some(assignment => assignment.target.kind === 'column' &&
+          last(assignment.target.name).toLowerCase() === identity.column.toLowerCase())) {
+        throw new MssqlError(`Cannot update identity column '${identity.column}'.`, 8102, 16)
       }
     }
     const output = statement.output
@@ -649,14 +675,6 @@ export const executeMerge =
           inserted += changes
         }
       }
-      if (inserted > 0 && hasIdentity(session, statement.target)) {
-        // Capture-table writes clobber last_insert_rowid — the last captured
-        // rowid is the same value.
-        const lastRow = capture ?
-          session.db.prepare(`SELECT "r" AS id FROM ${INSERTED} ORDER BY rowid DESC LIMIT 1`).get() as { id: number | bigint } :
-          session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
-        session.lastIdentity = Number(lastRow.id)
-      }
       if (output !== undefined && outputRendered !== undefined) {
         // Assembled inside the transaction — OUTPUT INTO writes must roll
         // back with the merge if they fail.
@@ -664,6 +682,9 @@ export const executeMerge =
       }
       if (implicit) {
         session.db.exec('COMMIT')
+      }
+      if (inserted > 0) {
+        Identity.publishPending(session)
       }
       session.rowCount = total
       if (output === undefined) {

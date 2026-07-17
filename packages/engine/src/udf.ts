@@ -3,6 +3,7 @@ import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
 import * as Character from './character.ts'
 import * as Implicit from './implicit.ts'
+import * as Identity from './identity.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
@@ -497,6 +498,24 @@ export const registerFunctions =
     define('mssqlite_implicit_error', (number, message) => {
       throw new MssqlError(text(message), Number(number), 16, 1, { statementTerminating: true })
     }, { deterministic: false })
+    define('mssqlite_next_identity', table => {
+      const session = server.current
+      if (session === undefined) {
+        throw new MssqlError('Identity allocation requires an active session.', 8106, 16)
+      }
+      return Identity.nextValue(session, text(table).split('.')) as Argument
+    }, { deterministic: false })
+    define('mssqlite_explicit_identity', (table, value) => {
+      const session = server.current
+      if (session === undefined) {
+        throw new MssqlError('Identity allocation requires an active session.', 8106, 16)
+      }
+      return Identity.explicitValue(session, text(table).split('.'), value) as Argument
+    }, { deterministic: false })
+    define('mssqlite_ident_current', table => {
+      const session = server.current
+      return session === undefined || table === null ? null : Identity.current(session, text(table)) as Argument
+    }, { deterministic: false })
     define('mssqlite_string_split', (value, separator) => {
       if (value === null || separator === null || value === '') {
         return '[]'
@@ -629,7 +648,7 @@ export const registerFunctions =
       server.current?.databaseState.name ?? server.databaseName, { deterministic: false })
     define('mssqlite_db_id', () => server.current?.databaseState.id ?? 5, { deterministic: false })
     define('mssqlite_scope_identity', () => {
-      const identity = server.current?.lastIdentity ?? null
+      const identity = server.current?.scopeIdentity ?? null
       return typeof identity === 'boolean' ? (identity ? 1 : 0) : identity
     }, { deterministic: false })
     define('mssqlite_suser_sname', () => server.current?.userName ?? 'sa', { deterministic: false })

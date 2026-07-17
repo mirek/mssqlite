@@ -228,8 +228,10 @@ combine with `WITHOUT ROWID`):
   Once the max 64-bit integer has been used, further inserts fail with
   `SQLITE_FULL`. Rolled-back rowids are not consumed; failed inserts may
   leave gaps.
-- AUTOINCREMENT adds CPU/IO overhead. For MSSQL `IDENTITY` emulation it is
-  the correct fit because MSSQL guarantees monotonicity per table.
+- AUTOINCREMENT adds CPU/IO overhead and is insufficient for MSSQL
+  `IDENTITY`: it cannot represent non-key/decimal identities or signed custom
+  increments, and rolled-back values may be reused. mssqlite therefore uses
+  an engine-owned allocator and ordinary physical columns.
 - `sqlite_sequence(name, seq)` is auto-created. It can be modified manually
   (e.g. `UPDATE sqlite_sequence SET seq=… WHERE name='t'` mirrors
   `DBCC CHECKIDENT`) but the table only tracks INSERT-driven increments.
@@ -739,7 +741,7 @@ testing only; misuse causes index corruption recoverable only via `REINDEX`.
 | `IGNORE_DUP_KEY` on unique index                 | `ON CONFLICT IGNORE` on the UNIQUE constraint, or `INSERT OR IGNORE` |
 | `MERGE` upsert                                   | `INSERT ... ON CONFLICT(...) DO UPDATE SET ...` (UPSERT), or `INSERT OR REPLACE` (drops & re-inserts; fires triggers) |
 | Filtered unique index where MSSQL has many NULLs but SQLite would already permit them | None needed — SQLite NULLs are distinct |
-| `IDENTITY(1,1)`                                  | `INTEGER PRIMARY KEY AUTOINCREMENT` |
+| `IDENTITY(seed,increment)`                       | Ordinary typed NOT NULL column plus engine-owned allocation |
 | `ROWVERSION` / `TIMESTAMP`                       | Emulate via trigger writing `unixepoch()` into a column |
 | Computed column (persisted)                      | `GENERATED ALWAYS AS (expr) STORED` |
 | Computed column (non-persisted)                  | `GENERATED ALWAYS AS (expr) VIRTUAL` |

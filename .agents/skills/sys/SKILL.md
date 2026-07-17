@@ -937,6 +937,12 @@ CREATE TABLE IF NOT EXISTS [sys.identity_columns_extra] (
 );
 ```
 
+The engine hydrates one shared allocator per row from this table. Seed,
+increment, and last values remain canonical decimal TEXT so decimal(38,0)
+definitions are exact; dirty `last_value` is written after the surrounding
+SQLite transaction ends, including after rollback, because ordinary identity
+allocation is rollback-independent.
+
 ---
 
 ## 16. sys.computed_columns

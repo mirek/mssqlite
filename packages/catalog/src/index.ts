@@ -21,6 +21,7 @@ export {
   dropTable,
   dropTrigger,
   dropView,
+  identityRows,
   objectIdOf,
   objectNameOf,
   rowversionValue,
@@ -28,8 +29,10 @@ export {
   sequenceRows,
   tableColumns,
   updateSequenceValue,
+  updateIdentityValue,
   updateRowversionValue,
   type ColumnRow,
+  type IdentityRow,
   type ObjectName,
   type SequenceRow,
   type SequenceState

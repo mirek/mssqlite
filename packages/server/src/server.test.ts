@@ -368,6 +368,28 @@ test('create, insert, select round trip', async () => {
   ])
 })
 
+test('identity seed, session functions, and explicit-value errors cross tedious', async () => {
+  await query(`
+    CREATE TABLE wire_identity_semantics (
+      id INT IDENTITY(10, 5),
+      value NVARCHAR(20) UNIQUE
+    )
+  `)
+  await query('INSERT INTO wire_identity_semantics (value) VALUES (N\'a\'), (N\'b\')')
+  const values = await query(`
+    SELECT id, value, IDENT_CURRENT('wire_identity_semantics') AS current_value,
+      @@IDENTITY AS global_value, SCOPE_IDENTITY() AS scope_value
+    FROM wire_identity_semantics ORDER BY id
+  `)
+  expect(values.rows).toEqual([
+    { id: 10, value: 'a', current_value: 15, global_value: 15, scope_value: 15 },
+    { id: 15, value: 'b', current_value: 15, global_value: 15, scope_value: 15 }
+  ])
+  await expect(query(
+    'INSERT INTO wire_identity_semantics (id, value) VALUES (100, N\'explicit\')'))
+    .rejects.toMatchObject({ number: 544 })
+})
+
 test('computed values and sys.computed_columns metadata cross tedious', async () => {
   await query(`
     CREATE TABLE wire_computed (

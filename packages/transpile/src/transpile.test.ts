@@ -351,7 +351,7 @@ test('create table', () => {
     )
   `)).toBe(
     'CREATE TABLE "users" (' +
-    '"id" INTEGER PRIMARY KEY AUTOINCREMENT, ' +
+    '"id" INTEGER PRIMARY KEY NOT NULL, ' +
     '"name" TEXT COLLATE NOCASE NOT NULL, ' +
     '"age" INTEGER DEFAULT (0), ' +
     '"email" TEXT COLLATE NOCASE UNIQUE, ' +
@@ -404,7 +404,7 @@ test('collations render normalized predicates, ordering and uniqueness', () => {
 
 test('identity via table-level primary key', () => {
   expect(sqlOf('CREATE TABLE t (id INT IDENTITY(1,1), name TEXT, PRIMARY KEY (id))'))
-    .toBe('CREATE TABLE "t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "name" TEXT COLLATE NOCASE)')
+    .toBe('CREATE TABLE "t" ("id" INTEGER NOT NULL, "name" TEXT COLLATE NOCASE, PRIMARY KEY ("id"))')
 })
 
 test('indexes and views', () => {

@@ -2,6 +2,7 @@ import { bootstrap, rowversionValue } from '@mssqlite/catalog'
 import { parse } from '@mssqlite/tsql'
 import { registerFunctions } from './udf.ts'
 import { loadSequences, type Sequence } from './sequence.ts'
+import { loadIdentities, type Identity } from './identity.ts'
 import type { RowversionState } from './rowversion.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
@@ -25,7 +26,8 @@ export type Variable = {
 export type TableVariable = {
   readonly table: Ast.QualifiedName,
   readonly columns: readonly Ast.ColumnDefinition[],
-  readonly constraints: readonly Ast.TableConstraint[]
+  readonly constraints: readonly Ast.TableConstraint[],
+  readonly identity?: Identity
 }
 
 /** Error captured by the innermost active CATCH block, read by ERROR_*. */
@@ -91,6 +93,7 @@ export type DatabaseState = {
   readonly functions: Map<string, UserFunction>,
   readonly triggers: Map<string, Trigger>,
   readonly sequences: Map<string, Sequence>,
+  readonly identities: Map<string, Identity>,
   readonly rowversion: RowversionState,
   readonly registeredFunctions: Set<string>
 }
@@ -153,6 +156,15 @@ export type Session = {
   readonly options: Map<string, string>,
   rowCount: number,
   lastIdentity: Value,
+  scopeIdentity: Value,
+  pendingIdentity: Value,
+  identityVersion: number,
+  identityInsert: { readonly key: string, readonly display: string } | undefined,
+  readonly identityResets: Map<string, {
+    readonly identity: Identity,
+    readonly last: bigint | null,
+    readonly dirty: boolean
+  }>,
   transactionCount: number,
   lastError: number,
   caughtError: CaughtError | undefined,
@@ -316,6 +328,7 @@ export const server =
       functions: new Map(),
       triggers: new Map(),
       sequences: loadSequences(db),
+      identities: loadIdentities(db),
       rowversion: {
         current: BigInt(rowversionValue(db)),
         dirty: false
@@ -393,6 +406,11 @@ export const session =
       options: new Map(),
       rowCount: 0,
       lastIdentity: null,
+      scopeIdentity: null,
+      pendingIdentity: null,
+      identityVersion: 0,
+      identityInsert: undefined,
+      identityResets: new Map(),
       transactionCount: 0,
       lastError: 0,
       caughtError: undefined,

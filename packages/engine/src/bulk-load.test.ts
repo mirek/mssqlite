@@ -129,6 +129,42 @@ test('bulk metadata, identity, null/default, conversion, and length invariants a
     'INSERT BULK identities ([id] int, [value] int) WITH (KEEPIDENTITY)')).toBeDefined()
 })
 
+test('bulk load generates, preserves, and consumes rolled-back identity values', () => {
+  const active = setup()
+  executeBatch(active, 'CREATE TABLE bulk_identity (id int IDENTITY PRIMARY KEY, value int)')
+  const valueMetadata: readonly TdsBulkLoad.Column[] = [
+    { name: 'value', userType: 0, flags: 0, typeInfo: TypeInfo.intN(4) }
+  ]
+  const generatedPlan = requiredPlan(prepareBulkLoad(active,
+    'INSERT BULK bulk_identity ([value] int)'))
+  const generated = beginBulkLoad(generatedPlan, valueMetadata)
+  writeBulkRows(generated, [ [ 1 ], [ 2 ] ])
+  finishBulkLoad(generated)
+  expect(executeBatch(active, 'SELECT id, value FROM bulk_identity ORDER BY id')[0])
+    .toMatchObject({ rows: [ [ 1, 1 ], [ 2, 2 ] ] })
+  expect(active.lastIdentity).toBe(2)
+  expect(active.scopeIdentity).toBe(2)
+
+  const keepMetadata: readonly TdsBulkLoad.Column[] = [
+    { name: 'id', userType: 0, flags: 0, typeInfo: TypeInfo.intN(4) },
+    { name: 'value', userType: 0, flags: 0, typeInfo: TypeInfo.intN(4) }
+  ]
+  const keepPlan = requiredPlan(prepareBulkLoad(active,
+    'INSERT BULK bulk_identity ([id] int, [value] int) WITH (KEEPIDENTITY)'))
+  const kept = beginBulkLoad(keepPlan, keepMetadata)
+  writeBulkRows(kept, [ [ 100, 3 ], [ 50, 4 ] ])
+  finishBulkLoad(kept)
+
+  const canceled = beginBulkLoad(generatedPlan, valueMetadata)
+  writeBulkRows(canceled, [ [ 5 ] ])
+  abortBulkLoad(canceled)
+  const afterGap = beginBulkLoad(generatedPlan, valueMetadata)
+  writeBulkRows(afterGap, [ [ 6 ] ])
+  finishBulkLoad(afterGap)
+  expect(executeBatch(active, 'SELECT id, value FROM bulk_identity ORDER BY value')[0])
+    .toMatchObject({ rows: [ [ 1, 1 ], [ 2, 2 ], [ 100, 3 ], [ 50, 4 ], [ 102, 6 ] ] })
+})
+
 test('bulk load enforces and pads declared character widths', () => {
   const active = setup()
   executeBatch(active, 'CREATE TABLE bulk_characters (id int PRIMARY KEY, value char(5))')
