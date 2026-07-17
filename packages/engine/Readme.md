@@ -238,7 +238,8 @@ engine consumers still receive the existing `Rows.rows` array shape.
 `add` (dynamic +), checked integer and exact scaled-decimal arithmetic,
 decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `substring`, `left`, `right`,
 `replicate`, `quotename`, `reverse`,
-`stuff`, `charindex`, `patindex` (LIKE-pattern search), `translate`,
+`stuff`, `charindex`, `patindex` (LIKE-pattern search), collation-aware LIKE
+with bracket classes/ranges/ESCAPE and error 506 validation, `translate`,
 character cast/storage coercion, Windows-1252 `ascii` / `char`,
 type-aware `datalength`,
 `round` (negative digits, truncate flag), `isnumeric`,

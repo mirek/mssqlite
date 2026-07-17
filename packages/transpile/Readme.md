@@ -127,7 +127,9 @@ rendered statement reports the variables it binds.
   `round`, `rand`, `datalength`, `isnumeric`, `isdate`,
   `scope_identity`, `ident_current`, `db_name`, `suser_sname`, `serverproperty`, …).
   ASCII and CHAR route through Windows-1252 UDFs instead of SQLite's Unicode
-  `unicode()` and `char()` primitives.
+  `unicode()` and `char()` primitives. LIKE always routes through the effective
+  SQL collation matcher so T-SQL bracket classes, ranges, negation, and ESCAPE
+  work for literals and every declared/runtime expression source.
   See the engine package for the UDF implementations.
 - **CAST/CONVERT** — affinity casts, plus date/time renderings
   (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles

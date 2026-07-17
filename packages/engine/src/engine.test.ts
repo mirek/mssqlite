@@ -1581,6 +1581,52 @@ test('string udf edge cases match SQL Server values and errors', () => {
   }
 })
 
+test('LIKE supports SQL Server character classes across expression sources', () => {
+  // Compatibility vector checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE like_values (value varchar(10))
+    INSERT INTO like_values VALUES ('b'), ('z'), ('['), ('-'), ('é')
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT
+      CASE WHEN 'b' LIKE '[a-c]' THEN 1 ELSE 0 END,
+      CASE WHEN 'z' LIKE '[^a-c]' THEN 1 ELSE 0 END,
+      CASE WHEN '[' LIKE '[[]' THEN 1 ELSE 0 END,
+      CASE WHEN '-' LIKE '[-a]' THEN 1 ELSE 0 END,
+      CASE WHEN '-' LIKE '[a-]' THEN 1 ELSE 0 END,
+      CASE WHEN '%' LIKE '!%' ESCAPE '!' THEN 1 ELSE 0 END,
+      CASE WHEN '_' LIKE '!_' ESCAPE '!' THEN 1 ELSE 0 END,
+      CASE WHEN 'B' LIKE '[a-c]' THEN 1 ELSE 0 END,
+      CASE WHEN N'É' COLLATE Latin1_General_100_CI_AI LIKE N'[e]' THEN 1 ELSE 0 END,
+      CASE WHEN 'a' LIKE 'a ' THEN 1 ELSE 0 END,
+      CASE WHEN 'a ' LIKE 'a' THEN 1 ELSE 0 END,
+      CASE WHEN ' ' LIKE '_' THEN 1 ELSE 0 END
+  `)).rows).toEqual([ [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1 ] ])
+
+  expect(rowsOf(executeBatch(s, `
+    DECLARE @pattern varchar(10) = '[a-c]'
+    SELECT value FROM like_values WHERE value LIKE @pattern ORDER BY value
+  `)).rows).toEqual([ [ 'b' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT CASE WHEN LEFT('bravo', 1) LIKE '[a-c]' THEN 1 ELSE 0 END,
+      CASE WHEN 'a' LIKE '[' THEN 1 ELSE 0 END,
+      CASE WHEN 'a' LIKE '[]' THEN 1 ELSE 0 END,
+      CASE WHEN 'a' LIKE '[z-a]' THEN 1 ELSE 0 END,
+      CAST(NULL AS varchar(1)) LIKE '[a]' AS null_value
+  `)).rows).toEqual([ [ 1, 0, 0, 0, null ] ])
+
+  const rpc = rowsOf(executeSql(s, `
+    SELECT CASE WHEN @value LIKE @pattern THEN 1 ELSE 0 END
+  `, [
+    { name: '@value', value: 'c', type: { name: 'varchar', args: [ 1 ] } },
+    { name: '@pattern', value: '[a-c]', type: { name: 'varchar', args: [ 5 ] } }
+  ]).items)
+  expect(rpc.rows).toEqual([ [ 1 ] ])
+  expect(() => executeBatch(s, 'SELECT 1 WHERE \'a\' LIKE \'a\' ESCAPE \'xx\''))
+    .toThrowError(expect.objectContaining({ number: 506 }) as Error)
+})
+
 test('character widths govern casts, assignment, storage, defaults and metadata', () => {
   const s = open()
   const casts = rowsOf(executeBatch(s, `

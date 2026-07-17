@@ -298,7 +298,10 @@ the engine:
   String boundary UDFs keep SQL Server's one-based SUBSTRING rules, reject
   negative LEFT/RIGHT/SUBSTRING lengths with error 536, return NULL for
   negative REPLICATE/SPACE counts, and enforce QUOTENAME's delimiter and
-  128-character contracts.
+  128-character contracts. LIKE bypasses SQLite's pattern operator entirely:
+  a collation-normalized regex compiler implements `%`, `_`, positive/negative
+  bracket classes, ranges, literal brackets, ESCAPE, malformed-class misses,
+  and SQL Server error 506 for multi-character escapes.
   Character coercion UDFs encode varchar/char as Windows-1252 and
   nvarchar/nchar as UTF-16LE, so truncation, padding, overflow checks, and
   DATALENGTH share the same byte semantics. ASCII reads the first encoded

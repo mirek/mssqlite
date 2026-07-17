@@ -184,6 +184,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   higher-precedence T-SQL type before rendering predicates, CASE/IN/BETWEEN,
   compound SELECTs, and VALUES, then calls strict conversion UDFs. Target DML
   and MERGE assignments use the same category conversions before storage.
+- SQLite LIKE lacks T-SQL bracket classes and Unicode collation behavior.
+  mssqlite therefore compiles every LIKE pattern in a UDF after applying the
+  effective SQL collation, including ranges, negated classes, ESCAPE, and the
+  trailing-source-space alternative required by SQL Server.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

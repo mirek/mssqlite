@@ -157,20 +157,21 @@ const variantBase =
     }
   }
 
-const collationKey =
-  (value: Argument, collation: Argument): Argument => {
-    if (value === null) {
-      return null
-    }
+const normalizedCollationText =
+  (value: string, collation: Argument, trim: boolean): string => {
     const name = text(collation).toLowerCase()
     const accentSensitive = !name.endsWith('_ai')
     const caseSensitive = name.includes('_cs_') || name.endsWith('_bin2')
-    let key = text(value).trimEnd()
+    let key = trim ? value.trimEnd() : value
     if (!accentSensitive) {
       key = key.normalize('NFD').replace(/\p{M}/gu, '')
     }
     return caseSensitive ? key : key.toLocaleLowerCase('en-US')
   }
+
+const collationKey =
+  (value: Argument, collation: Argument): Argument =>
+    value === null ? null : normalizedCollationText(text(value), collation, true)
 
 /** @returns last part of a dotted, optionally bracketed object name. */
 const namePart =
@@ -180,26 +181,55 @@ const namePart =
     return last.replace(/^\[|\]$/g, '').replace(/^"|"$/g, '')
   }
 
+const regexpLiteral =
+  (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const regexpClassLiteral =
+  (value: string): string =>
+    value.replaceAll('\\', '\\\\').replaceAll('[', '\\[')
+      .replaceAll(']', '\\]').replaceAll('-', '\\-').replaceAll('^', '\\^')
+
+const likeClassSource =
+  (pattern: string, start: number, escape: string): readonly [ source: string, end: number ] | undefined => {
+    let source = ''
+    for (let i = start + 1; i < pattern.length; i++) {
+      const char = pattern[i] ?? ''
+      if (escape !== '' && char === escape && i + 1 < pattern.length) {
+        source += regexpClassLiteral(pattern[++i] ?? '')
+      } else if (char === ']') {
+        return [ `[${source}]`, i ]
+      } else if (char === '[' || char === '\\') {
+        source += `\\${char}`
+      } else {
+        source += char
+      }
+    }
+    return undefined
+  }
+
 /** @returns SQL LIKE pattern body converted to regular expression source. */
 const likePatternSource =
-  (pattern: string): string => {
+  (pattern: string, escape = ''): string => {
     let out = ''
     for (let i = 0; i < pattern.length; i++) {
       const char = pattern[i] ?? ''
-      if (char === '%') {
+      if (escape !== '' && char === escape && i + 1 < pattern.length) {
+        out += regexpLiteral(pattern[++i] ?? '')
+      } else if (char === '%') {
         out += '[\\s\\S]*'
       } else if (char === '_') {
         out += '[\\s\\S]'
       } else if (char === '[') {
-        const end = pattern.indexOf(']', i + 1)
-        if (end === -1) {
+        const class_ = likeClassSource(pattern, i, escape)
+        if (class_ === undefined) {
           out += '\\['
         } else {
-          out += `[${pattern.slice(i + 1, end).replaceAll('\\', '\\\\')}]`
-          i = end
+          out += class_[0]
+          i = class_[1]
         }
       } else {
-        out += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        out += regexpLiteral(char)
       }
     }
     return out
@@ -413,13 +443,28 @@ export const registerFunctions =
       DateTimeOffset.cast(value === null ? null : text(value), Number(scale), Number(try_) !== 0))
     define('mssqlite_datetimeoffset_key', value =>
       DateTimeOffset.key(value === null ? null : text(value)))
-    define('mssqlite_collation_like', (value, pattern, collation) => {
-      if (value === null || pattern === null) {
+    define('mssqlite_collation_like', (value, pattern, collation, escape) => {
+      if (value === null || pattern === null || escape === null) {
         return null
       }
-      const source = text(collationKey(value, collation))
-      const pattern_ = text(collationKey(pattern, collation))
-      return new RegExp(`^${likePatternSource(pattern_)}$`, 'u').test(source) ? 1 : 0
+      const rawEscape = text(escape)
+      if (rawEscape.length > 1) {
+        throw new MssqlError(
+          `The invalid escape character "${rawEscape}" was specified in a LIKE predicate.`,
+          506, 16, 1, { statementTerminating: true })
+      }
+      const source = normalizedCollationText(text(value), collation, false)
+      const pattern_ = normalizedCollationText(text(pattern), collation, false)
+      const escape_ = normalizedCollationText(rawEscape, collation, false)
+      try {
+        const regexp = new RegExp(`^${likePatternSource(pattern_, escape_)}$`, 'u')
+        return regexp.test(source) || regexp.test(source.trimEnd()) ? 1 : 0
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          return 0
+        }
+        throw error
+      }
     })
     define('mssqlite_arithmetic', (operator, left, right, width) =>
       checkedArithmetic(server, operator, left, right, width), { deterministic: false })
