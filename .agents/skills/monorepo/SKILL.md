@@ -19,10 +19,13 @@ packages/
   catalog/     @mssqlite/catalog     sys.* emulation
   engine/      @mssqlite/engine      execution engine
   server/      @mssqlite/server      TCP TDS server
+  differential/ @mssqlite/differential opt-in SQL Server comparison harness
 ```
 
 Dependencies point strictly downward (bytes ← tds ← server; tsql ←
 transpile ← engine ← server). Lower layers never import higher ones.
+The differential package is a development-only leaf that imports server and
+tedious; its live command is deliberately outside the default test suite.
 
 ## Code style (prelude style)
 
