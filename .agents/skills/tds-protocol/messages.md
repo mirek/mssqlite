@@ -211,6 +211,19 @@ Structure is identical to a server SELECT result but sent **client → server**.
 - UDTTYPE not supported — use VARBINARYTYPE
 - DECIMALTYPE/NUMERICTYPE not supported — use DECIMALNTYPE/NUMERICNTYPE
 
+### mssqlite implementation
+
+`Message.push(..., [Packet.Type.bulkLoad])` emits packet-sized fragments rather
+than retaining the full request. `BulkLoad.push` incrementally decodes metadata,
+rows, NULL and PLP values with a 16 MiB incomplete-token cap. The server first
+accepts a validated `INSERT BULK` SQL batch, opens an engine savepoint once
+metadata matches, inserts complete rows through cached statements, and returns
+DONE_COUNT on commit. Decode, conversion, constraint, disconnect, IGNORE, and
+Attention paths roll the savepoint back; malformed streams receive errors 4815
+or 4816. The standalone codec requires DONE by default; server mode accepts the
+FreeTDS/freebcp convention of EOM immediately after a complete final ROW.
+BulkLoadUTWT remains unsupported.
+
 ### BulkLoadUTWT (UPDATETEXT/WRITETEXT BULK)
 
 ```

@@ -455,7 +455,7 @@ sequenceDiagram
 Client → Server. Packet type 0x07 (BulkLoadBCP). One INT column "c1" with a NULL row.
 
 ```
-07 01 00 26 00 00 01 00  ; Header: type=0x07, status=EOM, length=38
+07 01 00 27 00 00 01 00  ; Header: type=0x07, status=EOM, length=39
 ```
 
 ### COLMETADATA
@@ -466,7 +466,7 @@ Client → Server. Packet type 0x07 (BulkLoadBCP). One INT column "c1" with a NU
 ; Column 1:
   00 00 00 00     ; UserType = 0
   05 00           ; Flags = 0x0005 (Nullable | ReadOnly)
-  32              ; TypeId = INTTYPE (0x32) — fixed-length INT, 4 bytes
+  26 04           ; TypeId = INTN (0x26), max length = 4 bytes
   02              ; ColName length = 2 chars
   63 00 31 00     ; "c1" (UTF-16 LE)
 ```

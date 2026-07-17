@@ -17,8 +17,9 @@ token layouts are tested against its annotated hex dumps.
   packet sequences.
 - `Message` — incremental, allocation-light reassembly of raw stream chunks
   into complete messages: `Message.push(state, chunk)` returns the next state
-  and any completed `{ type, payload }` messages. Pure — feed it socket data,
-  keep the returned state.
+  and any completed `{ type, payload }` messages. Passing selected packet types
+  returns packet-sized `fragments` instead, so large streams need not be
+  retained until EOM. Pure — feed it socket data, keep the returned state.
 
 ### Handshake
 
@@ -35,6 +36,12 @@ token layouts are tested against its annotated hex dumps.
 - `Rpc` — procedure by name or well-known id (`Rpc.ProcId.executeSql` etc.),
   option flags, and typed parameters decoded to JS values.
 - `TransactionManager` — begin/commit/rollback/save with isolation level.
+- `BulkLoad` — bounded incremental BulkLoadBCP decoder for COLMETADATA,
+  ROW, NULL, legacy LOB and PLP values, and final DONE. Complete rows are
+  emitted and discarded on each `push`; malformed metadata, NBCROW, length
+  mismatches, trailing bytes, and incomplete EOM streams are result failures.
+  Strict DONE-at-EOM behavior is the default; the explicit compatibility flag
+  accepts FreeTDS/freebcp's row-boundary EOM without a trailing client DONE.
 
 ### Responses (server → client)
 
@@ -53,7 +60,8 @@ packet size, collation, begin/commit/rollback transaction).
   `datetimeOffsetN(s)`, `sqlVariant`, untyped/typed `xml`, and CLR `udt`.
 - `Value` — TYPE_VARBYTE encode/decode between wire bytes and JS values
   (`null`, `boolean`, `number`, `bigint`, `string`, `Uint8Array`, `Date`),
-  including PLP chunking for `max` types.
+  including PLP chunking for `max` types and validation that known PLP totals
+  equal the sum of their chunks.
 - `SqlVariant` — validates, packs, and unpacks the base type token,
   type-specific properties, and bare value without losing inner type identity.
   XML uses UTF-16LE PLP; UDT values use opaque binary PLP and full UDT_INFO.

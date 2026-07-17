@@ -32,6 +32,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 | Login7 + password descrambling + FeatureExt | `login7.ts` |
 | SQL-login authentication + generic 18456 failure | `server/authentication.ts`, `server/connection.ts` |
 | ALL_HEADERS, SQL batch, RPC, transaction manager | `all-headers.ts`, `sql-batch.ts`, `rpc.ts`, `transaction-manager.ts` |
+| BulkLoadBCP COLMETADATA/ROW/DONE stream | `bulk-load.ts` |
 | TYPE_INFO + TYPE_VARBYTE values incl. PLP | `type-info.ts`, `value.ts` |
 | Collation, GUID, decimal, date/time wire formats | `collation.ts`, `guid.ts`, `decimal.ts`, `date-time.ts` |
 | Server tokens (COLMETADATA, ROW, DONE*, ERROR/INFO, LOGINACK, ENVCHANGE, RETURNSTATUS, RETURNVALUE, FEATUREEXTACK) | `token/*` |
@@ -46,6 +47,14 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 - Password authentication is applied only after full LOGIN7 decode and before
   session/database allocation. Required TLS protects the descrambled secret;
   uniform 18456/state 1 failures close the connection after ERROR + DONE_ERROR.
+- Bulk load packet type 7 is selected for fragment streaming in `Message.push`:
+  complete packets bypass whole-message reassembly, while `BulkLoad.push`
+  retains at most one incomplete token (capped at 16 MiB), emits complete rows,
+  rejects NBCROW and hostile lengths, and requires a final DONE exactly at EOM
+  by default. Server compatibility mode accepts FreeTDS/freebcp's observed
+  row-boundary EOM without a client DONE; incomplete rows still fail.
+  An IGNORE-terminated request receives a normal completion because clients
+  canceling before message completion do not necessarily send Attention.
 - **RPC OptionFlags is 2 bytes** (USHORT). The example 4.8 prose lists a
   single `00` byte, but the packet length arithmetic (47 total) only
   works with two flag bytes.

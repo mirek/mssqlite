@@ -15,6 +15,15 @@ export {
 } from './execute.ts'
 export { registerFunctions } from './udf.ts'
 export {
+  abortBulkLoad,
+  beginBulkLoad,
+  finishBulkLoad,
+  prepareBulkLoad,
+  writeBulkRows,
+  type Loader as BulkLoader,
+  type Plan as BulkPlan
+} from './bulk-load.ts'
+export {
   closeServer,
   createDatabase,
   dropDatabase,

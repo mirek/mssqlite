@@ -231,6 +231,11 @@ export const encode =
 export const decodeBare =
   (typeInfo: TypeInfo.t, bytes: Uint8Array): Value => {
     const { type } = typeInfo
+    if ([ DataType.DataType.nvarchar, DataType.DataType.nchar, DataType.DataType.ntext,
+      DataType.DataType.xml, DataType.DataType.json ].includes(type as never) &&
+      bytes.byteLength % 2 !== 0) {
+      throw new Error(`Unicode value for type 0x${type.toString(16)} has an odd byte length.`)
+    }
     let cursor = Cursor.of(bytes)
     const read = <T>(reader: Read.t<T>): T => {
       const result = reader(cursor)
@@ -332,9 +337,45 @@ const nullValue: Read.t<Value> =
   cursor =>
     Result.ok(cursor, null)
 
+const exactLength =
+  (typeInfo: TypeInfo.t): number | undefined => {
+    const fixed = DataType.fixedLength[typeInfo.type]
+    if (fixed !== undefined) {
+      return fixed
+    }
+    if ([ DataType.DataType.guid, DataType.DataType.intN, DataType.DataType.bitN,
+      DataType.DataType.floatN, DataType.DataType.moneyN, DataType.DataType.datetimeN,
+      DataType.DataType.decimalN, DataType.DataType.numericN ]
+      .includes(typeInfo.type as never)) {
+      return typeInfo.maxLength
+    }
+    switch (typeInfo.type) {
+      case DataType.DataType.dateN:
+        return 3
+      case DataType.DataType.timeN:
+        return DataType.timeLength(typeInfo.scale ?? 7)
+      case DataType.DataType.datetime2N:
+        return DataType.datetime2Length(typeInfo.scale ?? 7)
+      case DataType.DataType.datetimeOffsetN:
+        return DataType.datetimeOffsetLength(typeInfo.scale ?? 7)
+      default:
+        return undefined
+    }
+  }
+
 const decodeSized =
   (typeInfo: TypeInfo.t, length: number): Read.t<Value> =>
     cursor => {
+      const exact = exactLength(typeInfo)
+      if (exact !== undefined && length !== exact) {
+        return Result.fail(cursor,
+          `Invalid ${length}-byte value for type 0x${typeInfo.type.toString(16)}; expected ${exact}.`)
+      }
+      if (exact === undefined && typeInfo.maxLength !== undefined &&
+        typeInfo.maxLength !== TypeInfo.plpMarker && length > typeInfo.maxLength) {
+        return Result.fail(cursor,
+          `Value length ${length} exceeds TYPE_INFO maximum ${typeInfo.maxLength}.`)
+      }
       const result = Decode.bytes(length)(cursor)
       if (Result.failed(result)) {
         return result
@@ -359,7 +400,12 @@ const decodePlp =
       if (total.value === 0xffffffffffffffffn) {
         return Result.ok(total.cursor, null)
       }
+      const unknownLength = total.value === 0xfffffffffffffffen
+      if (!unknownLength && total.value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        return Result.fail(cursor, 'PLP total length exceeds the safe decoder limit.')
+      }
       const chunks: Uint8Array[] = []
+      let length = 0n
       let next = total.cursor
       for (;;) {
         const chunk = Decode.lVarbyte(next)
@@ -370,7 +416,14 @@ const decodePlp =
         if (chunk.value.byteLength === 0) {
           break
         }
+        length += BigInt(chunk.value.byteLength)
+        if (!unknownLength && length > total.value) {
+          return Result.fail(cursor, 'PLP chunks exceed the declared total length.')
+        }
         chunks.push(chunk.value)
+      }
+      if (!unknownLength && length !== total.value) {
+        return Result.fail(cursor, 'PLP chunks do not match the declared total length.')
       }
       try {
         return Result.ok(next, decodeBare(typeInfo, Encode.concat(...chunks)))

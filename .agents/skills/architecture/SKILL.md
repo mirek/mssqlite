@@ -26,9 +26,10 @@ the engine:
    bridges Node's `TLSSocket` records through PRELOGIN packet wrappers; after
    the final wrapped server record drains, both directions switch to raw TLS
    carrying ordinary TDS packets. `Tds.Message.push` then reassembles packets
-   (pure incremental state) into `{ type, payload }` messages.
+   (pure incremental state) into `{ type, payload }` messages; selected large
+   packet types such as Bulk Load instead emit packet-sized fragments.
 2. **Dispatch by packet type** (`server/connection.ts`) — prelogin,
-   login7, SQL batch, RPC, transaction manager, attention.
+   login7, SQL batch, RPC, transaction manager, bulk load, attention.
 3. **SQL batch** — `engine.executeBatch(session, sql)`:
    - `tsql.parse` → `Ast.Statement[]`
    - per statement: directly renderable (SELECT/DML/DDL) → transpile →
@@ -43,6 +44,11 @@ the engine:
    parameters decode to JS values (`Tds.Value.decode`) and bind as scoped
    variables (`engine.executeSql`), OUTPUT values return as RETURNVALUE
    tokens.
+6. **Bulk load** — an `INSERT BULK` SQL batch prepares a catalog-validated
+   engine plan. Subsequent type-7 fragments incrementally decode COLMETADATA,
+   ROW/NULL/PLP values, and DONE; complete rows enter cached prepared INSERTs
+   under one savepoint. EOM commits and returns DONE_COUNT. Invalid data,
+   conversion/constraint errors, disconnect, IGNORE, or Attention roll back.
 
 ## Key decisions
 
@@ -119,6 +125,19 @@ the engine:
   any database lookup or session allocation. Provider failures fail closed;
   hashes and submitted secrets are never logged or persisted in SQLite. SSPI,
   NTLM/Kerberos, and federated authentication remain unsupported.
+- **Bulk requests stream at packet and row boundaries** — normal TDS messages
+  retain their existing EOM reassembly, but packet type 7 bypasses whole-message
+  buffering. The TDS decoder retains only one incomplete token with a 16 MiB
+  cap and validates PLP totals before exposing rows. The server requires a
+  preceding validated INSERT BULK plan, and the engine resolves columns against
+  the target database catalog before opening a savepoint. Cached statement
+  variants account for default-applying NULLs; conversion uses target TYPE_INFO.
+  KEEP_NULLS, KEEPIDENTITY, and FIRE_TRIGGERS semantics are explicit. A load is
+  atomic within its request and nests safely in an existing user transaction.
+  The codec is strict about final client DONE by default; the server enables a
+  FreeTDS compatibility extension for row-boundary EOM without DONE.
+  Client batch sizes naturally create separate type-7 requests: each request is
+  atomic, while already committed `freebcp -b` batches survive a later failure.
 - **Name flattening** (`transpile/quote.ts`) — database qualifiers become
   encoded attachment aliases while `dbo` drops; `sys` /
   `INFORMATION_SCHEMA` become flat lowercase names (`"sys.tables"`) that
@@ -363,6 +382,8 @@ the engine:
   error) rather than wrapping the prefix; column names are capped at 128 chars.
 - **Canceled requests are honored.** A message whose EOM packet carries the
   IGNORE status bit (how tedious cancels mid-send) is discarded, not executed.
+  Bulk rows already staged under its savepoint are rolled back; IGNORE receives
+  a regular completion because a pre-EOM cancel may not send Attention.
 - **varchar/char/text use Windows-1252** (`@mssqlite/bytes` `Cp1252`), matching
   the advertised `SQL_Latin1_General_CP1` collation — `€`, em dash and smart
   quotes round-trip instead of corrupting as ISO-8859-1.
@@ -388,7 +409,6 @@ toward broader SQL Server compatibility.
   Server statement-vs-batch cases will be added as their operations land.
   Checked integer width inference for uncast columns currently follows SUM(int) and
   treats scalar columns of unknown declared width conservatively.
-- `USE db` switches the session label only — one database per server.
 - DECIMAL/NUMERIC values use canonical fixed-scale strings and SQLite TEXT
   storage. The transpiler derives SQL Server precision/scale, routes casts,
   arithmetic, comparison, ordering, and aggregates through scaled-BigInt UDFs,

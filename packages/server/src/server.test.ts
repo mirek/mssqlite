@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Connection, Request, TYPES } from 'tedious'
+import mssql from 'mssql'
 import { listen, type Listening } from './server.ts'
 
 let listening: Listening
@@ -139,6 +140,29 @@ const query =
       connection.execSql(request)
     })
 
+const bulk =
+  (
+    table: string,
+    configure: (load: ReturnType<Connection['newBulkLoad']>) => void,
+    rows: Iterable<unknown[] | Record<string, unknown>> |
+      AsyncIterable<unknown[] | Record<string, unknown>>,
+    options: { keepNulls?: boolean, checkConstraints?: boolean, fireTriggers?: boolean } = {}
+  ): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const load = connection.newBulkLoad(table, options, (error, rowCount) => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve(rowCount ?? 0)
+        }
+      })
+      configure(load)
+      connection.execBulkLoad(load, rows)
+    })
+
+const yieldEventLoop =
+  (): Promise<void> => new Promise(resolve => setImmediate(resolve))
+
 beforeAll(async () => {
   listening = await listen({
     path: ':memory:', port: 0, databaseName: 'master', authentication: { type: 'insecure' }
@@ -153,6 +177,113 @@ afterAll(async () => {
 
 test('login handshake succeeded', () => {
   expect(connection.state.name).toBe('LoggedIn')
+})
+
+test('tedious streams large mixed and PLP bulk loads with defaults and row counts', async () => {
+  await query(`
+    CREATE TABLE wire_bulk (
+      id INT PRIMARY KEY,
+      note NVARCHAR(MAX) NULL,
+      amount DECIMAL(12, 2) NOT NULL,
+      payload VARBINARY(MAX) NULL,
+      fallback INT NOT NULL DEFAULT 9
+    )
+  `)
+  const long = 'bulk-'.repeat(5000)
+  const rows = Array.from({ length: 2500 }, (_, index) => ({
+    id: index,
+    note: index === 0 ? long : index % 7 === 0 ? null : `row-${index}`,
+    amount: index + 0.25,
+    payload: index % 3 === 0 ? Buffer.from([ index & 0xff, 2, 3 ]) : null,
+    fallback: index % 5 === 0 ? null : index
+  }))
+  const count = await bulk('dbo.wire_bulk', load => {
+    load.addColumn('id', TYPES.Int, { nullable: false })
+    load.addColumn('note', TYPES.NVarChar, { length: Infinity, nullable: true })
+    load.addColumn('amount', TYPES.Decimal, { precision: 12, scale: 2, nullable: false })
+    load.addColumn('payload', TYPES.VarBinary, { length: Infinity, nullable: true })
+    load.addColumn('fallback', TYPES.Int, { nullable: true })
+  }, rows)
+  expect(count).toBe(2500)
+  expect((await query(`
+    SELECT COUNT(*) AS count, MAX(LEN(note)) AS longest,
+      SUM(CASE WHEN fallback = 9 THEN 1 ELSE 0 END) AS defaults
+    FROM wire_bulk
+  `)).rows).toEqual([ { count: 2500, longest: long.length, defaults: 501 } ])
+})
+
+test('tedious bulk constraint failures and cancel roll back the active load', async () => {
+  await query('CREATE TABLE wire_bulk_rollback (id INT PRIMARY KEY, value INT NOT NULL)')
+  await expect(bulk('wire_bulk_rollback', load => {
+    load.addColumn('id', TYPES.Int, { nullable: false })
+    load.addColumn('value', TYPES.Int, { nullable: false })
+  }, [ { id: 1, value: 1 }, { id: 1, value: 2 } ]))
+    .rejects.toBeDefined()
+  expect((await query('SELECT COUNT(*) AS count FROM wire_bulk_rollback')).rows)
+    .toEqual([ { count: 0 } ])
+
+  let cancel: (() => void) | undefined
+  const canceled = new Promise<Error | undefined>(resolve => {
+    const load = connection.newBulkLoad('wire_bulk_rollback', error => resolve(error ?? undefined))
+    load.addColumn('id', TYPES.Int, { nullable: false })
+    load.addColumn('value', TYPES.Int, { nullable: false })
+    cancel = () => load.cancel()
+    connection.execBulkLoad(load, (async function * () {
+      for (let index = 0; index < 20_000; index++) {
+        if (index % 100 === 0) {
+          await yieldEventLoop()
+        }
+        yield { id: index, value: index }
+      }
+    })())
+  })
+  setTimeout(() => cancel?.(), 10)
+  expect(await canceled).toBeDefined()
+  expect((await query('SELECT COUNT(*) AS count FROM wire_bulk_rollback')).rows)
+    .toEqual([ { count: 0 } ])
+}, 20000)
+
+test('node-mssql SqlBulkCopy-style API and FIRE_TRIGGERS interoperate', async () => {
+  await query(`
+    CREATE TABLE wire_bulk_api (id INT PRIMARY KEY, value NVARCHAR(30));
+    CREATE TABLE wire_bulk_audit (id INT);
+    CREATE TRIGGER wire_bulk_api_insert ON wire_bulk_api AFTER INSERT AS
+    BEGIN
+      INSERT INTO wire_bulk_audit SELECT id FROM inserted
+    END
+  `)
+  await bulk('wire_bulk_api', load => {
+    load.addColumn('id', TYPES.Int, { nullable: false })
+    load.addColumn('value', TYPES.NVarChar, { length: 30, nullable: true })
+  }, [ { id: 1, value: 'triggered' } ], { fireTriggers: true, checkConstraints: true })
+
+  const pool = await new mssql.ConnectionPool({
+    server: '127.0.0.1',
+    port: listening.port,
+    user: 'sa',
+    password: 'anything',
+    database: 'master',
+    options: { encrypt: false, trustServerCertificate: true },
+    pool: { min: 0, max: 1, idleTimeoutMillis: 1000 }
+  }).connect()
+  try {
+    const table = new mssql.Table('wire_bulk_api')
+    table.create = false
+    table.columns.add('id', mssql.Int, { nullable: false })
+    const nvarchar = mssql.NVarChar
+    table.columns.add('value', nvarchar(30), { nullable: true })
+    table.rows.add(2, 'node-mssql')
+    table.rows.add(3, null)
+    expect((await pool.request().bulk(table)).rowsAffected).toBe(2)
+  } finally {
+    await pool.close()
+  }
+  expect((await query('SELECT id, value FROM wire_bulk_api ORDER BY id')).rows).toEqual([
+    { id: 1, value: 'triggered' },
+    { id: 2, value: 'node-mssql' },
+    { id: 3, value: null }
+  ])
+  expect((await query('SELECT id FROM wire_bulk_audit ORDER BY id')).rows).toEqual([ { id: 1 } ])
 })
 
 test('multiple sessions switch databases and query three-part names independently', async () => {
