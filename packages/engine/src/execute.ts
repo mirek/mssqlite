@@ -15,7 +15,8 @@ import {
   columnsOfTable,
   resolveTableVariableExpression,
   resolveTableVariables,
-  withTableVariableScope
+  withTableVariableScope,
+  withTableVariableScopeAsync
 } from './table-variable.ts'
 import { BatchError, MssqlError, of as errorOf } from './error.ts'
 import { columnsOf, type Column } from './metadata.ts'
@@ -43,6 +44,7 @@ import {
   procedureKey,
   triggerKey,
   withCursorScope,
+  withCursorScopeAsync,
   type Cursor,
   type Procedure,
   type Server,
@@ -52,6 +54,11 @@ import {
   type Value,
   type Variable
 } from './session.ts'
+import {
+  CancellationError,
+  checkpoint,
+  type ExecutionControl
+} from './cancellation.ts'
 
 const catalogDatabase =
   (session: Session, name: Ast.QualifiedName): Session['db'] =>
@@ -2131,5 +2138,204 @@ export const executeBatch =
       throw mapped
     } finally {
       endRequest(session)
+    }
+  }
+
+const executeStatementCooperative =
+  async (
+    session: Session,
+    statement: Ast.Statement,
+    items: Item[],
+    control: ExecutionControl
+  ): Promise<Signal> => {
+    await checkpoint(control)
+    switch (statement.kind) {
+      case 'if':
+        return truthy(session, statement.condition) ?
+          executeStatementCooperative(session, statement.then, items, control) :
+          statement.else_ === undefined ?
+            undefined :
+            executeStatementCooperative(session, statement.else_, items, control)
+      case 'while':
+        for (;;) {
+          await checkpoint(control)
+          if (!truthy(session, statement.condition)) {
+            return undefined
+          }
+          const signal = await executeStatementCooperative(
+            session, statement.body, items, control)
+          if (signal === 'break') {
+            return undefined
+          }
+          if (signal === 'return') {
+            return 'return'
+          }
+        }
+      case 'block':
+        for (const inner of statement.statements) {
+          const signal = await executeStatementCooperative(session, inner, items, control)
+          if (signal !== undefined) {
+            return signal
+          }
+        }
+        return undefined
+      case 'tryCatch':
+        try {
+          for (const inner of statement.try_) {
+            const signal = await executeStatementCooperative(session, inner, items, control)
+            if (signal !== undefined) {
+              return signal
+            }
+          }
+        } catch (error) {
+          if (error instanceof CancellationError) {
+            throw error
+          }
+          const mapped = errorOf(error)
+          if (mapped.severity > 19) {
+            throw mapped
+          }
+          session.lastError = mapped.number
+          if (session.transactionCount > 0 && session.options.get('xact_abort') === 'on') {
+            session.transactionDoomed = true
+          }
+          const previous = session.caughtError
+          session.caughtError = {
+            number: mapped.number,
+            severity: mapped.severity,
+            state: mapped.state,
+            message: mapped.message,
+            procedure: null,
+            line: 1
+          }
+          try {
+            for (const inner of statement.catch_) {
+              const signal = await executeStatementCooperative(session, inner, items, control)
+              if (signal !== undefined) {
+                return signal
+              }
+            }
+          } finally {
+            session.caughtError = previous
+          }
+        }
+        return undefined
+      default:
+        return executeStatement(session, statement, items)
+    }
+  }
+
+/**
+ * Cooperative server execution. SQLite statements remain atomic; interpreted
+ * statement and control-flow boundaries yield so Attention can abort promptly.
+ */
+export const executeBatchAsync =
+  async (session: Session, sql: string, control: ExecutionControl): Promise<Item[]> => {
+    beginRequest(session, sql)
+    session.server.current = session
+    for (const [ key, function_ ] of session.server.functions) {
+      installScalarFunction(session.server, key, function_)
+    }
+    const items: Item[] = []
+    try {
+      return await withCursorScopeAsync(session, () =>
+        withTableVariableScopeAsync(session, async () => {
+          const statements = parse(sql).map(statement => localize(statement, session.database))
+          let firstError: MssqlError | undefined
+          for (const statement of statements) {
+            try {
+              const signal = await executeStatementCooperative(session, statement, items, control)
+              session.lastError = 0
+              if (signal === 'return') {
+                break
+              }
+            } catch (error) {
+              if (error instanceof CancellationError) {
+                throw error
+              }
+              const mapped = errorOf(error)
+              firstError ??= mapped
+              session.lastError = mapped.number
+              session.rowCount = 0
+              if (mapped instanceof BatchError) {
+                items.push(...mapped.items)
+              } else {
+                items.push({ kind: 'error', error: mapped })
+              }
+              const xactAbort = session.options.get('xact_abort') === 'on' &&
+                mapped.honorsXactAbort && session.transactionCount > 0
+              if (xactAbort) {
+                session.db.exec('ROLLBACK')
+                session.transactionCount = 0
+                session.transactionDoomed = false
+                flushSequences(session.server)
+                flushRowversion(session.server)
+              }
+              if (!canContinueBatch(mapped) || xactAbort) {
+                throw new BatchError(mapped, items)
+              }
+            }
+          }
+          await checkpoint(control)
+          if (firstError !== undefined) {
+            throw new BatchError(firstError, items)
+          }
+          return items
+        }))
+    } catch (error) {
+      if (error instanceof CancellationError) {
+        throw error
+      }
+      const mapped = errorOf(error)
+      if (!(mapped instanceof BatchError)) {
+        session.lastError = mapped.number
+      }
+      throw mapped
+    } finally {
+      endRequest(session)
+    }
+  }
+
+/** Abort-aware sp_executesql parameter scope over cooperative batch execution. */
+export const executeSqlAsync =
+  async (
+    session: Session,
+    sql: string,
+    parameters: readonly Parameter[],
+    control: ExecutionControl
+  ): Promise<SqlResult> => {
+    const saved = new Map<string, Variable | undefined>()
+    const savedNocount = session.options.get('nocount')
+    for (const parameter of parameters) {
+      const key = parameter.name.toLowerCase()
+      saved.set(key, session.variables.get(key))
+      session.variables.set(key, {
+        type: parameter.type ?? { name: 'sql_variant', args: [] },
+        value: parameter.type === undefined ? parameter.value :
+          coercedValue(parameter.type, parameter.value)
+      } as Variable)
+    }
+    try {
+      const items = await executeBatchAsync(session, sql, control)
+      const outputs = parameters
+        .filter(parameter => parameter.output === true)
+        .map(parameter => ({
+          name: parameter.name,
+          value: session.variables.get(parameter.name.toLowerCase())?.value ?? null
+        }))
+      return { items, outputs }
+    } finally {
+      if (savedNocount === undefined) {
+        session.options.delete('nocount')
+      } else {
+        session.options.set('nocount', savedNocount)
+      }
+      for (const [ key, variable ] of saved) {
+        if (variable === undefined) {
+          session.variables.delete(key)
+        } else {
+          session.variables.set(key, variable)
+        }
+      }
     }
   }

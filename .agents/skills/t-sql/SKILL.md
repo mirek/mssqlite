@@ -33,7 +33,9 @@ The language pipeline lives in three packages:
   with function mapping and CONVERT style support.
 - [`packages/engine`](../../../packages/engine) — interprets what SQLite
   cannot: variables, IF/WHILE, @@TRANCOUNT nesting, sp_executesql,
-  SELECT INTO, error-number mapping.
+  SELECT INTO, error-number mapping. Its server-facing async execution checks
+  an AbortSignal between statements and on every interpreted loop iteration;
+  Attention is control flow, not a catchable T-SQL error.
 
 ### Parsing notes discovered implementing
 

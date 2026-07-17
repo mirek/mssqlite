@@ -28,16 +28,23 @@ the engine:
    carrying ordinary TDS packets. After a MARS-enabled login, `Tds.Smp.push`
    first separates SYN/ACK/FIN/DATA frames by logical SID; DATA contains one
    TDS packet. `Tds.Message.push` then reassembles each session independently
-   (pure incremental state) into `{ type, payload }` messages; selected large
+   (pure incremental state) into `{ type, payload, ignore }` messages; selected large
    packet types such as Bulk Load instead emit packet-sized fragments.
 2. **Dispatch by packet type** (`server/connection.ts`) — prelogin,
    login7, SQL batch, RPC, transaction manager, bulk load, attention.
-3. **SQL batch** — `engine.executeBatch(session, sql)`:
+3. **SQL batch** — requests are serialized against the shared synchronous
+   SQLite session and run through `engine.executeBatchAsync(session, sql,
+   control)`:
    - `tsql.parse` → `Ast.Statement[]`
    - per statement: directly renderable (SELECT/DML/DDL) → transpile →
      prepared SQLite statement with variables bound as native `@x`
      parameters; interpreted (DECLARE/SET/IF/WHILE/transactions/EXEC) →
      engine logic, scalar expressions evaluated via `SELECT (expr)`.
+   - an AbortSignal checkpoint yields before each statement and every
+     interpreted control-flow iteration. Attention aborts that request,
+     discards its accumulated items, closes the canceled response message, and
+     emits a separate DONE_ATTN response. SQLite calls themselves remain
+     synchronous and atomic because `DatabaseSync` has no interrupt API.
    - DDL additionally updates the catalog (`catalog.createTable` …).
 4. **Results → tokens** — engine items (`rows` with TDS TypeInfo columns,
    `count`, `message`) render through `Tds.Token.*` encoders
@@ -400,20 +407,29 @@ the engine:
   would overflow its length prefix throws a clean error (mapped to an MSSQL
   error) rather than wrapping the prefix; column names are capped at 128 chars.
 - **Canceled requests are honored.** A message whose EOM packet carries the
-  IGNORE status bit (how tedious cancels mid-send) is discarded, not executed.
+  IGNORE status bit (how tedious cancels mid-send) is dispatched as ignored but
+  never executed.
   Bulk rows already staged under its savepoint are rolled back; IGNORE receives
-  a regular completion because a pre-EOM cancel may not send Attention.
+  a regular completion because a pre-EOM cancel may not send Attention. An
+  Attention for executing SQL/RPC work aborts at the next cooperative boundary,
+  suppresses all accumulated rows/errors, sends the canceled request's final
+  DONE and then a distinct DONE_ATTN message, and preserves any explicit user
+  transaction for the client. Per-logical-session controllers isolate MARS
+  cancellation; FIN and socket close abort without emitting late output.
 - **varchar/char/text use Windows-1252** (`@mssqlite/bytes` `Cp1252`), matching
   the advertised `SQL_Latin1_General_CP1` collation — `€`, em dash and smart
   quotes round-trip instead of corrupting as ISO-8859-1.
 
 ## Known limitations (v1)
 
-See [TODO.md](../../../TODO.md) for the prioritized implementation briefs
-toward broader SQL Server compatibility.
+There are currently no open implementation briefs in
+[TODO.md](../../../TODO.md).
 
-- No login-only TDS 7.x encryption or TLS-first TDS 8.0. No MARS and no
-  SSPI/FedAuth; authenticated mode currently supports configured SQL logins.
+- No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
+  implemented; authenticated mode supports configured SQL logins.
+- Cooperative cancellation cannot interrupt one synchronous SQLite statement;
+  it takes effect before/after that call and within interpreted loops. This is
+  a `node:sqlite` API limitation rather than a transaction policy.
 - Cursor variables, positioned updates, and live KEYSET/DYNAMIC visibility are
   unsupported. Sequence DECIMAL/NUMERIC precision is capped at 18, cache options
   are metadata-only, same-row duplicate NEXT VALUE references are not coalesced,

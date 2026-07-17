@@ -82,9 +82,12 @@ bulk-load streams interoperate with `tedious` and node-mssql bulk-copy APIs,
 decode rows incrementally, and commit or roll back each load atomically. MARS
 negotiation and SMP multiplexing support concurrent readers and writes on one
 physical connection with per-request errors, cancellation, and fair packet
-flow control.
+flow control. TDS Attention cooperatively interrupts active interpreted work,
+preserves explicit transaction state, suppresses late output, and leaves the
+connection reusable by `tedious`.
 
-What's still missing is tracked in [TODO.md](TODO.md).
+There are currently no open implementation briefs; deliberately unsupported
+SQL Server subsystems are listed in [TODO.md](TODO.md).
 
 ## Development
 

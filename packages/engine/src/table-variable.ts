@@ -656,3 +656,21 @@ export const withTableVariableScope =
       }
     }
   }
+
+/** Async variant used by cooperative server execution. */
+export const withTableVariableScopeAsync =
+  async <T>(session: Session, run: () => Promise<T>): Promise<T> => {
+    const saved = new Map(session.tableVariables)
+    session.tableVariables.clear()
+    try {
+      return await run()
+    } finally {
+      for (const table of session.tableVariables.values()) {
+        session.db.exec(`DROP TABLE IF EXISTS ${Transpile.Quote.objectName(table.table)}`)
+      }
+      session.tableVariables.clear()
+      for (const [ name, table ] of saved) {
+        session.tableVariables.set(name, table)
+      }
+    }
+  }
