@@ -7,12 +7,25 @@ import {
   type Parameter, type Server, type Session, type Value
 } from '@mssqlite/engine'
 import { batchResponse, errorResponse, rpcResponse } from './respond.ts'
+import createTlsTransport, { type Transport as TlsTransport } from './tls-transport.ts'
 import type { Socket } from 'node:net'
+import type { SecureContext, TLSSocket } from 'node:tls'
+
+export type EncryptionOptions = {
+  readonly context: SecureContext,
+  readonly mode: 'optional' | 'required',
+  readonly requestClientCertificate: boolean,
+  readonly rejectUnauthorized: boolean
+}
 
 /** Per-connection state. */
 type Connection = {
-  readonly socket: Socket,
+  readonly network: Socket,
+  stream: Socket | TLSSocket,
   readonly engine: Server,
+  readonly encryption?: EncryptionOptions,
+  phase: 'prelogin' | 'tls' | 'plaintext' | 'encrypted',
+  tls: TlsTransport | undefined,
   session: Session | undefined,
   state: Message.State,
   packetSize: number,
@@ -27,7 +40,7 @@ const productVersion = { major: 15, minor: 0, build: 2000 }
 const send =
   (connection: Connection, type: number, payload: Uint8Array): void => {
     for (const packet of Packet.split(type, payload, connection.packetSize, connection.session?.spid ?? 0)) {
-      connection.socket.write(packet)
+      connection.stream.write(packet)
     }
   }
 
@@ -37,21 +50,86 @@ const respond =
 
 const onPrelogin =
   (connection: Connection, payload: Uint8Array): void => {
+    if (connection.phase === 'tls') {
+      connection.tls?.feed(payload)
+      return
+    }
+    if (connection.phase !== 'prelogin') {
+      connection.network.destroy()
+      return
+    }
     const prelogin = Prelogin.decode(payload)
+    if (prelogin === undefined) {
+      connection.network.destroy()
+      return
+    }
+    const serverMode = connection.encryption?.mode ?? 'unsupported'
+    const negotiation = Prelogin.negotiateEncryption(
+      prelogin.encryption ?? Prelogin.Encryption.off, serverMode)
+    if (negotiation === undefined) {
+      connection.network.destroy()
+      return
+    }
     respond(connection, Prelogin.encode({
       version: { ...productVersion, subBuild: 0 },
-      encryption: Prelogin.Encryption.notSupported,
+      encryption: negotiation.response,
       instance: '',
       mars: false,
       ...prelogin?.fedAuthRequired === undefined ? {} : { fedAuthRequired: false }
     }))
+    if (!negotiation.tls) {
+      connection.phase = 'plaintext'
+      return
+    }
+    const encryption = connection.encryption
+    if (encryption === undefined) {
+      connection.network.destroy()
+      return
+    }
+    connection.phase = 'tls'
+    let secured = false
+    const activate = (): void => {
+      if (connection.phase !== 'tls') {
+        return
+      }
+      connection.phase = 'encrypted'
+      connection.stream = tls.socket
+      connection.state = Message.initial
+    }
+    const tls = createTlsTransport(
+      encryption.context,
+      bytes => {
+        if (connection.phase === 'tls') {
+          for (const packet of Packet.split(
+            Packet.Type.prelogin, bytes, connection.packetSize, 0)) {
+            connection.network.write(packet)
+          }
+          if (secured) {
+            activate()
+          }
+        } else {
+          connection.network.write(bytes)
+        }
+      },
+      {
+        request: encryption.requestClientCertificate,
+        rejectUnauthorized: encryption.rejectUnauthorized
+      }
+    )
+    connection.tls = tls
+    tls.socket.on('data', (chunk: Buffer) => consume(connection, chunk))
+    tls.socket.once('secure', () => {
+      secured = true
+      setImmediate(activate)
+    })
+    tls.socket.on('error', () => connection.network.destroy())
   }
 
 const onLogin =
   (connection: Connection, payload: Uint8Array): void => {
     const login = Login7.decode(payload)
     if (login === undefined) {
-      connection.socket.destroy()
+      connection.network.destroy()
       return
     }
     const session_ = session(connection.engine)
@@ -101,7 +179,7 @@ const onSqlBatch =
         batchResponse(error.items, connection.engine.serverName) :
         errorResponse(mapped, connection.engine.serverName))
       if (mapped.severity >= 20) {
-        connection.socket.end()
+        connection.stream.end()
       }
     }
   }
@@ -194,7 +272,7 @@ const onRpc =
         rpcResponse(error.items, connection.engine.serverName) :
         errorResponse(mapped, connection.engine.serverName, true))
       if (mapped.severity >= 20) {
-        connection.socket.end()
+        connection.stream.end()
       }
     }
   }
@@ -261,7 +339,7 @@ const onMessage =
     }
     const session_ = connection.session
     if (session_ === undefined) {
-      connection.socket.destroy()
+      connection.network.destroy()
       return
     }
     switch (message.type) {
@@ -282,12 +360,30 @@ const onMessage =
     }
   }
 
+const consume =
+  (connection: Connection, chunk: Uint8Array): void => {
+    try {
+      const { state, messages } = Message.push(connection.state, chunk)
+      connection.state = state
+      for (const message of messages) {
+        onMessage(connection, message)
+      }
+    } catch (error) {
+      respond(connection, errorResponse(errorOf(error), connection.engine.serverName))
+      connection.network.destroy()
+    }
+  }
+
 /** Attaches TDS protocol handling to an accepted socket. */
 export const attach =
-  (socket: Socket, engine: Server): void => {
+  (socket: Socket, engine: Server, encryption?: EncryptionOptions): void => {
     const connection: Connection = {
-      socket,
+      network: socket,
+      stream: socket,
       engine,
+      ...encryption === undefined ? {} : { encryption },
+      phase: 'prelogin',
+      tls: undefined,
       session: undefined,
       state: Message.initial,
       packetSize: Packet.defaultPacketSize,
@@ -296,18 +392,13 @@ export const attach =
       transactionDescriptor: 0n
     }
     socket.on('data', (chunk: Buffer) => {
-      try {
-        const { state, messages } = Message.push(connection.state, new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
-        connection.state = state
-        for (const message of messages) {
-          onMessage(connection, message)
-        }
-      } catch (error) {
-        respond(connection, errorResponse(errorOf(error), engine.serverName))
-        socket.destroy()
+      const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+      if (connection.phase === 'encrypted') {
+        connection.tls?.feed(bytes)
+      } else {
+        consume(connection, bytes)
       }
     })
-    socket.on('error', () => {
-      socket.destroy()
-    })
+    socket.on('end', () => connection.tls?.end())
+    socket.on('error', () => socket.destroy())
   }

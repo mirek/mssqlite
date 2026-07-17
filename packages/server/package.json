@@ -26,6 +26,8 @@
     "@mssqlite/tds": "workspace:*"
   },
   "devDependencies": {
-    "tedious": "^18.6.1"
+    "@types/mssql": "^12.3.0",
+    "mssql": "^12.7.0",
+    "tedious": "^20.0.0"
   }
 }

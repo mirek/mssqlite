@@ -1,6 +1,6 @@
 ---
 name: tedious
-description: "Using the tedious MSSQL client against mssqlite — connection options that matter (encrypt: false, port, useColumnNames), Request API and events (row, infoMessage on the connection, done vs doneInProc), how tedious maps operations to the wire (sp_executesql RPC, sp_prepare handles, transaction manager), and e2e testing patterns. Use when writing server e2e tests or debugging client interop."
+description: "Using the tedious MSSQL client against mssqlite — connection options that matter (TLS, port, useColumnNames), Request API and events (row, infoMessage on the connection, done vs doneInProc), how tedious maps operations to the wire (sp_executesql RPC, sp_prepare handles, transaction manager), and e2e testing patterns. Use when writing server e2e tests or debugging client interop."
 ---
 
 # tedious Client Against mssqlite
@@ -17,7 +17,7 @@ new Connection({
   authentication: { type: 'default', options: { userName: 'sa', password: 'any' } },
   options: {
     port,                        // pick the listener's port; 0 → ephemeral in tests
-    encrypt: false,              // REQUIRED — mssqlite answers ENCRYPT_NOT_SUP
+    encrypt: true,               // tedious default; server needs TLS key + cert
     trustServerCertificate: true,
     database: 'master',
     useColumnNames: true,        // row event gives an object keyed by column name
@@ -27,8 +27,15 @@ new Connection({
 })
 ```
 
-- `encrypt: false` is mandatory. tedious ≥ 16 defaults to `true` and will
-  abort when the server reports encryption not supported.
+- tedious ≥ 16 defaults to `encrypt: true`. Start mssqlite with
+  `tls: { key, cert }`; required encryption is the server default whenever TLS
+  is configured. `trustServerCertificate: true` is appropriate only for an
+  explicitly trusted self-signed development certificate. For a plaintext
+  local server with no TLS configuration, set `encrypt: false`.
+- To validate a private CA, set `trustServerCertificate: false` and pass it as
+  `cryptoCredentialsDetails: { ca }`. `serverName` must match a certificate
+  DNS/IP subject alternative name; Node rejects an IP literal as an SNI name,
+  so set a DNS `serverName` even when the TCP target is an IP.
 - `connection.connect(callback)` — the callback fires after LOGINACK +
   final DONE. `connection.state.name === 'LoggedIn'` confirms handshake.
 - Failed logins surface as `ConnectionError` from the ERROR token.
@@ -77,6 +84,9 @@ connection.execSql(request)
 
 - Listen on port 0 and read the assigned port
   (`await listen({ port: 0 })`).
+- TLS e2e tests use a fixed localhost certificate and exercise tedious with its
+  current encryption default, private-CA validation, hostname mismatch,
+  plaintext rejection, and the higher-level `mssql` client.
 - One shared connection in `beforeAll` keeps tests fast; open a second
   connection inside a test to check session isolation.
 - Wrap Request in a promise helper collecting rows + rowCount (see

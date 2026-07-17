@@ -28,7 +28,7 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 | Spec area | Module |
 |---|---|
 | Packet header, splitting, reassembly | `packet.ts`, `message.ts` |
-| PreLogin request/response | `prelogin.ts` |
+| PreLogin request/response and encryption negotiation | `prelogin.ts` |
 | Login7 + password descrambling + FeatureExt | `login7.ts` |
 | ALL_HEADERS, SQL batch, RPC, transaction manager | `all-headers.ts`, `sql-batch.ts`, `rpc.ts`, `transaction-manager.ts` |
 | TYPE_INFO + TYPE_VARBYTE values incl. PLP | `type-info.ts`, `value.ts` |
@@ -37,6 +37,11 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 
 ### Notes discovered implementing
 
+- mssqlite implements the full-session TDS 7.x encryption matrix, not
+  login-only encryption. TLS handshake records remain PRELOGIN-wrapped until
+  the final server record has drained; Node's server-side `secure` event can
+  fire just before that write, so switching to raw records in the event handler
+  loses the client at the framing boundary.
 - **RPC OptionFlags is 2 bytes** (USHORT). The example 4.8 prose lists a
   single `00` byte, but the packet length arithmetic (47 total) only
   works with two flag bytes.

@@ -78,6 +78,16 @@ When encryption is negotiated, TLS handshake messages are wrapped in TDS packets
 - **Login-only**: Only the first TDS packet of Login7 is encrypted; all subsequent packets are plaintext
 - **Full encryption**: All TDS packets from handshake completion onward are encrypted
 
+mssqlite implements full-session TDS 7.x encryption only. Required mode
+advertises `ENCRYPT_REQ` and accepts client ON/REQ; optional mode advertises
+`ENCRYPT_ON` to OFF/ON/REQ clients and accepts NOT_SUP as plaintext. With no
+TLS configuration, the server accepts OFF/NOT_SUP and advertises
+`ENCRYPT_NOT_SUP`. Every impossible combination closes during PRELOGIN.
+
+The server must keep its final TLS handshake output PRELOGIN-wrapped. Node's
+server-side secure event can precede that final encrypted write, so the raw-TLS
+transport boundary is after the write drains, not merely at the event.
+
 ### TDS 8.0 Encryption
 
 - TLS handshake occurs **before** any TDS packets (standard TLS with ALPN `tds/8.0`)

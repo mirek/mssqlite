@@ -22,6 +22,11 @@ const connection = new Connection({
 })
 ```
 
+The CLI is plaintext for local development. Embedded use can require TLS by
+passing `{ tls: { key, cert } }` to `listen`; current `tedious` encryption
+defaults then connect without `encrypt: false`. See the
+[`@mssqlite/server` guide](packages/server) for certificate configuration.
+
 ## Packages
 
 Bottom-up, each layer fully tested and documented before the next:
