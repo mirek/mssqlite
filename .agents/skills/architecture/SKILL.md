@@ -19,6 +19,10 @@ the engine:
         └──── @mssqlite/server ── @mssqlite/engine ── node:sqlite
 ```
 
+`@mssqlite/differential` sits outside the runtime towers. It launches an
+ephemeral server plus pinned SQL Server 2025 container and drives both through
+one tedious capture path; no production package depends on it.
+
 ## Request lifecycle
 
 1. **Socket bytes → messages** — cleartext PRELOGIN first negotiates
@@ -540,8 +544,9 @@ the engine:
 ## Known limitations (v1)
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
-The current differential backlog includes collation behavior and static result
-metadata. OPENJSON strict path validation from the audit is implemented.
+The completed compatibility audit is guarded by the opt-in
+`pnpm test:differential` corpus; declared path-and-value differences are
+checked for both unexpected drift and stale expectations.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

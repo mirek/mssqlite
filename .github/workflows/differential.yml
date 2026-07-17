@@ -1,0 +1,31 @@
+name: SQL Server differential
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
+
+jobs:
+  differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:differential
+      - name: Upload differential snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-server-differential
+          path: artifacts/differential/results.json
+          if-no-files-found: error

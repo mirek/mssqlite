@@ -40,6 +40,7 @@ Bottom-up, each layer fully tested and documented before the next:
 | [`@mssqlite/catalog`](packages/catalog) | `sys.*` and `INFORMATION_SCHEMA` emulation, DDL maintenance |
 | [`@mssqlite/engine`](packages/engine) | Execution engine — sessions, variables, control flow, transactions, UDFs |
 | [`@mssqlite/server`](packages/server) | TCP TDS server — e2e tested with the `tedious` client |
+| [`@mssqlite/differential`](packages/differential) | Opt-in typed corpus compared with SQL Server 2025 through the same client |
 
 Everything is written in a functional, composable style after the
 [`@prelude/*`](https://www.npmjs.com/org/prelude) packages — immutable
@@ -96,6 +97,7 @@ subsystems.
 ```sh
 pnpm test         # eslint + tsc + vitest (unit, executable-SQL and tedious e2e)
 pnpm vitest       # watch mode
+pnpm test:differential # Docker-backed comparison with SQL Server 2025
 ```
 
 Node ≥ 22.18 — TypeScript sources run natively via type stripping; no build
