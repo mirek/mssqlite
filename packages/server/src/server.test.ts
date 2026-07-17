@@ -893,6 +893,38 @@ test('character widths and fixed families cross the tedious boundary', async () 
   expect(parameter.columns).toMatchObject([ { type: 'VarChar', length: 3 } ])
 })
 
+test('select into preserves stored types and eligible identity over tedious', async () => {
+  await query(`
+    SELECT 1 AS literal_int, CAST('x' AS varchar(5)) AS cast_text,
+      N'x' AS unicode_text, CAST(1 AS bit) AS bit_value,
+      CAST(1.25 AS decimal(8,2)) AS decimal_value
+    INTO wire_select_into
+    CREATE TABLE wire_select_source (id int IDENTITY(4,2), value varchar(6) NOT NULL)
+    INSERT wire_select_source(value) VALUES ('one')
+    SELECT id, value INTO wire_select_identity FROM wire_select_source
+    INSERT wire_select_identity(value) VALUES ('two')
+  `)
+  const stored = await query(`
+    SELECT literal_int, cast_text, unicode_text, bit_value, decimal_value
+    FROM wire_select_into
+  `)
+  expect(stored.rows).toEqual([ {
+    literal_int: 1,
+    cast_text: 'x',
+    unicode_text: 'x',
+    bit_value: true,
+    decimal_value: 1.25
+  } ])
+  expect(stored.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'VarChar', 5 ], [ 'NVarChar', 2 ], [ 'BitN', 1 ], [ 'DecimalN', 5 ]
+  ])
+  const identity = await query('SELECT id, value FROM wire_select_identity ORDER BY id')
+  expect(identity.rows).toEqual([ { id: 4, value: 'one' }, { id: 6, value: 'two' } ])
+  expect(identity.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'VarChar', 6 ]
+  ])
+})
+
 test('ASCII and CHAR expose Windows-1252 values and varchar metadata over tedious', async () => {
   const result = await query(`
     SELECT ASCII('€') AS euro_byte, ASCII('A') AS ascii_byte,

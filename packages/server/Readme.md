@@ -119,7 +119,9 @@ because LOGIN7 password scrambling is not transport encryption.
   `STRING_SPLIT`, `OPENJSON`, and `GENERATE_SERIES` stream ordinary result
   rows with predeclared metadata. OPENJSON preserves strict-path errors and
   supports correlated APPLY inputs; other common correlated APPLY shapes are
-  translated before execution. PIVOT and UNPIVOT rewrites preserve generated
+  translated before execution. SELECT INTO persists the inferred result types,
+  widths, nullability, collation, and eligible identity for subsequent wire
+  queries. PIVOT and UNPIVOT rewrites preserve generated
   result names and types on the wire, including all-NULL columns; ROLLUP,
   CUBE, GROUPING SETS, and GROUPING() stream compound subtotal results with
   stable metadata. Per-statement SET NOCOUNT state clears DONE_COUNT and its

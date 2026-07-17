@@ -459,6 +459,12 @@ the engine:
   in the comparison path. Reserved constraint indexes map failures to 2627;
   user index names map to 2601. SQLite enforces the same indexes for ordinary
   DML, MERGE, triggers, bulk load, filtered indexes, and transaction rollback.
+- **SELECT INTO is typed before execution** — resolved source metadata and
+  expression/set-operation inference produce ordinary target column definitions
+  before rows run. Direct eligible identity columns retain seed/increment;
+  expressions, joins, duplicate projections, and unions do not. Physical and
+  catalog creation precede INSERT SELECT so SQL Server's empty-table failure
+  behavior and explicit transaction rollback remain observable.
 
 ## Extension points
 

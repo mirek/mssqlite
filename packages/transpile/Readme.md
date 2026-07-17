@@ -69,6 +69,10 @@ rendered statement reports the variables it binds.
   also carry static or variable-declaration source type into the UDF so numeric
   values truncate toward zero while decimal-looking character text still raises
   245; projection hints retain the requested integer wire width.
+- **SELECT INTO projection hints** — every named expression with a known type
+  contributes its exact target descriptor; set-operation branches widen through
+  the same precedence table and combine nullability before the engine creates
+  the destination table.
 - **Table variables** — the engine resolves `@t` object references to
   collision-free temp-table names before calling the pure renderer.
 - **Table-valued functions** — `STRING_SPLIT` adapts a JSON-array UDF

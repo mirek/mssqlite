@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
@@ -2391,13 +2392,177 @@ test('newid produces guids, rand in range', () => {
   expect(Number(result.rows[0]?.[1])).toBeLessThan(1)
 })
 
-test('select into creates table and registers catalog', () => {
+test('select into preserves expression types, nullability, collation and storage coercion', () => {
   const s = open()
-  executeBatch(s, 'CREATE TABLE src (v INT); INSERT INTO src VALUES (1), (2)')
-  executeBatch(s, 'SELECT v INTO dst FROM src')
-  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM dst')).rows).toEqual([ [ 2 ] ])
-  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) AS n FROM sys.tables WHERE name = \'dst\'')).rows)
-    .toEqual([ [ 1 ] ])
+  executeBatch(s, `
+    SELECT
+      1 AS literal_int,
+      CAST('x' AS varchar(5)) AS cast_text,
+      N'x' AS unicode_text,
+      NULL AS null_value,
+      CAST(1 AS bit) AS bit_value,
+      CAST(1.25 AS decimal(8,2)) AS decimal_value
+    INTO into_types
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT c.name, TYPE_NAME(c.user_type_id), c.max_length, c.precision, c.scale,
+      c.is_nullable, c.collation_name
+    FROM sys.columns c
+    WHERE c.object_id = OBJECT_ID(N'into_types')
+    ORDER BY c.column_id
+  `)).rows).toEqual([
+    [ 'literal_int', 'int', 4, 10, 0, 0, null ],
+    [ 'cast_text', 'varchar', 5, 0, 0, 1, 'SQL_Latin1_General_CP1_CI_AS' ],
+    [ 'unicode_text', 'nvarchar', 2, 0, 0, 0, 'SQL_Latin1_General_CP1_CI_AS' ],
+    [ 'null_value', 'int', 4, 10, 0, 1, null ],
+    [ 'bit_value', 'bit', 1, 1, 0, 1, null ],
+    [ 'decimal_value', 'decimal', 5, 8, 2, 1, null ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = N'into_types' AND COLUMN_NAME = N'cast_text'
+  `)).rows).toEqual([ [ 'varchar', 5, 0, 0 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT literal_int, cast_text, null_value FROM into_types')).rows)
+    .toEqual([ [ 1, 'x', null ] ])
+  expect(() => executeBatch(s, `
+    INSERT into_types (literal_int, cast_text, unicode_text, bit_value, decimal_value)
+    VALUES (2, 'toolong', N'y', 1, 2.50)
+  `)).toThrowError(expect.objectContaining({ number: 2628 }) as Error)
+  expect(() => executeBatch(s, 'SELECT 1 INTO into_unnamed'))
+    .toThrowError(expect.objectContaining({ number: 1038 }) as Error)
+  expect(() => executeBatch(s, 'SELECT 1 AS value, 2 AS value INTO into_duplicate'))
+    .toThrowError(expect.objectContaining({ number: 2705 }) as Error)
+})
+
+test('select into transfers eligible identity and strips it from expressions, joins and unions', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE into_source (
+      id int IDENTITY(7,3) NOT NULL,
+      required varchar(4) NOT NULL,
+      optional decimal(8,2) NULL
+    )
+    INSERT into_source(required, optional) VALUES ('x', 1.25), ('y', NULL)
+    SELECT id AS copied_id, required, optional, required + 'z' AS expression
+    INTO into_direct FROM into_source
+    SELECT id, required INTO into_empty FROM into_source WHERE 1 = 0
+    SELECT id + 0 AS id INTO into_expression FROM into_source
+    SELECT source.id INTO into_join
+    FROM into_source source JOIN (SELECT 1 AS n) other ON other.n = 1
+    SELECT id INTO into_union FROM into_source
+    UNION ALL SELECT id FROM into_source
+    SELECT CAST('x' AS varchar(2)) AS value INTO into_widened
+    UNION ALL SELECT CAST('long' AS varchar(5))
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT o.name, c.name, TYPE_NAME(c.user_type_id), c.max_length, c.precision,
+      c.scale, c.is_nullable, c.is_identity
+    FROM sys.tables o JOIN sys.columns c ON c.object_id = o.object_id
+    WHERE o.name IN (N'into_direct', N'into_empty', N'into_expression', N'into_join', N'into_union')
+    ORDER BY o.name, c.column_id
+  `)).rows).toEqual([
+    [ 'into_direct', 'copied_id', 'int', 4, 10, 0, 0, 1 ],
+    [ 'into_direct', 'required', 'varchar', 4, 0, 0, 0, 0 ],
+    [ 'into_direct', 'optional', 'decimal', 5, 8, 2, 1, 0 ],
+    [ 'into_direct', 'expression', 'varchar', 5, 0, 0, 0, 0 ],
+    [ 'into_empty', 'id', 'int', 4, 10, 0, 0, 1 ],
+    [ 'into_empty', 'required', 'varchar', 4, 0, 0, 0, 0 ],
+    [ 'into_expression', 'id', 'int', 4, 10, 0, 1, 0 ],
+    [ 'into_join', 'id', 'int', 4, 10, 0, 0, 0 ],
+    [ 'into_union', 'id', 'int', 4, 10, 0, 0, 0 ]
+  ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT seed_value, increment_value FROM sys.identity_columns
+    WHERE object_id = OBJECT_ID(N'into_direct')
+  `)).rows).toEqual([ [ '7', '3' ] ])
+  executeBatch(s, `
+    INSERT into_direct(required, optional, expression) VALUES ('q', 2.50, 'qz')
+    INSERT into_empty(required) VALUES ('e')
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT copied_id FROM into_direct ORDER BY copied_id
+  `)).rows).toEqual([ [ 7 ], [ 10 ], [ 13 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT id FROM into_empty')).rows).toEqual([ [ 7 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT TYPE_NAME(c.user_type_id), c.max_length, c.is_nullable
+    FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'into_widened')
+  `)).rows).toEqual([ [ 'varchar', 5, 1 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT value FROM into_widened ORDER BY value')).rows)
+    .toEqual([ [ 'long' ], [ 'x' ] ])
+
+  const aggregates = rowsOf(executeBatch(s, `
+    SELECT COUNT(*) AS count_value, SUM(optional) AS sum_value, MIN(required) AS min_value
+    INTO into_aggregates FROM into_source
+    SELECT c.name, TYPE_NAME(c.user_type_id), c.precision, c.scale, c.is_nullable
+    FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'into_aggregates') ORDER BY c.column_id
+  `))
+  expect(aggregates.rows).toEqual([
+    [ 'count_value', 'int', 10, 0, 1 ],
+    [ 'sum_value', 'decimal', 38, 2, 1 ],
+    [ 'min_value', 'varchar', 0, 0, 1 ]
+  ])
+})
+
+test('select into keeps an empty table after insert failure and rolls creation back with a transaction', () => {
+  const s = open()
+  expect(() => executeBatch(s, `
+    SELECT CAST('bad' AS int) AS value INTO into_failed
+  `)).toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    SELECT OBJECT_ID(N'into_failed'), (SELECT COUNT(*) FROM into_failed)
+  `)).rows[0]).toEqual([ expect.any(Number), 0 ])
+
+  expect(rowsOf(executeBatch(s, `
+    BEGIN TRAN
+    BEGIN TRY
+      SELECT CAST('bad' AS int) AS value INTO into_failed_transaction
+      COMMIT
+    END TRY
+    BEGIN CATCH
+      ROLLBACK
+    END CATCH
+    SELECT OBJECT_ID(N'into_failed_transaction')
+  `)).rows).toEqual([ [ null ] ])
+})
+
+test('select into schema persists across restart and supports cross-database targets', () => {
+  const path = join(tmpdir(), `mssqlite-select-into-${randomUUID()}.db`)
+  try {
+    const firstServer = server({ path })
+    const first = session(firstServer)
+    executeBatch(first, `
+      CREATE TABLE persisted_source (id int IDENTITY(5,2), value varchar(6) NOT NULL)
+      INSERT persisted_source(value) VALUES ('one')
+      SELECT id, value INTO persisted_into FROM persisted_source
+      CREATE DATABASE archive
+      SELECT CAST(1 AS bigint) AS id, CAST('saved' AS varchar(8)) AS value
+      INTO archive.dbo.cross_into
+    `)
+    closeServer(firstServer)
+
+    const secondServer = server({ path })
+    const second = session(secondServer)
+    expect(rowsOf(executeBatch(second, `
+      SELECT c.name, TYPE_NAME(c.user_type_id), c.max_length, c.is_nullable, c.is_identity
+      FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'persisted_into') ORDER BY c.column_id
+    `)).rows).toEqual([
+      [ 'id', 'int', 4, 0, 1 ],
+      [ 'value', 'varchar', 6, 0, 0 ]
+    ])
+    expect(rowsOf(executeBatch(second, `
+      SELECT id, value FROM archive.dbo.cross_into
+    `)).rows).toEqual([ [ 1, 'saved' ] ])
+    expect(rowsOf(executeBatch(second, `
+      USE archive
+      SELECT c.name, TYPE_NAME(c.user_type_id), c.max_length
+      FROM sys.columns c
+      WHERE c.object_id = OBJECT_ID(N'cross_into') ORDER BY c.column_id
+    `)).rows).toEqual([ [ 'id', 'bigint', 8 ], [ 'value', 'varchar', 8 ] ])
+    closeServer(secondServer)
+  } finally {
+    rmSync(path, { force: true })
+  }
 })
 
 test('truncate resets identity', () => {

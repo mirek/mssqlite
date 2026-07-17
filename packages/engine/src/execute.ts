@@ -20,7 +20,7 @@ import {
   withTableVariableScopeAsync
 } from './table-variable.ts'
 import { BatchError, MssqlError, of as errorOf } from './error.ts'
-import { columnsOf, type Column } from './metadata.ts'
+import { columnsOf, typeNameOfColumn, type Column } from './metadata.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import * as CharacterExact from './character.ts'
@@ -937,28 +937,81 @@ const selectInto =
     }
     const { into: _into, ...rest } = statement
     const select = Transpile.statement(rest as Ast.Statement)
-    const table = Transpile.Quote.objectName(into)
-    const create = `CREATE TABLE ${table} AS ${select.sql}`
-    session.db.prepare(create).run(bindings(session, select.variables))
-    const columns = session.db.prepare(Transpile.Quote.pragmaTableInfo(into)).all() as
-      { name: string, type: string }[]
-    Catalog.createTable(Databases.stateForName(session, into).db, {
+    const prepared = session.db.prepare(select.sql)
+    const staticColumns = Transpile.Implicit.selectIntoHints(rest) ?? select.columns
+    const metadata = columnsOf(
+      session.db,
+      prepared,
+      [],
+      session.tableVariables.values(),
+      staticColumns ?? [])
+    const sourceIdentity = (() => {
+      if (rest.union !== undefined || rest.from?.kind !== 'table') {
+        return undefined
+      }
+      const sourceDatabase = catalogDatabase(session, rest.from.name)
+      const objectId = Catalog.objectIdOf(sourceDatabase, rest.from.name)
+      if (objectId === undefined) {
+        return undefined
+      }
+      const identity = Catalog.identityRows(sourceDatabase)
+        .find(candidate => candidate.object_id === objectId)
+      if (identity === undefined) {
+        return undefined
+      }
+      const indexes = rest.items.flatMap((item, index) =>
+        item.kind === 'expression' && item.expression.kind === 'column' &&
+        item.expression.name[item.expression.name.length - 1]?.toLowerCase() ===
+          identity.column_name.toLowerCase() ? [ index ] : [])
+      return indexes.length === 1 ? { index: indexes[0] as number, identity } : undefined
+    })()
+    const columns = metadata.map((column, index): Ast.ColumnDefinition => {
+      const hint = staticColumns?.[index]
+      const name = hint?.name === '' ? '' : hint?.name ?? column.name
+      if (name === '') {
+        throw new MssqlError(
+          'An object or column name is missing or empty. For SELECT INTO statements, verify each column has a name.',
+          1038, 15)
+      }
+      const copiedIdentity = sourceIdentity?.index === index ? sourceIdentity.identity : undefined
+      return {
+        name,
+        type: hint?.type ?? typeNameOfColumn(column),
+        nullable: copiedIdentity === undefined ? hint?.nullable ?? column.nullable : false,
+        ...hint?.collation === undefined ? {} : { collate: hint.collation },
+        ...copiedIdentity === undefined ? {} : {
+          identity: {
+            seed: copiedIdentity.seed_value,
+            increment: copiedIdentity.increment_value
+          }
+        }
+      }
+    })
+    const names = new Set<string>()
+    for (const column of columns) {
+      if (names.has(column.name.toLowerCase())) {
+        throw new MssqlError(`Column names in each table must be unique. Column name '${column.name}' is specified more than once.`,
+          2705, 16)
+      }
+      names.add(column.name.toLowerCase())
+    }
+    const definition: Ast.Statement & { readonly kind: 'createTable' } = {
       kind: 'createTable',
       name: into,
-      columns: columns.map(column => ({
-        name: column.name,
-        type: {
-          name: column.type.toUpperCase().includes('INT') ?
-            'int' :
-            column.type.toUpperCase().includes('REAL') ? 'float' : 'nvarchar',
-          args: []
-        }
-      })),
+      columns,
       constraints: []
-    })
-    const count = session.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
-    session.rowCount = count.n
-    items.push({ kind: 'count', rowCount: count.n, ...countVisibility(session) })
+    }
+    const table = Transpile.Quote.objectName(into)
+    session.db.exec(Transpile.statement(definition).sql)
+    const database = Databases.stateForName(session, into)
+    Catalog.createTable(database.db, definition)
+    Identity.reloadIdentities(database)
+    const insertColumns = columns.map(column => Transpile.Quote.identifier(column.name)).join(', ')
+    const inserted = session.db.prepare(`INSERT INTO ${table} (${insertColumns}) ${select.sql}`)
+      .run(bindings(session, select.variables))
+    Identity.reloadIdentities(database)
+    session.rowCount = Number(inserted.changes)
+    items.push({ kind: 'count', rowCount: session.rowCount, ...countVisibility(session) })
   }
 
 const cursorOf =
