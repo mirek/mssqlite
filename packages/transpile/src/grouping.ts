@@ -69,6 +69,44 @@ const aggregateNames = new Set([
   'stdev', 'stdevp', 'string_agg', 'sum', 'var', 'varp'
 ])
 
+/** @returns whether an expression contains an aggregate in the current SELECT scope. */
+export const containsAggregate =
+  (value: Ast.Expression): boolean => {
+    switch (value.kind) {
+      case 'unary':
+        return containsAggregate(value.operand)
+      case 'binaryOp':
+        return containsAggregate(value.left) || containsAggregate(value.right)
+      case 'call':
+        return (value.over === undefined &&
+          aggregateNames.has((value.name[value.name.length - 1] ?? '').toLowerCase())) ||
+          value.args.some(containsAggregate)
+      case 'cast':
+      case 'collate':
+        return containsAggregate(value.expression)
+      case 'convert':
+        return containsAggregate(value.expression) ||
+          (value.style !== undefined && containsAggregate(value.style))
+      case 'case':
+        return (value.operand !== undefined && containsAggregate(value.operand)) ||
+          value.whens.some(when => containsAggregate(when.when) || containsAggregate(when.then)) ||
+          (value.else_ !== undefined && containsAggregate(value.else_))
+      case 'in':
+        return containsAggregate(value.expression) ||
+          (Array.isArray(value.values) && value.values.some(containsAggregate))
+      case 'like':
+        return containsAggregate(value.expression) || containsAggregate(value.pattern) ||
+          (value.escape !== undefined && containsAggregate(value.escape))
+      case 'between':
+        return containsAggregate(value.expression) || containsAggregate(value.low) ||
+          containsAggregate(value.high)
+      case 'isNull':
+        return containsAggregate(value.expression)
+      default:
+        return false
+    }
+  }
+
 const rewrite =
   (
     value: Ast.Expression,

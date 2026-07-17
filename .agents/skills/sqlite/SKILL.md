@@ -153,10 +153,13 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - Node's `node:sqlite` API cannot register custom SQLite collations. mssqlite
   therefore declares BINARY/NOCASE as a baseline and renders supported SQL
   Server collations through a deterministic normalization-key UDF. Predicates,
-  ORDER BY, expression indexes, and supplemental UNIQUE indexes all use the
-  identical key, preserving CI/CS, AI/AS and BIN2 behavior. Accent-insensitive
-  keys use Unicode NFD with combining marks removed; trailing spaces are
-  ignored as in SQL text comparison.
+  IN/BETWEEN, joins, ORDER/GROUP BY, DISTINCT aggregates/projections,
+  UNION/EXCEPT/INTERSECT, expression indexes, and supplemental UNIQUE indexes
+  all use the identical effective-or-default key, preserving CI/CS, AI/AS and
+  BIN2 behavior. Accent-insensitive keys use Unicode NFD with combining marks
+  removed; only trailing U+0020 spaces are ignored as SQL comparison padding.
+  The original value is projected from grouped/set wrappers, so normalization
+  does not leak into client rows. LIKE remains on its dedicated matcher.
 - SQLite UNIQUE indexes treat NULLs as distinct, unlike SQL Server. mssqlite
   expands each nullable logical key `k` to `(k IS NULL), ifnull(k, 0)` in a
   unique expression index. The flag separates real values from the arbitrary

@@ -157,6 +157,24 @@ const opaqueCategory =
     return category === 'variant' || category === 'xml' || category === 'udt' ? category : undefined
   }
 
+const textType =
+  (type: TypeName.t | undefined): boolean =>
+    type !== undefined && [ 'text', 'ntext' ].includes(Type.category(type) ?? '')
+
+const textCollation =
+  (ctx: Context.t, values: readonly Ast.Expression[]): string => {
+    const explicit = values.filter(value => value.kind === 'collate')
+      .map(value => value.kind === 'collate' ? Collation.key(value.collation) : Collation.default_)
+    const declared = values.flatMap(value => Collation.ofExpression(ctx, value) ?? [])
+    const names = explicit.length > 0 ? explicit : declared
+    const distinct = [ ...new Set(names) ]
+    if (distinct.length > 1) {
+      return unsupported(
+        `Cannot resolve the collation conflict between '${distinct[0]}' and '${distinct[1]}'.`)
+    }
+    return distinct[0] ?? Collation.default_
+  }
+
 const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const opaque = opaqueCategory(ctx, expression_.left) ?? opaqueCategory(ctx, expression_.right)
@@ -189,18 +207,9 @@ const binaryOp =
         expression_.operator
       return `(${DateTimeOffset.key(a)} ${operator} ${DateTimeOffset.key(b)})`
     }
-    const textual = (common !== undefined && [ 'text', 'ntext' ].includes(Type.category(common) ?? '')) ||
+    const textual = textType(common) ||
       expression_.left.kind === 'collate' || expression_.right.kind === 'collate'
-    const leftCollation = textual ? Collation.ofExpression(ctx, expression_.left) : undefined
-    const rightCollation = textual ? Collation.ofExpression(ctx, expression_.right) : undefined
-    if (leftCollation !== undefined && rightCollation !== undefined &&
-      leftCollation !== rightCollation &&
-      expression_.left.kind !== 'collate' && expression_.right.kind !== 'collate') {
-      return unsupported(
-        `Cannot resolve the collation conflict between '${leftCollation}' and '${rightCollation}'.`)
-    }
-    const collation = expression_.left.kind === 'collate' ? leftCollation :
-      expression_.right.kind === 'collate' ? rightCollation : leftCollation ?? rightCollation
+    const collation = textual ? textCollation(ctx, [ expression_.left, expression_.right ]) : undefined
     if (collation !== undefined &&
       [ '=', '<>', '!=', '<', '<=', '>', '>=', '!>', '!<' ].includes(expression_.operator)) {
       const operator = expression_.operator === '!>' ? '<=' : expression_.operator === '!<' ? '>=' :
@@ -402,7 +411,10 @@ export const expression =
         if (expression_.distinct === true) {
           const name = rendered.slice(0, rendered.indexOf('('))
           const args = rendered.slice(rendered.indexOf('(') + 1)
-          return `${name}(DISTINCT ${args}`
+          const keyed = input !== undefined && textType(inputType) ?
+            `${Collation.expressionKey(expression(ctx, input),
+              Collation.ofExpression(ctx, input) ?? Collation.default_)})` : args
+          return `${name}(DISTINCT ${keyed}`
         }
         if (expression_.over !== undefined) {
           const partition = expression_.over.partitionBy.length > 0 ?
@@ -427,12 +439,17 @@ export const expression =
         ])
         const comparisonType = expression_.operand === undefined ? undefined :
           Implicit.common(ctx, [ expression_.operand, ...expression_.whens.map(when => when.when) ])
-        const operand = expression_.operand === undefined ?
-          '' :
-          ` ${coerced(ctx, expression_.operand, comparisonType)}`
+        const comparisonCollation = expression_.operand === undefined || !textType(comparisonType) ?
+          undefined : textCollation(ctx, [ expression_.operand, ...expression_.whens.map(when => when.when) ])
+        const compared = (value: Ast.Expression): string => {
+          const rendered = coerced(ctx, value, comparisonType)
+          return comparisonCollation === undefined ? rendered :
+            Collation.expressionKey(rendered, comparisonCollation)
+        }
+        const operand = expression_.operand === undefined ? '' : ` ${compared(expression_.operand)}`
         const whens = expression_.whens
           .map(({ when, then }) =>
-            `WHEN ${coerced(ctx, when, comparisonType)} THEN ${coerced(ctx, then, resultType)}`)
+            `WHEN ${compared(when)} THEN ${coerced(ctx, then, resultType)}`)
           .join(' ')
         const else_ = expression_.else_ === undefined ?
           '' :
@@ -464,14 +481,33 @@ export const expression =
           const values = expression_.values.map(offsetKey).join(', ')
           return `(${offsetKey(expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
         }
-        const collation = common !== undefined &&
-          [ 'text', 'ntext' ].includes(Type.category(common) ?? '') ?
-          Collation.ofExpression(ctx, expression_.expression) : undefined
+        const collation = textType(common) ? textCollation(ctx, [
+          expression_.expression,
+          ...Array.isArray(expression_.values) ? expression_.values : []
+        ]) : undefined
         if (collation !== undefined && Array.isArray(expression_.values)) {
           const left = Collation.expressionKey(expression(ctx, expression_.expression), collation)
           const values = expression_.values.map(value =>
             Collation.expressionKey(expression(ctx, value), collation)).join(', ')
           return `(${left} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
+        }
+        if (collation !== undefined && !Array.isArray(expression_.values)) {
+          const projected = expression_.values as Ast.Select
+          const item = projected.items[0]
+          if (item?.kind === 'expression') {
+            const keyed: Ast.Select = {
+              ...projected,
+              items: [ {
+                ...item,
+                expression: {
+                  kind: 'call', name: [ 'mssqlite_collation_key' ],
+                  args: [ item.expression, { kind: 'string', value: collation, national: false } ]
+                }
+              }, ...projected.items.slice(1) ]
+            }
+            return `(${Collation.expressionKey(expression(ctx, expression_.expression), collation)} ` +
+              `${expression_.negated ? 'NOT IN' : 'IN'} (${subquery(ctx, keyed)}))`
+          }
         }
         const values = Array.isArray(expression_.values) ?
           expression_.values.map(value => coerced(ctx, value, common)).join(', ') :
@@ -509,6 +545,13 @@ export const expression =
             `${offsetKey(expression_.low)} AND ${offsetKey(expression_.high)})`
         }
         const common = Implicit.common(ctx, [ expression_.expression, expression_.low, expression_.high ])
+        if (textType(common)) {
+          const collation = textCollation(ctx, [ expression_.expression, expression_.low, expression_.high ])
+          return `(${Collation.expressionKey(coerced(ctx, expression_.expression, common), collation)} ` +
+            `${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
+            `${Collation.expressionKey(coerced(ctx, expression_.low, common), collation)} AND ` +
+            `${Collation.expressionKey(coerced(ctx, expression_.high, common), collation)})`
+        }
         return `(${coerced(ctx, expression_.expression, common)} ` +
           `${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
           `${coerced(ctx, expression_.low, common)} AND ${coerced(ctx, expression_.high, common)})`

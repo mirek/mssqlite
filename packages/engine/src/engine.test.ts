@@ -465,6 +465,106 @@ test('collation-aware uniqueness rejects case and accent equivalents', () => {
   )`)).toThrowError(expect.objectContaining({ number: 448 }) as Error)
 })
 
+test('default text collation governs scalar and relational comparison keys', () => {
+  // Compatibility matrix checked against SQL Server 2025 17.0.4065.4 (RTM-CU7).
+  const s = open()
+  const scalar = rowsOf(executeBatch(s, `
+    SELECT
+      CASE WHEN 'a' = 'a   ' THEN 1 ELSE 0 END AS padded_equal,
+      CASE WHEN '' = '   ' THEN 1 ELSE 0 END AS empty_equal,
+      CASE WHEN N'É' = N'é' THEN 1 ELSE 0 END AS unicode_case,
+      CASE WHEN N'E' = N'É' THEN 1 ELSE 0 END AS accent_distinct,
+      CASE WHEN N'a' = N'a' + NCHAR(160) THEN 1 ELSE 0 END AS nbsp_distinct,
+      CASE WHEN 'a' LIKE 'a ' THEN 1 ELSE 0 END AS like_pattern_space,
+      CASE WHEN 'a ' LIKE 'a' THEN 1 ELSE 0 END AS like_value_space,
+      CASE WHEN 'a' < 'b   ' THEN 1 ELSE 0 END AS padded_order,
+      CASE WHEN 'a' COLLATE Latin1_General_100_CS_AS = 'A' THEN 1 ELSE 0 END AS case_sensitive,
+      CASE WHEN 'a ' COLLATE Latin1_General_100_BIN2 = 'a' THEN 1 ELSE 0 END AS binary_padding,
+      CASE WHEN N'É' COLLATE Latin1_General_100_CI_AI = N'E' THEN 1 ELSE 0 END AS accent_folded
+  `))
+  expect(scalar.rows).toEqual([ [ 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE default_collation_values (id int PRIMARY KEY, value nvarchar(10))
+    INSERT default_collation_values VALUES
+      (1, N'É'), (2, N'é'), (3, N'a'), (4, N'a   '), (5, N'a' + NCHAR(160))
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT COUNT(DISTINCT value) AS distinct_count FROM default_collation_values
+  `)).rows).toEqual([ [ 3 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT value, COUNT(*) AS count FROM default_collation_values
+    GROUP BY value ORDER BY MIN(id)
+  `)).rows).toEqual([ [ 'É', 2 ], [ 'a', 2 ], [ 'a\u00a0', 1 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT value FROM default_collation_values ORDER BY value, id
+  `)).rows).toEqual([ [ 'a' ], [ 'a   ' ], [ 'a\u00a0' ], [ 'É' ], [ 'é' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT left_.id, right_.id FROM default_collation_values AS left_
+    JOIN default_collation_values AS right_ ON left_.value = right_.value
+    ORDER BY left_.id, right_.id
+  `)).rows).toHaveLength(9)
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM default_collation_values WHERE value IN (N'É   ') ORDER BY id
+  `)).rows).toEqual([ [ 1 ], [ 2 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT id FROM default_collation_values WHERE value BETWEEN N'a ' AND N'a' ORDER BY id
+  `)).rows).toEqual([ [ 3 ], [ 4 ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT DISTINCT value FROM default_collation_values')).rows)
+    .toHaveLength(3)
+  expect(rowsOf(executeBatch(s, `
+    SELECT DISTINCT COUNT(*) + 0 AS value FROM default_collation_values
+  `)).rows).toEqual([ [ 5 ] ])
+  executeBatch(s, `
+    CREATE TABLE default_distinct_star (value nvarchar(10))
+    INSERT default_distinct_star VALUES (N'É'), (N'é   ')
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT DISTINCT * FROM default_distinct_star')).rows)
+    .toEqual([ [ 'É' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT N\'É\' AS value UNION SELECT N\'é\'')).rows)
+    .toEqual([ [ 'É' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT N\'a\' AS value UNION SELECT N\'a   \'')).rows)
+    .toEqual([ [ 'a' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT N'E' COLLATE Latin1_General_100_CI_AI AS value
+    UNION SELECT value FROM default_collation_values WHERE id = 1
+  `)).rows).toEqual([ [ 'E' ] ])
+  expect(rowsOf(executeBatch(s, 'SELECT N\'É\' AS value EXCEPT SELECT N\'é   \'')).rows)
+    .toEqual([])
+  expect(rowsOf(executeBatch(s, 'SELECT N\'É\' AS value INTERSECT SELECT N\'é   \'')).rows)
+    .toEqual([ [ 'É' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT CAST(NULL AS nvarchar(1)) AS value
+    INTERSECT SELECT CAST(NULL AS nvarchar(1))
+  `)).rows).toEqual([ [ null ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT CAST(NULL AS nvarchar(1)) AS value
+    EXCEPT SELECT CAST(NULL AS nvarchar(1))
+  `)).rows).toEqual([])
+
+  executeBatch(s, 'CREATE TABLE default_unique (id int, value nvarchar(10) UNIQUE)')
+  executeBatch(s, 'INSERT default_unique VALUES (1, N\'É\'), (2, N\'a\')')
+  expect(() => executeBatch(s, 'INSERT default_unique VALUES (3, N\'é\')'))
+    .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+  expect(() => executeBatch(s, 'INSERT default_unique VALUES (4, N\'a   \')'))
+    .toThrowError(expect.objectContaining({ number: 2627 }) as Error)
+
+  executeBatch(s, `
+    CREATE TABLE default_indexed (id int, value nvarchar(10))
+    CREATE INDEX ix_default_order ON default_indexed(value)
+    CREATE UNIQUE INDEX ux_default_indexed ON default_indexed(value)
+    INSERT default_indexed VALUES (1, N'É')
+  `)
+  expect(() => executeBatch(s, 'INSERT default_indexed VALUES (2, N\'é   \')'))
+    .toThrowError(expect.objectContaining({ number: 2601 }) as Error)
+  const plan = s.db.prepare(
+    'EXPLAIN QUERY PLAN SELECT * FROM "default_indexed" WHERE ' +
+    'mssqlite_collation_key("value", \'sql_latin1_general_cp1_ci_as\') = ' +
+    'mssqlite_collation_key(\'é\', \'sql_latin1_general_cp1_ci_as\')'
+  ).all() as { detail: string }[]
+  expect(plan.some(row => row.detail.includes('ix_default_order'))).toBe(true)
+})
+
 test('unique constraints and indexes treat NULL keys as duplicate values', () => {
   const s = open()
   executeBatch(s, `
