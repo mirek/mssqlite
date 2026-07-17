@@ -591,14 +591,14 @@ test('rowversion guards explicit writes and stamps ALTER, MERGE and table variab
     MERGE merge_versions AS target
     USING (VALUES (1, 10)) AS source (id, value)
     ON target.id = source.id
-    WHEN NOT MATCHED THEN INSERT (id, value) VALUES (source.id, source.value)
+    WHEN NOT MATCHED THEN INSERT (id, value) VALUES (source.id, source.value);
   `)
   const inserted = rowsOf(executeBatch(s, 'SELECT HEX(version) FROM merge_versions')).rows[0]?.[0]
   executeBatch(s, `
     MERGE merge_versions AS target
     USING (VALUES (1, 20)) AS source (id, value)
     ON target.id = source.id
-    WHEN MATCHED THEN UPDATE SET value = source.value
+    WHEN MATCHED THEN UPDATE SET value = source.value;
   `)
   const updated = rowsOf(executeBatch(s, 'SELECT value, HEX(version) FROM merge_versions'))
   expect(updated.rows[0]?.[0]).toBe(20)
@@ -607,7 +607,7 @@ test('rowversion guards explicit writes and stamps ALTER, MERGE and table variab
     MERGE merge_versions AS target
     USING (VALUES (1, 30)) AS source (id, value)
     ON target.id = source.id
-    WHEN MATCHED THEN UPDATE SET version = 0x01
+    WHEN MATCHED THEN UPDATE SET version = 0x01;
   `)).toThrowError(expect.objectContaining({ number: 272 }) as Error)
 
   const tableVariable = rowsOf(executeBatch(s, `
@@ -3034,18 +3034,111 @@ test('merge is atomic when a later arm fails', () => {
   expect(rowsOf(executeBatch(s, 'SELECT @@TRANCOUNT AS tc')).rows).toEqual([ [ 0 ] ])
 })
 
-test('merge validates arms', () => {
+test('merge validates terminators and every arm family before mutation', () => {
   const s = open()
-  executeBatch(s, 'CREATE TABLE t (id INT PRIMARY KEY); CREATE TABLE src (id INT)')
-  expect(() => executeBatch(s, `
-    MERGE t USING src ON t.id = src.id
+  executeBatch(s, `
+    CREATE TABLE t (id INT PRIMARY KEY, v INT)
+    CREATE TABLE src (id INT, v INT)
+    INSERT INTO t VALUES (1, 10), (3, 30)
+    INSERT INTO src VALUES (1, 20), (2, 20)
+  `)
+  const merge =
+    (whens: string): string =>
+      `MERGE t USING src AS s ON t.id = s.id ${whens};`
+  const unchanged =
+    (): void =>
+      expect(rowsOf(executeBatch(s, 'SELECT id, v FROM t ORDER BY id')).rows)
+        .toEqual([ [ 1, 10 ], [ 3, 30 ] ])
+  const invalid =
+    (whens: string, number: number, message: string): void => {
+      expect(() => executeBatch(s, merge(whens))).toThrowError(expect.objectContaining({
+        number, message: expect.stringContaining(message) as unknown
+      }) as Error)
+      unchanged()
+    }
+
+  // SQL Server permits at most one of each action per match family.
+  invalid(`
+    WHEN MATCHED AND s.v > 0 THEN UPDATE SET v = s.v
+    WHEN MATCHED THEN UPDATE SET v = 0
+  `, 10714, '\'WHEN MATCHED\' cannot appear more than once in a \'UPDATE\' clause')
+  invalid(`
+    WHEN MATCHED AND s.v > 0 THEN DELETE
     WHEN MATCHED THEN DELETE
-    WHEN MATCHED AND t.id > 1 THEN DELETE;
-  `)).toThrowError(expect.objectContaining({ number: 10714 }) as Error)
+  `, 10714, '\'WHEN MATCHED\' cannot appear more than once in a \'DELETE\' clause')
+  invalid(`
+    WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)
+    WHEN NOT MATCHED BY TARGET AND s.v > 0 THEN INSERT (id, v) VALUES (s.id, 0)
+  `, 10714, '\'WHEN NOT MATCHED\' cannot appear more than once in a \'INSERT\' clause')
+  invalid(`
+    WHEN NOT MATCHED BY SOURCE AND t.v > 0 THEN UPDATE SET v = 1
+    WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = 0
+  `, 10714, '\'WHEN NOT MATCHED BY SOURCE\' cannot appear more than once in a \'UPDATE\' clause')
+  invalid(`
+    WHEN NOT MATCHED BY SOURCE AND t.v > 0 THEN DELETE
+    WHEN NOT MATCHED BY SOURCE THEN DELETE
+  `, 10714, '\'WHEN NOT MATCHED BY SOURCE\' cannot appear more than once in a \'DELETE\' clause')
+
+  // With two MATCHED or BY SOURCE clauses, the first clause must be conditional.
+  invalid(`
+    WHEN MATCHED THEN UPDATE SET v = s.v
+    WHEN MATCHED AND s.v > 0 THEN DELETE
+  `, 5324, '\'WHEN MATCHED\' clause with a search condition')
+  invalid(`
+    WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = 1
+    WHEN NOT MATCHED BY SOURCE AND t.v > 0 THEN DELETE
+  `, 5324, '\'WHEN NOT MATCHED BY SOURCE\' clause with a search condition')
+
+  // Both action orders, two conditional clauses, and interleaved match families are reachable.
+  executeBatch(s, merge(`
+    WHEN MATCHED AND 1 = 0 THEN UPDATE SET v = s.v
+    WHEN NOT MATCHED BY SOURCE AND 1 = 0 THEN DELETE
+    WHEN MATCHED AND 1 = 0 THEN DELETE
+    WHEN NOT MATCHED AND 1 = 0 THEN INSERT (id, v) VALUES (s.id, s.v)
+    WHEN NOT MATCHED BY SOURCE AND 1 = 0 THEN UPDATE SET v = 0
+  `))
+  executeBatch(s, merge(`
+    WHEN MATCHED AND 1 = 0 THEN DELETE
+    WHEN MATCHED THEN UPDATE SET v = t.v
+  `))
+  unchanged()
+
+  // A missing terminator is a compile error, so an earlier statement cannot mutate.
   expect(() => executeBatch(s, `
-    MERGE t USING src ON t.id = src.id
-    WHEN NOT MATCHED THEN INSERT (id) VALUES (src.id, 1);
+    UPDATE t SET v = 99
+    MERGE t USING src AS s ON t.id = s.id WHEN MATCHED THEN DELETE
+  `)).toThrowError(expect.objectContaining({ number: 10713, severity: 15, state: 1 }) as Error)
+  unchanged()
+
+  // Dynamic compilation makes the validation errors observable to TRY/CATCH.
+  const caughtTerminator = rowsOf(executeBatch(s, `
+    BEGIN TRY
+      EXEC sp_executesql N'MERGE t USING src AS s ON t.id = s.id WHEN MATCHED THEN DELETE'
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n, ERROR_SEVERITY() AS severity, ERROR_STATE() AS state
+    END CATCH
+  `))
+  expect(caughtTerminator.rows).toEqual([ [ 10713, 15, 1 ] ])
+  const caughtOrdering = rowsOf(executeBatch(s, `
+    BEGIN TRY
+      EXEC sp_executesql N'MERGE t USING src AS s ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET v = s.v
+        WHEN MATCHED AND s.v > 0 THEN DELETE;'
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS n, ERROR_SEVERITY() AS severity, ERROR_STATE() AS state
+    END CATCH
+  `))
+  expect(caughtOrdering.rows).toEqual([ [ 5324, 16, 1 ] ])
+  unchanged()
+
+  // Existing insert-shape validation still runs before a snapshot is built.
+  expect(() => executeBatch(s, `
+    MERGE t USING src AS s ON t.id = s.id
+    WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id, 1);
   `)).toThrowError(expect.objectContaining({ number: 110 }) as Error)
+  unchanged()
 })
 
 test('merge output returns $action with inserted and deleted images', () => {

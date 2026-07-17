@@ -201,13 +201,12 @@ The language pipeline lives in three packages:
   select-item aliases at parse time (VALUES becomes a UNION ALL chain),
   so downstream layers only ever see a derived table. `USING` had to
   join the reserved-word set or it parses as the target's alias. The
-  engine decomposes MERGE via a snapshot temp table (see the
-  architecture skill). Divergences from SQL Server: the terminating
-  semicolon is not enforced; two WHEN MATCHED arms whose first has no
-  AND condition are accepted (the second is just dead); the same table
-  can be target and source (the snapshot makes it safe); arm-count and
-  duplicate-action violations raise 10714, multi-source matches for one
-  target row raise 8672. MERGE OUTPUT supports `$action` (lexed as a
+  parser requires MERGE's semicolon and reports 10713/15 when it is
+  absent. Before snapshot construction, the engine rejects repeated actions
+  with 10714/15 and a second MATCHED / BY SOURCE arm after an unconditional
+  first arm with 5324/16. The same table can still be target and source (the
+  snapshot makes it safe); multi-source matches for one target row raise
+  8672. MERGE OUTPUT supports `$action` (lexed as a
   plain word — a leading `$` may start a word token), `inserted.` /
   `deleted.` items and stars, and `OUTPUT … INTO`; unlike SQL Server,
   source columns in MERGE OUTPUT are rejected (the row images are
@@ -277,5 +276,6 @@ SELECT INTO loses expression types. IDENTITY allocation findings from that
 audit are implemented with database-owned counters, custom signed definitions,
 rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
 confirmed missing VALUES-derived tables, general APPLY lowering, strict
-OPENJSON paths, and SQL Server's MERGE validation rules. Treat the individual
+OPENJSON paths, while the audited MERGE terminator and arm validation rules
+are now implemented. Treat the individual
 `todo/*.md` briefs as the executable scope and ground-truth checklist.

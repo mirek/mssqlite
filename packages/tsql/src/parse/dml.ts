@@ -319,8 +319,16 @@ const mergeWhen: Parser.t<Ast.MergeWhen> =
     )
   )
 
+const mergeTerminator: Parser.t<string> =
+  reader => {
+    const terminator = C.punct(';')(reader)
+    return Result.failed(terminator) ?
+      Result.fail(reader, 'A MERGE statement must be terminated by a semi-colon (;).') :
+      terminator
+  }
+
 /** MERGE statement parser. */
-export const merge: Parser.t<Ast.Statement> =
+const mergeStatement: Parser.t<Ast.Statement> =
   C.map(
     C.seq(
       C.keyword('merge'),
@@ -334,7 +342,8 @@ export const merge: Parser.t<Ast.Statement> =
       C.keyword('on'),
       expression,
       C.many1(mergeWhen),
-      outputClause
+      outputClause,
+      mergeTerminator
     ),
     ([ , , target, , alias, , , source, , on, whens, output ]) => ({
       kind: 'merge' as const,
@@ -346,3 +355,14 @@ export const merge: Parser.t<Ast.Statement> =
       ...output === undefined ? {} : { output }
     })
   )
+
+/** MERGE commits to its SQL Server-specific diagnostics after its keyword. */
+export const merge: Parser.t<Ast.Statement> =
+  reader => {
+    const result = mergeStatement(reader)
+    if (!Result.failed(result)) {
+      return result
+    }
+    const prefix = C.keyword('merge')(reader)
+    return Result.failed(prefix) ? result : Result.fail(prefix.reader, result.reason)
+  }

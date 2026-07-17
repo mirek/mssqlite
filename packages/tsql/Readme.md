@@ -62,6 +62,7 @@ const statements = parse(`
   NOT MATCHED [BY TARGET] / NOT MATCHED BY SOURCE arms and AND conditions;
   USING accepts a table, `(SELECT …) AS s (cols)` or `(VALUES …) AS s
   (cols)` — column lists desugar into select-item aliases at parse time.
+  The required semicolon is enforced with SQL Server error 10713.
   `$action` lexes as a plain word (a leading `$` may start a word), so
   MERGE OUTPUT items carry it as an ordinary column reference.
 - **DDL** — CREATE TABLE (column constraints in any order: NULL/NOT NULL,

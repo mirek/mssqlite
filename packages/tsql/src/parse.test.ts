@@ -905,7 +905,7 @@ test('merge with matched and not matched arms', () => {
     WHEN MATCHED AND s.qty = 0 THEN DELETE
     WHEN MATCHED THEN UPDATE SET t.qty = s.qty, name = s.name
     WHEN NOT MATCHED BY TARGET THEN INSERT (id, qty) VALUES (s.id, s.qty)
-    WHEN NOT MATCHED BY SOURCE THEN DELETE
+    WHEN NOT MATCHED BY SOURCE THEN DELETE;
   `)).toMatchObject({
     kind: 'merge',
     target: [ 'dbo', 'target' ],
@@ -926,7 +926,7 @@ test('merge using values desugars to an aliased union chain', () => {
     MERGE t WITH (HOLDLOCK)
     USING (VALUES (1, N'a'), (2, N'b')) AS s (id, name)
     ON t.id = s.id
-    WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.name)
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.name);
   `)
   expect(statement).toMatchObject({
     kind: 'merge',
@@ -954,7 +954,7 @@ test('merge using derived select renames columns positionally', () => {
     USING (SELECT id, total FROM staging) AS s (sid, amount)
     ON t.id = s.sid
     WHEN MATCHED THEN UPDATE SET amount = s.amount
-    WHEN NOT MATCHED THEN INSERT DEFAULT VALUES
+    WHEN NOT MATCHED THEN INSERT DEFAULT VALUES;
   `)).toMatchObject({
     kind: 'merge',
     source: {
@@ -978,7 +978,7 @@ test('merge with output clause parses', () => {
   expect(parseStatement(`
     MERGE t USING s ON t.id = s.id
     WHEN MATCHED THEN UPDATE SET v = s.v
-    OUTPUT inserted.id
+    OUTPUT inserted.id;
   `)).toMatchObject({
     kind: 'merge',
     output: { items: [ { kind: 'expression' } ] }
@@ -989,7 +989,7 @@ test('merge output with $action and INTO parses', () => {
   expect(parseStatement(`
     MERGE t USING s ON t.id = s.id
     WHEN MATCHED THEN UPDATE SET v = s.v
-    OUTPUT $action, inserted.id, deleted.v AS old INTO log (act, id, old)
+    OUTPUT $action, inserted.id, deleted.v AS old INTO log (act, id, old);
   `)).toMatchObject({
     kind: 'merge',
     output: {
@@ -1004,9 +1004,12 @@ test('merge output with $action and INTO parses', () => {
 })
 
 test('merge rejects malformed arms', () => {
-  expect(() => parseStatement('MERGE t USING s ON t.id = s.id')).toThrow(ParseError)
   expect(() => parseStatement(
-    'MERGE t USING (VALUES (1, 2)) AS s (a) ON t.a = s.a WHEN MATCHED THEN DELETE'
+    'MERGE t USING s ON t.id = s.id WHEN MATCHED THEN DELETE'
+  )).toThrow('A MERGE statement must be terminated by a semi-colon (;).')
+  expect(() => parseStatement('MERGE t USING s ON t.id = s.id;')).toThrow(ParseError)
+  expect(() => parseStatement(
+    'MERGE t USING (VALUES (1, 2)) AS s (a) ON t.a = s.a WHEN MATCHED THEN DELETE;'
   )).toThrow(ParseError)
   expect(() => parseStatement(
     'MERGE t USING s ON t.id = s.id WHEN NOT MATCHED THEN DELETE'
