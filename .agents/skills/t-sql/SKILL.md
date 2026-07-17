@@ -196,10 +196,15 @@ The language pipeline lives in three packages:
   `deleted.x, inserted.x` pair collapses to one result key (duplicate
   column names — known engine-wide limitation, alias them), and
   `UPDATE … FROM` combined with `OUTPUT deleted.` is rejected.
+- `Ast.TableSource` has a first-class `values` form shared by ordinary FROM,
+  joins/APPLY and MERGE USING. The parser requires its table alias and retains
+  the optional column-alias list plus raw rows. Engine resolution rejects
+  unnamed, duplicate, mismatched and unequal-width columns with
+  8155/8156/8158/8159/10709, resolves variables, and records the common
+  SQL-precedence type and nullability for every column. Transpilation coerces
+  the rows and wraps SQLite's native VALUES source in a stable named SELECT.
 - MERGE parses in `parse/dml.ts`: USING accepts a table, `(SELECT …)` or
-  `(VALUES …)` — both need an alias, and a column list desugars into
-  select-item aliases at parse time (VALUES becomes a UNION ALL chain),
-  so downstream layers only ever see a derived table. `USING` had to
+  the shared `(VALUES …)` source. `USING` had to
   join the reserved-word set or it parses as the target's alias. The
   parser requires MERGE's semicolon and reports 10713/15 when it is
   absent. Before snapshot construction, the engine rejects repeated actions
@@ -275,7 +280,7 @@ tracked in [`todo/`](../../../todo): unique keys permit repeated NULLs, and
 SELECT INTO loses expression types. IDENTITY allocation findings from that
 audit are implemented with database-owned counters, custom signed definitions,
 rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
-confirmed missing VALUES-derived tables, general APPLY lowering, strict
-OPENJSON paths, while the audited MERGE terminator and arm validation rules
-are now implemented. Treat the individual
+confirmed general APPLY lowering and strict OPENJSON paths, while VALUES-derived
+tables and the audited MERGE terminator and arm validation rules are now
+implemented. Treat the individual
 `todo/*.md` briefs as the executable scope and ground-truth checklist.

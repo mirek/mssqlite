@@ -97,6 +97,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   arguments can reference earlier FROM sources. mssqlite uses that for
   correlated STRING_SPLIT APPLY; correlated TOP (1) derived sources instead
   lower to a ROW_NUMBER-partitioned INNER/LEFT join.
+- T-SQL VALUES table sources wrap native SQLite VALUES in an outer SELECT that
+  renames generated `columnN` fields. Engine resolution first infers SQL Server
+  common types and validates the row/alias shape; transpilation explicitly
+  coerces each cell before rendering. This avoids SQLite's compound-SELECT term
+  limit and works in FROM, joins, CTE queries, uncorrelated APPLY, and MERGE.
 - SQLite has no PIVOT/UNPIVOT operators. mssqlite renders PIVOT as grouped
   aggregates over `CASE WHEN pivot_key = value THEN aggregate_value END`.
   UNPIVOT becomes a `MATERIALIZED` CTE plus one NULL-filtered `UNION ALL`

@@ -402,6 +402,12 @@ the engine:
   captured alongside the arm values), records insert-arm rowids via
   RETURNING into a second temp table for the `inserted` image, and emits
   a UNION ALL of one SELECT per arm with `$action` folded to a literal.
+- **VALUES is a typed table source** — `tsql` preserves `(VALUES ...) AS alias
+  (columns)` rows in `Ast.TableSource`; `engine/table-variable.ts` validates
+  SQL Server shape/name errors, resolves variables, and attaches common type /
+  nullability metadata. `transpile/statement.ts` applies UNION-style precedence
+  coercions and wraps SQLite's native VALUES source in a named derived SELECT.
+  ordinary queries, joins/APPLY, inline queries, and MERGE snapshots.
 - **Column metadata** — `StatementSync.columns()` origins resolve through
   the catalog for exact declared types. Computed-column types are inferred
   from base and earlier computed definitions before CREATE/ALTER rendering,

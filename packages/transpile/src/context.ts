@@ -42,11 +42,16 @@ const sourceColumns =
     if (source.kind === 'join') {
       return [ ...sourceColumns(source.left), ...sourceColumns(source.right) ]
     }
-    if (source.kind !== 'table' || source.columns === undefined) {
+    if (source.kind !== 'table' && source.kind !== 'values') {
       return []
     }
-    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
-    return source.columns.flatMap(column => column.type === undefined ? [] : [
+    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    if (metadata === undefined) {
+      return []
+    }
+    const qualifier = (source.kind === 'table' ?
+      (source.alias ?? source.name[source.name.length - 1] ?? '') : source.alias).toLowerCase()
+    return metadata.flatMap(column => column.type === undefined ? [] : [
       { key: column.name.toLowerCase(), type: column.type },
       { key: `${qualifier}.${column.name.toLowerCase()}`, type: column.type }
     ])
@@ -57,11 +62,16 @@ const sourceCollations =
     if (source.kind === 'join') {
       return [ ...sourceCollations(source.left), ...sourceCollations(source.right) ]
     }
-    if (source.kind !== 'table' || source.columns === undefined) {
+    if (source.kind !== 'table' && source.kind !== 'values') {
       return []
     }
-    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
-    return source.columns.flatMap(column => column.collation === undefined ? [] : [
+    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    if (metadata === undefined) {
+      return []
+    }
+    const qualifier = (source.kind === 'table' ?
+      (source.alias ?? source.name[source.name.length - 1] ?? '') : source.alias).toLowerCase()
+    return metadata.flatMap(column => column.collation === undefined ? [] : [
       { key: column.name.toLowerCase(), collation: column.collation },
       { key: `${qualifier}.${column.name.toLowerCase()}`, collation: column.collation }
     ])
@@ -72,11 +82,16 @@ const sourceNullability =
     if (source.kind === 'join') {
       return [ ...sourceNullability(source.left), ...sourceNullability(source.right) ]
     }
-    if (source.kind !== 'table' || source.columns === undefined) {
+    if (source.kind !== 'table' && source.kind !== 'values') {
       return []
     }
-    const qualifier = (source.alias ?? source.name[source.name.length - 1] ?? '').toLowerCase()
-    return source.columns.flatMap(column => [
+    const metadata = source.kind === 'table' ? source.columns : source.columnMetadata
+    if (metadata === undefined) {
+      return []
+    }
+    const qualifier = (source.kind === 'table' ?
+      (source.alias ?? source.name[source.name.length - 1] ?? '') : source.alias).toLowerCase()
+    return metadata.flatMap(column => [
       { key: column.name.toLowerCase(), nullable: column.nullable !== false },
       { key: `${qualifier}.${column.name.toLowerCase()}`, nullable: column.nullable !== false }
     ])

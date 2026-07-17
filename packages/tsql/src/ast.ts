@@ -140,6 +140,14 @@ export type TableSource =
       readonly alias?: string,
       readonly columns?: readonly string[]
     }
+  | {
+      readonly kind: 'values',
+      readonly rows: readonly (readonly Expression[])[],
+      readonly alias: string,
+      readonly columns?: readonly string[],
+      /** Common column metadata populated by the execution engine. */
+      readonly columnMetadata?: readonly SourceColumn[]
+    }
   | { readonly kind: 'derived', readonly select: Select, readonly alias: string }
   | {
       readonly kind: 'pivot',

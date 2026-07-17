@@ -1876,6 +1876,78 @@ test('table-valued functions return rows and metadata through the engine', () =>
   expect(rowsOf(executeBatch(s, 'SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
 })
 
+test('values table sources execute with SQL Server shape, coercion and metadata', () => {
+  const s = open()
+  const values = rowsOf(executeBatch(s, `
+    DECLARE @offset INT = 10
+    SELECT source.value, source.label
+    FROM (VALUES (1, N'a'), (NULL, N'b'), (@offset + 2, NULL)) AS source(value, label)
+    ORDER BY source.value
+  `))
+  expect(values.rows).toEqual([ [ null, 'b' ], [ 1, 'a' ], [ 12, null ] ])
+  expect(values.columns).toMatchObject([
+    { name: 'value', nullable: true, typeInfo: { type: DataType.DataType.intN, maxLength: 4 } },
+    { name: 'label', nullable: true, typeInfo: { type: DataType.DataType.nvarchar, maxLength: 2 } }
+  ])
+
+  const common = rowsOf(executeBatch(s, `
+    SELECT value, amount
+    FROM (VALUES
+      (CAST(1 AS TINYINT), CAST(1.20 AS DECIMAL(4,2))),
+      (CAST(2 AS BIGINT), CAST(123.4 AS DECIMAL(5,1))),
+      (NULL, NULL)
+    ) AS source(value, amount)
+    ORDER BY value
+  `))
+  expect(common.rows).toEqual([ [ null, null ], [ 1, '1.20' ], [ 2, '123.40' ] ])
+  expect(common.columns).toMatchObject([
+    { nullable: true, typeInfo: { type: DataType.DataType.intN, maxLength: 8 } },
+    { nullable: true, typeInfo: { type: DataType.DataType.decimalN, precision: 6, scale: 2 } }
+  ])
+
+  expect(rowsOf(executeBatch(s, `
+    WITH picked AS (
+      SELECT left_.id, right_.label
+      FROM (VALUES (1), (2)) AS left_(id)
+      JOIN (VALUES (2, N'two'), (3, N'three')) AS right_(id, label)
+        ON right_.id = left_.id
+    )
+    SELECT * FROM picked
+  `)).rows).toEqual([ [ 2, 'two' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT left_.id, right_.value
+    FROM (VALUES (1), (2)) AS left_(id)
+    CROSS APPLY (VALUES (N'a'), (N'b')) AS right_(value)
+    ORDER BY left_.id, right_.value
+  `)).rows).toEqual([ [ 1, 'a' ], [ 1, 'b' ], [ 2, 'a' ], [ 2, 'b' ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT source.id, part.value
+    FROM (VALUES (1, N'a,b'), (2, N'c')) AS source(id, csv)
+    CROSS APPLY STRING_SPLIT(source.csv, N',') AS part
+    ORDER BY source.id, part.value
+  `)).rows).toEqual([ [ 1, 'a' ], [ 1, 'b' ], [ 2, 'c' ] ])
+  const manyRows = Array.from({ length: 600 }, (_value, index) => `(${index})`).join(', ')
+  expect(rowsOf(executeBatch(s,
+    `SELECT COUNT(*) FROM (VALUES ${manyRows}) AS source(value)`)).rows)
+    .toEqual([ [ 600 ] ])
+
+  expect(() => executeBatch(s,
+    'SELECT value FROM (VALUES (1), (\'not an int\')) AS source(value)'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1), (2)) AS source'))
+    .toThrowError(expect.objectContaining({ number: 8155, state: 2 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1, 2), (3)) AS source(a, b)'))
+    .toThrowError(expect.objectContaining({ number: 10709 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1, 2)) AS source(a)'))
+    .toThrowError(expect.objectContaining({ number: 8158 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1)) AS source(a, b)'))
+    .toThrowError(expect.objectContaining({ number: 8159 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1, 2)) AS source(a, a)'))
+    .toThrowError(expect.objectContaining({ number: 8156 }) as Error)
+  expect(() => executeBatch(s, 'SELECT * FROM (VALUES (1))'))
+    .toThrowError(expect.objectContaining({ number: 102 }) as Error)
+})
+
 test('apply preserves correlated row elimination and null extension', () => {
   const s = open()
   executeBatch(s, `

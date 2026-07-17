@@ -101,6 +101,11 @@ FROM (VALUES (1,2),(3,4)) AS T(a,b)
 ```
 
 - Must be aliased. No row limit for VALUES as derived table.
+- A column alias list is optional syntactically, but every VALUES expression is
+  unnamed: omitting it raises 8155. Alias-list width errors are 8158/8159,
+  duplicate names are 8156, and unequal row widths are 10709.
+- Column types use the same precedence and widening rules as UNION ALL; a
+  higher-precedence type may therefore make another row fail conversion.
 - Up to 256 table sources per statement.
 - `FROM A, B` ≡ `FROM A CROSS JOIN B`.
 

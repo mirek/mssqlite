@@ -1,7 +1,7 @@
 import * as C from './combinators.ts'
 import * as Result from './result.ts'
 import { expression } from './expression.ts'
-import { select, tableHints, tableSource } from './select.ts'
+import { select, tableHints, tableSource, valuesRow, valuesTable } from './select.ts'
 import type * as Ast from '../ast.ts'
 import type * as Parser from './parser.ts'
 
@@ -10,9 +10,6 @@ const topClause: Parser.t<Ast.Expression | undefined> =
     C.seq(C.keyword('top'), C.parens(expression)),
     ([ , count ]) => count
   ))
-
-const valuesRow: Parser.t<Ast.Expression[]> =
-  C.parens(C.sepBy1(expression, C.punct(',')))
 
 // OUTPUT items are select items without the variable-assignment form —
 // `@x = expression` is not part of the OUTPUT grammar.
@@ -172,51 +169,15 @@ const requiredAlias: Parser.t<string> =
     C.identifier
   )
 
-// A VALUES table constructor as a right-nested UNION ALL chain whose first
-// branch aliases every column — the only rendering SQLite offers for a
-// derived table with a column list.
-const valuesAsSelect =
-  (rows: readonly (readonly Ast.Expression[])[], columns: readonly string[]): Ast.Select => {
-    const selects = rows.map((row): Ast.Select => ({
-      kind: 'select',
-      distinct: false,
-      items: row.map((value, index) => ({
-        kind: 'expression',
-        expression: value,
-        alias: columns[index] ?? ''
-      }))
-    }))
-    let chained = selects[selects.length - 1] as Ast.Select
-    for (let index = selects.length - 2; index >= 0; index--) {
-      chained = { ...selects[index] as Ast.Select, union: { kind: 'unionAll', select: chained } }
-    }
-    return chained
-  }
-
 /**
  * MERGE USING source — a table, a derived SELECT, or a VALUES table
- * constructor. Column lists desugar into select-item aliases.
+ * constructor using the same first-class table-source AST as SELECT.
  */
 const mergeSource: Parser.t<Ast.TableSource> =
   reader => {
-    const values = C.seq(
-      C.parens(C.map(
-        C.seq(C.keyword('values'), C.sepBy1(valuesRow, C.punct(','))),
-        ([ , rows ]) => rows
-      )),
-      requiredAlias,
-      C.parens(C.sepBy1(C.anyIdentifier, C.punct(',')))
-    )(reader)
+    const values = valuesTable(reader)
     if (!Result.failed(values)) {
-      const [ rows, alias, columns ] = values.value
-      if (rows.some(row => row.length !== columns.length)) {
-        return Result.fail(reader, 'The VALUES row width must match the source column list.')
-      }
-      return Result.ok(values.reader, {
-        kind: 'derived' as const,
-        select: valuesAsSelect(rows, columns),
-        alias
-      })
+      return values
     }
     const derived = C.seq(
       C.parens(select),

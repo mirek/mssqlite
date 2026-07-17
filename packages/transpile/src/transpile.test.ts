@@ -56,6 +56,18 @@ test('joins', () => {
     .toBe('SELECT * FROM "a" CROSS JOIN "b"')
 })
 
+test('values table sources lower to stable named derived tables', () => {
+  expect(sqlOf('SELECT source.value FROM (VALUES (1), (2)) AS source(value)'))
+    .toBe('SELECT "source"."value" FROM ' +
+      '(SELECT column1 AS "value" FROM (VALUES (1), (2))) AS "source"')
+  expect(sqlOf(`
+    SELECT left_.id, right_.label
+    FROM (VALUES (1), (2)) left_(id)
+    JOIN (VALUES (2, 'two')) right_(id, label) ON right_.id = left_.id
+  `)).toContain('INNER JOIN (SELECT column1 AS "id", column2 AS "label" ' +
+    'FROM (VALUES (2, \'two\'))) AS "right_"')
+})
+
 test('table-valued functions render with declared result metadata', () => {
   const split = statement(parseStatement(
     'SELECT * FROM STRING_SPLIT(N\'a,b\', \',\', 1) AS s'))

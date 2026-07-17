@@ -194,6 +194,22 @@ const hintType =
     }
   }
 
+const nullable =
+  (ctx: Context.t, value: Ast.Expression): boolean => {
+    switch (value.kind) {
+      case 'null':
+        return true
+      case 'number':
+      case 'string':
+      case 'binary':
+        return false
+      case 'column':
+        return Context.columnNullable(ctx, value.name) ?? true
+      default:
+        return true
+    }
+  }
+
 /** Exact-decimal result metadata when every projected column has a known shape. */
 export const selectHints =
   (select: Ast.Select): readonly ColumnHint[] | undefined => {
@@ -210,7 +226,7 @@ export const selectHints =
         return type === undefined ? undefined : {
           name: nameOf(item),
           type,
-          nullable: item.expression.kind === 'null'
+          nullable: nullable(ctx, item.expression)
         }
       })
       return !hasDecimal || hints.some(hint => hint === undefined) ?

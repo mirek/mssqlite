@@ -12,6 +12,35 @@ const alias: Parser.t<string | undefined> =
     C.identifier
   ))
 
+const requiredAlias: Parser.t<string> =
+  C.first(
+    C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
+    C.anyIdentifier
+  )
+
+/** One row of a table value constructor. */
+export const valuesRow: Parser.t<Ast.Expression[]> =
+  C.parens(C.sepBy1(expression, C.punct(',')))
+
+/** Parenthesized VALUES table source with its required correlation name. */
+export const valuesTable: Parser.t<Ast.TableSource> =
+  C.map(
+    C.seq(
+      C.parens(C.map(
+        C.seq(C.keyword('values'), C.sepBy1(valuesRow, C.punct(','))),
+        ([ , rows ]) => rows
+      )),
+      requiredAlias,
+      C.maybe(C.parens(C.sepBy1(C.anyIdentifier, C.punct(','))))
+    ),
+    ([ rows, alias_, columns ]) => ({
+      kind: 'values' as const,
+      rows,
+      alias: alias_,
+      ...columns === undefined ? {} : { columns }
+    })
+  )
+
 const tableFunctionColumn: Parser.t<Ast.TableFunctionColumn> =
   reader => {
     const head = C.seq(C.anyIdentifier, typeName)(reader)
@@ -85,6 +114,7 @@ export const tableHints: Parser.t<string[] | undefined> =
 
 const tablePrimary: Parser.t<Ast.TableSource> =
   C.first(
+    valuesTable,
     C.map(
       C.seq(C.parens(reader => select(reader)), alias),
       ([ select_, alias_ ]) => ({
@@ -106,12 +136,6 @@ const tablePrimary: Parser.t<Ast.TableSource> =
         }
       }
     )
-  )
-
-const requiredAlias: Parser.t<string> =
-  C.first(
-    C.map(C.seq(C.keyword('as'), C.anyIdentifier), ([ , name ]) => name),
-    C.anyIdentifier
   )
 
 const pivot =

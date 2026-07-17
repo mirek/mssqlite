@@ -40,6 +40,7 @@ const sourceAlias =
       case 'function':
         return source.alias ?? source.name[source.name.length - 1]
       case 'derived':
+      case 'values':
       case 'pivot':
       case 'unpivot':
         return source.alias
@@ -56,9 +57,9 @@ const sourceColumns =
       return left === undefined || right === undefined ? undefined : [ ...left, ...right ]
     }
     const alias = sourceAlias(source)
-    const columns = source.kind === 'table' ?
-      source.columns?.map(column => column.name) :
-      TableTransform.columns(source)
+    const columns = source.kind === 'table' ? source.columns?.map(column => column.name) :
+      source.kind === 'values' ? source.columnMetadata?.map(column => column.name) :
+        TableTransform.columns(source)
     return alias === undefined || columns === undefined ? undefined :
       columns.map(name => ({ name, qualifier: alias }))
   }

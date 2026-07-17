@@ -210,7 +210,8 @@ const snapshotSelect =
   ): Ast.Select => {
     const exposedSource = statement.source.kind === 'table' ?
       statement.source.alias ?? last(statement.source.name) :
-      statement.source.kind === 'derived' ? statement.source.alias : ''
+      statement.source.kind === 'derived' || statement.source.kind === 'values' ?
+        statement.source.alias : ''
     // A FULL JOIN row with a missing source side is only detectable through a
     // never-null marker column, so wrap the source when BY SOURCE arms exist.
     const marker: Ast.Expression = { kind: 'column', name: [ exposedSource, '__mssqlite_source' ] }
