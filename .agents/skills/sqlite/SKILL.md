@@ -58,8 +58,10 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   truncating character UDF; DML/default/computed and bulk storage call a
   rejecting UDF before binding. Both use Windows-1252 bytes for non-Unicode
   families and UTF-16LE code units for Unicode families.
-- **`INTEGER PRIMARY KEY AUTOINCREMENT`** as the IDENTITY mapping
-  (never-reused ids); TRUNCATE deletes the `sqlite_sequence` row to reset.
+- **Ordinary typed columns for IDENTITY storage** — allocation belongs to the
+  engine's database registry, not SQLite rowid/AUTOINCREMENT. UDF expressions
+  reserve generated values during INSERT/MERGE evaluation so failed statements
+  leave gaps; TRUNCATE resets engine state transactionally.
 - **Native functions**: `concat`/`concat_ws` (NULL-as-empty matches
   T-SQL CONCAT), `iif`, math functions (`ceiling`, `power`, `ln`,
   `log10`, `atan2`, …), window functions, `group_concat(x, sep)` for

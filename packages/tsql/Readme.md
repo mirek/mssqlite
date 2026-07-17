@@ -96,7 +96,7 @@ Statements separate on semicolons or juxtaposition (as in real batches).
 - Reserved words are rejected as bare identifiers but allowed as function
   names when directly followed by `(` — so `LEFT(x, 1)` parses while
   `SELECT FROM` fails.
-- The AST keeps numeric literals as raw text (`{ kind: 'number', value: '1.50' }`)
-  so downstream layers control exactness.
+- The AST keeps numeric literals and IDENTITY seed/increment constants as raw
+  text so downstream layers retain decimal(38,0) exactness.
 - `GO` is a client-side batch separator, never sent over TDS — deliberately
   not part of the grammar.

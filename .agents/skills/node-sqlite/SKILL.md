@@ -98,3 +98,7 @@ Implicit integer, bit, float, temporal, GUID, and binary callbacks likewise
 run before SQLite affinity or storage-class comparison. Their synchronous
 `MssqlError` values preserve SQL Server conversion/incompatibility numbers and
 participate in the same statement rollback and TRY/CATCH path.
+IDENTITY allocation callbacks deliberately mutate the engine's database-owned
+registry rather than SQLite data. SQLite still rolls back the row when a later
+constraint fails, while the synchronous callback's reserved value remains
+consumed; dirty catalog state is persisted once the SQLite transaction ends.

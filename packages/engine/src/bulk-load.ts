@@ -3,6 +3,7 @@ import { BulkLoad as TdsBulkLoad, DataType, TypeInfo, Value as TdsValue } from '
 import * as Transpile from '@mssqlite/transpile'
 import { assertWritable, stateForName, withState } from './database.ts'
 import { MssqlError } from './error.ts'
+import * as Identity from './identity.ts'
 import * as Character from './character.ts'
 import { executeSql, type Parameter } from './execute.ts'
 import { typeInfoOfCatalogRow } from './metadata.ts'
@@ -16,6 +17,7 @@ import {
   type Value
 } from './session.ts'
 import type { StatementSync } from 'node:sqlite'
+import type { Ast } from '@mssqlite/tsql'
 
 type Parsed = {
   readonly target: readonly string[],
@@ -38,9 +40,10 @@ export type Plan = {
   readonly database: DatabaseState,
   /** Catalog/allocation owner of the target table. */
   readonly targetDatabase: DatabaseState,
+  readonly target: Ast.QualifiedName,
   readonly table: string,
   readonly columns: readonly TargetColumn[],
-  readonly hasIdentity: boolean,
+  readonly identity: Identity.Identity | undefined,
   readonly checkConstraints: boolean,
   readonly fireTriggers: boolean,
   readonly keepIdentity: boolean,
@@ -53,6 +56,8 @@ export type Loader = {
   readonly statements: Map<string, StatementSync>,
   readonly previousRowCount: number,
   readonly previousIdentity: Value,
+  readonly previousScopeIdentity: Value,
+  readonly previousIdentityVersion: number,
   rowCount: number,
   lastIdentity: Value,
   active: boolean
@@ -221,7 +226,7 @@ const targetColumns =
     database: DatabaseState,
     target: readonly string[],
     names: readonly string[]
-  ): { readonly columns: readonly TargetColumn[], readonly hasIdentity: boolean } => {
+  ): readonly TargetColumn[] => {
     const local = target.length > 1 ? target.slice(-2) : target
     const objectId = objectIdOf(database.db, local)
     if (objectId === undefined) {
@@ -233,7 +238,7 @@ const targetColumns =
       .map(row => row.parent_column_id))
     const rows = tableColumns(database.db, objectId)
     const available = new Map(rows.map(row => [ row.name.toLowerCase(), row ]))
-    const columns = names.map(name => {
+    return names.map(name => {
       const row = available.get(name.toLowerCase())
       if (row === undefined) {
         throw new MssqlError(`Invalid column name '${name}'.`, 207, 16)
@@ -247,7 +252,6 @@ const targetColumns =
         hasDefault: defaults.has(row.column_id)
       }
     })
-    return { columns, hasIdentity: rows.some(row => row.is_identity !== 0) }
   }
 
 /** Recognizes and validates the INSERT BULK setup batch sent before packet type 7. */
@@ -260,17 +264,18 @@ export const prepareBulkLoad =
     const targetDatabase = stateForName(session, parsed.target)
     assertWritable(targetDatabase)
     const target = targetColumns(targetDatabase, parsed.target, parsed.columns)
-    if (!parsed.keepIdentity && target.columns.some(column => column.row.is_identity !== 0)) {
+    if (!parsed.keepIdentity && target.some(column => column.row.is_identity !== 0)) {
       throw new MssqlError('Explicit value must be specified for identity column only with KEEPIDENTITY.', 544, 16)
     }
     return {
       session,
       database: session.databaseState,
       targetDatabase,
+      target: parsed.target,
       table: Transpile.Quote.objectName(targetDatabase === session.databaseState &&
         parsed.target.length > 1 ? parsed.target.slice(-2) : parsed.target),
-      columns: target.columns,
-      hasIdentity: target.hasIdentity,
+      columns: target,
+      identity: Identity.resolve(session, parsed.target),
       checkConstraints: parsed.checkConstraints,
       fireTriggers: parsed.fireTriggers,
       keepIdentity: parsed.keepIdentity,
@@ -324,6 +329,8 @@ export const beginBulkLoad =
       statements: new Map(),
       previousRowCount: plan.session.rowCount,
       previousIdentity: plan.session.lastIdentity,
+      previousScopeIdentity: plan.session.scopeIdentity,
+      previousIdentityVersion: plan.session.identityVersion,
       rowCount: 0,
       lastIdentity: plan.session.lastIdentity,
       active: true
@@ -390,17 +397,20 @@ const included =
       !plan.keepNulls && column.hasDefault && row[index] === null ? [] : [ index ])
 
 const statement =
-  (loader: Loader, indexes: readonly number[]): StatementSync => {
-    const key = indexes.join(',')
+  (loader: Loader, indexes: readonly number[], generatedIdentity: boolean): StatementSync => {
+    const key = `${indexes.join(',')}|${generatedIdentity ? 'identity' : ''}`
     const cached = loader.statements.get(key)
     if (cached !== undefined) {
       return cached
     }
-    const sql = indexes.length === 0 ?
+    const names = indexes.map(index => loader.plan.columns[index]?.row.name ?? '')
+    if (generatedIdentity && loader.plan.identity !== undefined) {
+      names.push(loader.plan.identity.column)
+    }
+    const sql = names.length === 0 ?
       `INSERT INTO ${loader.plan.table} DEFAULT VALUES` :
-      `INSERT INTO ${loader.plan.table} (${indexes.map(index =>
-        Transpile.Quote.identifier(loader.plan.columns[index]?.row.name ?? '')).join(', ')}) ` +
-      `VALUES (${indexes.map(() => '?').join(', ')})`
+      `INSERT INTO ${loader.plan.table} (${names.map(Transpile.Quote.identifier).join(', ')}) ` +
+      `VALUES (${names.map(() => '?').join(', ')})`
     const prepared = loader.plan.database.db.prepare(sql)
     loader.statements.set(key, prepared)
     return prepared
@@ -420,6 +430,23 @@ const triggeredInsert =
     executeSql(loader.plan.session, sql, parameters)
   }
 
+const withBulkIdentityInsert =
+  (plan: Plan, enabled: boolean, run: () => void): void => {
+    if (!enabled) {
+      run()
+      return
+    }
+    const { session } = plan
+    const previous = session.identityInsert
+    session.identityInsert = undefined
+    Identity.setInsert(session, plan.target, true)
+    try {
+      run()
+    } finally {
+      session.identityInsert = previous
+    }
+  }
+
 /** Inserts complete decoded rows through cached statements inside the bulk savepoint. */
 export const writeBulkRows =
   (loader: Loader, rows: readonly (readonly TdsValue.t[])[]): void => {
@@ -437,18 +464,36 @@ export const writeBulkRows =
             throw new MssqlError('Bulk row does not match column metadata.', 4816, 16)
           }
           const indexes = included(mutable.plan, row)
-          const values = indexes.map(index =>
+          let values = indexes.map(index =>
             converted(mutable.plan.columns[index] as TargetColumn, row[index] ?? null))
           if (mutable.plan.fireTriggers) {
             if (mutable.plan.targetDatabase !== mutable.plan.database) {
               throw new MssqlError('FIRE_TRIGGERS is unsupported for cross-database bulk load.', 40000, 16)
             }
-            triggeredInsert(mutable, indexes, values)
+            const explicit = indexes.some(index =>
+              mutable.plan.columns[index]?.row.is_identity !== 0)
+            withBulkIdentityInsert(mutable.plan, explicit, () =>
+              triggeredInsert(mutable, indexes, values))
             mutable.lastIdentity = mutable.plan.session.lastIdentity
           } else {
+            const identityAt = indexes.findIndex(index =>
+              mutable.plan.columns[index]?.row.is_identity !== 0)
+            let generatedIdentity = false
+            if (mutable.plan.identity !== undefined) {
+              if (identityAt >= 0) {
+                const explicit = Identity.explicitValue(
+                  session, mutable.plan.target, values[identityAt] ?? null)
+                values = values.map((value, index) => index === identityAt ? explicit : value)
+                mutable.lastIdentity = explicit
+              } else {
+                generatedIdentity = true
+                const generated = Identity.nextValue(session, mutable.plan.target)
+                values = [ ...values, generated ]
+                mutable.lastIdentity = generated
+              }
+            }
             const bindings = values.map(value => typeof value === 'boolean' ? (value ? 1 : 0) : value)
-            const result = statement(mutable, indexes).run(...bindings)
-            mutable.lastIdentity = result.lastInsertRowid
+            statement(mutable, indexes, generatedIdentity).run(...bindings)
           }
           mutable.rowCount++
         }
@@ -470,11 +515,13 @@ export const finishBulkLoad =
     mutable.active = false
     const session = mutable.plan.session
     session.rowCount = mutable.rowCount
-    if (mutable.rowCount > 0 && mutable.plan.hasIdentity) {
-      session.lastIdentity = mutable.lastIdentity
+    if (mutable.rowCount > 0 && mutable.plan.identity !== undefined && !mutable.plan.fireTriggers) {
+      session.pendingIdentity = mutable.lastIdentity
+      Identity.publishPending(session)
     }
     endRequest(session)
     flushRowversion(session.server)
+    Identity.flushIdentities(session)
     return mutable.rowCount
   }
 
@@ -497,6 +544,9 @@ export const abortBulkLoad =
     const session = mutable.plan.session
     session.rowCount = mutable.previousRowCount
     session.lastIdentity = mutable.previousIdentity
+    session.scopeIdentity = mutable.previousScopeIdentity
+    session.identityVersion = mutable.previousIdentityVersion
     endRequest(session)
     flushRowversion(session.server)
+    Identity.flushIdentities(session)
   }

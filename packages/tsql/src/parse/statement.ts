@@ -203,9 +203,9 @@ const set: Parser.t<Ast.Statement> =
       C.map(
         C.seq(C.keyword('identity_insert'), C.qualifiedName, onOff),
         ([ , table, value ]) => ({
-          kind: 'setOption' as const,
-          options: [ `identity_insert ${table.join('.').toLowerCase()}` ],
-          value
+          kind: 'setIdentityInsert' as const,
+          table,
+          enabled: value === 'on'
         })
       ),
       // SET option [, option ...] ON|OFF and other one-word settings.

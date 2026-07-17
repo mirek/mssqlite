@@ -305,8 +305,15 @@ the engine:
 - **Catalog functions become subqueries** — `OBJECT_ID('t')` →
   `(SELECT object_id FROM "sys.objects" WHERE …)`; UDFs cannot re-enter
   the database connection.
-- **IDENTITY = rowid alias** — `INTEGER PRIMARY KEY AUTOINCREMENT`
-  (never-reused ids like MSSQL); TRUNCATE clears `sqlite_sequence`.
+- **IDENTITY is database-owned state** — catalog seed/increment/last values
+  hydrate an exact bigint registry shared by sessions. Engine-injected UDFs
+  allocate values inside INSERT/MERGE row evaluation while advancing the
+  registry outside SQLite rollback state, preserving gaps after failures and
+  rollbacks. Physical columns are ordinary typed NOT NULL columns, independent
+  of rowid and primary keys. Session-scoped IDENTITY_INSERT gates explicit
+  values; trigger/procedure scope publication distinguishes `@@IDENTITY` from
+  `SCOPE_IDENTITY()`. DELETE retains state and TRUNCATE transactionally resets
+  it to the declared seed.
 - **Session model** — one `DatabaseSync` per server, shared by sessions;
   SQLite serializes writes, one transaction at a time across sessions.
   Nested BEGIN TRAN counts `@@TRANCOUNT`; only the outermost pair touches

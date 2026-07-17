@@ -25,6 +25,7 @@ import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffsetExact from './datetimeoffset.ts'
 import * as CharacterExact from './character.ts'
 import * as ImplicitExact from './implicit.ts'
+import * as Identity from './identity.ts'
 import * as Storage from './storage.ts'
 import positionalRows from './positional-rows.ts'
 import * as SystemProcedures from './system-procedures.ts'
@@ -215,20 +216,6 @@ const raiserrorFormat =
     })
   }
 
-const hasIdentity =
-  (session: Session, table: Ast.QualifiedName): boolean => {
-    const backing = table[table.length - 1]?.toLowerCase()
-    const tableVariable = [ ...session.tableVariables.values() ].find(variable =>
-      variable.table[variable.table.length - 1]?.toLowerCase() === backing)
-    if (tableVariable !== undefined) {
-      return tableVariable.columns.some(column => column.identity !== undefined)
-    }
-    const db = catalogDatabase(session, table)
-    const objectId = Catalog.objectIdOf(db, table)
-    return objectId !== undefined &&
-      Catalog.tableColumns(db, objectId).some(column => column.is_identity === 1)
-  }
-
 const decimalType =
   (type: Ast.ColumnDefinition['type']): Ast.ColumnDefinition['type'] | undefined =>
     [ 'decimal', 'numeric', 'dec', 'money', 'smallmoney' ].includes(type.name) ? type : undefined
@@ -349,11 +336,17 @@ const resolveStoredDml =
     if (statement.kind === 'insert') {
       const all = targetColumns(session, statement.table)
       const rowversion = all.find(column => column.rowversion === true)
+      const identity = Identity.resolve(session, statement.table)
       let names = statement.columns ?? all.filter(column =>
         column.computed !== true && column.identity !== true && column.rowversion !== true)
         .map(column => column.name)
       const rowversionAt = rowversion === undefined ? -1 : names.findIndex(name =>
         name.toLowerCase() === rowversion.name.toLowerCase())
+      const identityAt = identity === undefined ? -1 : names.findIndex(name =>
+        name.toLowerCase() === identity.column.toLowerCase())
+      if (identityAt >= 0) {
+        Identity.assertExplicitAllowed(session, statement.table)
+      }
       const targets = names.map(name => ({
         name,
         type: storedType(
@@ -368,7 +361,7 @@ const resolveStoredDml =
               const value = row[index]
               return value === undefined || value.kind === 'default' ? [] : [ value ]
             }) : []))
-        const rows = statement.source.rows.map(row => row.map((value, index) => {
+        let rows = statement.source.rows.map(row => row.map((value, index) => {
           if (index === rowversionAt) {
             if (value.kind !== 'default') {
               throw explicitRowversionError()
@@ -384,16 +377,35 @@ const resolveStoredDml =
             Transpile.Implicit.coerce(value, inferred, sourceType)
           return target?.type === undefined ? converted : Storage.cast(converted, target.type, target.name)
         }))
+        if (identity !== undefined) {
+          if (identityAt >= 0) {
+            rows = rows.map(row => row.map((value, index) => {
+              if (index !== identityAt) {
+                return value
+              }
+              if (value.kind === 'default') {
+                throw new MssqlError('An explicit value for the identity column must be specified.', 545, 16)
+              }
+              return Identity.explicitExpression(statement.table, value)
+            }))
+          } else {
+            names = [ ...names, identity.column ]
+            rows = rows.map(row => [
+              ...row,
+              Storage.cast(Identity.nextExpression(statement.table), identity.type, identity.column)
+            ])
+          }
+        }
         if (rowversion !== undefined && rowversionAt < 0) {
           names = [ ...names, rowversion.name ]
+          rows = rows.map(row => [ ...row, nextRowversionExpression() ])
         }
         return {
           ...statement,
-          ...rowversion === undefined ? {} : { columns: names },
+          ...identity === undefined && rowversion === undefined ? {} : { columns: names },
           source: {
             ...statement.source,
-            rows: rowversion !== undefined && rowversionAt < 0 ?
-              rows.map(row => [ ...row, nextRowversionExpression() ]) : rows
+            rows
           }
         }
       }
@@ -401,7 +413,7 @@ const resolveStoredDml =
         if (rowversionAt >= 0) {
           throw explicitRowversionError()
         }
-        const converted = {
+        let converted: Ast.Select = {
           ...statement.source.select,
           items: statement.source.select.items.map((item, index) => {
             const target = targets[index]
@@ -409,28 +421,62 @@ const resolveStoredDml =
               { ...item, expression: Storage.cast(item.expression, target.type, target.name) }
           })
         }
-        if (rowversion !== undefined) {
-          names = [ ...names, rowversion.name ]
-        }
-        return {
-          ...statement,
-          ...rowversion === undefined ? {} : { columns: names },
-          source: {
-            ...statement.source,
-            select: rowversion === undefined ? converted : appendSelectItem(converted, {
-              kind: 'expression', expression: nextRowversionExpression()
+        if (identity !== undefined) {
+          if (identityAt >= 0) {
+            converted = {
+              ...converted,
+              items: converted.items.map((item, index) =>
+                index !== identityAt || item.kind !== 'expression' ? item : {
+                  ...item,
+                  expression: Identity.explicitExpression(statement.table, item.expression)
+                })
+            }
+          } else {
+            names = [ ...names, identity.column ]
+            converted = appendSelectItem(converted, {
+              kind: 'expression',
+              expression: Storage.cast(
+                Identity.nextExpression(statement.table), identity.type, identity.column)
             })
           }
         }
-      }
-      if (rowversion !== undefined) {
-        if (rowversionAt >= 0) {
-          throw explicitRowversionError()
+        if (rowversion !== undefined) {
+          names = [ ...names, rowversion.name ]
+          converted = appendSelectItem(converted, {
+            kind: 'expression', expression: nextRowversionExpression()
+          })
         }
         return {
           ...statement,
-          columns: [ rowversion.name ],
-          source: { kind: 'values', rows: [ [ nextRowversionExpression() ] ] }
+          ...identity === undefined && rowversion === undefined ? {} : { columns: names },
+          source: {
+            ...statement.source,
+            select: converted
+          }
+        }
+      }
+      if (identity !== undefined || rowversion !== undefined) {
+        const columns: string[] = []
+        const values: Ast.Expression[] = []
+        if (identity !== undefined) {
+          if (identityAt >= 0) {
+            throw new MssqlError('An explicit value for the identity column must be specified.', 545, 16)
+          }
+          columns.push(identity.column)
+          values.push(Storage.cast(
+            Identity.nextExpression(statement.table), identity.type, identity.column))
+        }
+        if (rowversion !== undefined) {
+          if (rowversionAt >= 0) {
+            throw explicitRowversionError()
+          }
+          columns.push(rowversion.name)
+          values.push(nextRowversionExpression())
+        }
+        return {
+          ...statement,
+          columns,
+          source: { kind: 'values', rows: [ values ] }
         }
       }
       return statement
@@ -630,6 +676,8 @@ const runTrigger =
     const key = triggerKey(trigger.name)
     const savedVariables = new Map(session.variables)
     const savedNocount = session.options.get('nocount')
+    const savedScopeIdentity = session.scopeIdentity
+    session.scopeIdentity = null
     session.variables.clear()
     session.activeTriggers.add(key)
     session.nestLevel++
@@ -651,6 +699,7 @@ const runTrigger =
         session.options.set('nocount', savedNocount)
       }
       session.nestLevel--
+      session.scopeIdentity = savedScopeIdentity
       session.activeTriggers.delete(key)
       session.transitionTables.clear()
       for (const [ name, table ] of saved) {
@@ -676,6 +725,9 @@ const runTriggered =
     const after = triggers.filter(trigger => trigger.timing === 'after')
     const savepoint = `__mssqlite_trigger_${session.spid}_${session.nextTransitionTable++}`
     const previousRowCount = session.rowCount
+    const previousIdentity = session.lastIdentity
+    const previousScopeIdentity = session.scopeIdentity
+    const previousIdentityVersion = session.identityVersion
     let failedInTrigger = false
     session.db.exec(`SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
     try {
@@ -683,6 +735,8 @@ const runTriggered =
         insteadOfRows(session, statement, target) :
         afterRows(session, statement)
       const rowCount = statement.kind === 'delete' ? rows.deleted.length : rows.inserted.length
+      const outerIdentity = session.pendingIdentity
+      const versionBeforeTriggers = session.identityVersion
       session.rowCount = rowCount
       for (const trigger of insteadOf.length > 0 ? insteadOf : after) {
         try {
@@ -694,21 +748,25 @@ const runTriggered =
       }
       session.db.exec(`RELEASE SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
       session.rowCount = rowCount
-      if (statement.kind === 'insert' && rowCount > 0 && hasIdentity(session, target)) {
-        const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
-        session.lastIdentity = Number(last.id)
+      if (statement.kind === 'insert' && rowCount > 0 && outerIdentity !== null) {
+        session.pendingIdentity = outerIdentity
+        Identity.publishPending(session, session.identityVersion === versionBeforeTriggers)
       }
       items.push({ kind: 'count', rowCount, ...countVisibility(session) })
     } catch (error) {
       if (failedInTrigger && session.transactionCount > 0) {
         session.db.exec('ROLLBACK')
         session.transactionCount = 0
+        Identity.rollbackResets(session)
         session.transactionDoomed = false
       } else if (session.db.isTransaction) {
         session.db.exec(`ROLLBACK TO SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
         session.db.exec(`RELEASE SAVEPOINT ${Transpile.Quote.identifier(savepoint)}`)
       }
       session.rowCount = previousRowCount
+      session.lastIdentity = previousIdentity
+      session.scopeIdentity = previousScopeIdentity
+      session.identityVersion = previousIdentityVersion
       throw error
     }
   }
@@ -721,9 +779,8 @@ const runWithOutput =
     const rows = positionalRows(prepared, bindings(session, rendered.variables))
     const columns = columnsOf(session.db, prepared, rows, session.tableVariables.values())
     session.rowCount = rows.length
-    if (statement.kind === 'insert' && rows.length > 0 && hasIdentity(session, statement.table)) {
-      const last = session.db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number | bigint }
-      session.lastIdentity = Number(last.id)
+    if (statement.kind === 'insert' && rows.length > 0) {
+      Identity.publishPending(session)
     }
     emitOutput(session, output, { kind: 'rows', columns, rows, rowCount: rows.length }, items)
   }
@@ -1076,6 +1133,7 @@ const executeTransaction =
         }
         if (session.transactionCount === 1) {
           session.db.exec('COMMIT')
+          Identity.commitResets(session)
         }
         session.transactionCount--
         return
@@ -1092,6 +1150,7 @@ const executeTransaction =
         if (session.transactionCount > 0) {
           session.db.exec('ROLLBACK')
           session.transactionCount = 0
+          Identity.rollbackResets(session)
         }
         session.transactionDoomed = false
         return
@@ -1261,11 +1320,9 @@ const executeStatementInner =
         const result = prepared.run(bindings(session, rendered.variables))
         session.rowCount = Number(result.changes)
         // Only a row actually inserted into an identity table advances
-        // @@IDENTITY / SCOPE_IDENTITY; a zero-row insert leaves them unchanged
-        // (last_insert_rowid is connection-global and would otherwise leak a
-        // stale id from an unrelated table).
-        if (result.changes > 0 && hasIdentity(session, statement.table)) {
-          session.lastIdentity = Number(result.lastInsertRowid)
+        // @@IDENTITY / SCOPE_IDENTITY; a zero-row insert leaves them unchanged.
+        if (result.changes > 0) {
+          Identity.publishPending(session)
         }
         items.push({
           kind: 'count', rowCount: Number(result.changes), ...countVisibility(session)
@@ -1295,22 +1352,19 @@ const executeStatementInner =
       }
       case 'truncate': {
         runRendered(session, Transpile.statement(statement), items)
-        const name = Catalog.objectNameOf(statement.table).name
-        try {
-          session.db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(name)
-        } catch {
-          // No AUTOINCREMENT table exists yet — nothing to reset.
-        }
+        Identity.reset(session, statement.table)
         return undefined
       }
       case 'createTable': {
         const resolved = { ...statement, columns: Transpile.Computed.columns(statement.columns) }
         validateRowversionColumns(resolved.columns)
+        Identity.validateColumns(resolved.columns)
         const rendered = Transpile.statement(resolved)
         session.db.exec(rendered.sql)
         Catalog.createTable(
           catalogDatabase(session, resolved.name), resolved,
           expression => Transpile.scalar(expression).sql)
+        Identity.reloadIdentities(Databases.stateForName(session, resolved.name))
         const rowversion = resolved.columns.find(column => isRowversionType(column.type))
         if (rowversion !== undefined) {
           installRowversionTriggers(session.db, resolved.name, rowversion.name)
@@ -1327,6 +1381,7 @@ const executeStatementInner =
             }
           }
           Catalog.dropTable(catalogDatabase(session, name), name)
+          Identity.reloadIdentities(Databases.stateForName(session, name))
         }
         return undefined
       case 'createIndex':
@@ -1394,6 +1449,13 @@ const executeStatementInner =
           validateRowversionColumns(
             resolved.action.columns,
             existing.some(column => column.system_type_id === 189) ? 1 : 0)
+          Identity.validateColumns(resolved.action.columns)
+          if (existing.some(column => column.is_identity !== 0) &&
+            resolved.action.columns.some(column => column.identity !== undefined)) {
+            throw new MssqlError(
+              'Multiple identity columns specified for table. Only one identity column per table is allowed.',
+              2744, 16)
+          }
         }
         if (resolved.action.kind === 'dropColumns') {
           const dropped = resolved.action.columns
@@ -1422,6 +1484,7 @@ const executeStatementInner =
           default:
             break
         }
+        Identity.reloadIdentities(Databases.stateForName(session, resolved.name))
         return undefined
       }
       case 'declare':
@@ -1451,6 +1514,9 @@ const executeStatementInner =
         for (const option of statement.options) {
           session.options.set(option, statement.value)
         }
+        return undefined
+      case 'setIdentityInsert':
+        Identity.setInsert(session, statement.table, statement.enabled)
         return undefined
       case 'if':
         return truthy(session, statement.condition) ?
@@ -1608,15 +1674,19 @@ const executeStatementInner =
 const executeStatement =
   (session: Session, statement: Ast.Statement, items: Item[]): Signal => {
     const savedAllocation = session.allocationDatabaseState
+    const savedPendingIdentity = session.pendingIdentity
+    session.pendingIdentity = null
     const target = writeTargets(statement)[0]
     session.allocationDatabaseState = target === undefined ?
       session.databaseState : Databases.stateForName(session, target)
     try {
       return executeStatementInner(session, statement, items)
     } finally {
+      session.pendingIdentity = savedPendingIdentity
       session.allocationDatabaseState = savedAllocation
       flushSequences(session.server)
       flushRowversion(session.server)
+      Identity.flushIdentities(session)
     }
   }
 
@@ -1927,6 +1997,8 @@ const callUserProcedure =
     const saved = new Map(session.variables)
     const savedReturn = session.returnValue
     const savedNocount = session.options.get('nocount')
+    const savedScopeIdentity = session.scopeIdentity
+    session.scopeIdentity = null
     session.variables.clear()
     for (const [ key, variable ] of scope) {
       session.variables.set(key, variable)
@@ -1955,6 +2027,7 @@ const callUserProcedure =
         session.options.set('nocount', savedNocount)
       }
       session.nestLevel--
+      session.scopeIdentity = savedScopeIdentity
       session.returnValue = savedReturn
       session.variables.clear()
       for (const [ key, variable ] of saved) {
@@ -1994,7 +2067,14 @@ const executeProcedure =
         value: evaluate(session, argument.value),
         output: argument.output
       }))
-      const nested = executeSql(session, text, parameters)
+      const savedScopeIdentity = session.scopeIdentity
+      session.scopeIdentity = null
+      let nested: SqlResult
+      try {
+        nested = executeSql(session, text, parameters)
+      } finally {
+        session.scopeIdentity = savedScopeIdentity
+      }
       items.push(...nested.items)
       // Copy OUTPUT results back into the caller's variables.
       values.forEach((argument, index) => {
@@ -2142,6 +2222,7 @@ export const executeBatch =
             if (xactAbort) {
               session.db.exec('ROLLBACK')
               session.transactionCount = 0
+              Identity.rollbackResets(session)
               session.transactionDoomed = false
               flushSequences(session.server)
               flushRowversion(session.server)
@@ -2293,6 +2374,7 @@ export const executeBatchAsync =
               if (xactAbort) {
                 session.db.exec('ROLLBACK')
                 session.transactionCount = 0
+                Identity.rollbackResets(session)
                 session.transactionDoomed = false
                 flushSequences(session.server)
                 flushRowversion(session.server)

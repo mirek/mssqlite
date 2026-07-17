@@ -214,8 +214,7 @@ const handlers: Record<string, Handler> = {
   // System.
   newid: fixed('mssqlite_newid'),
   scope_identity: fixed('mssqlite_scope_identity'),
-  ident_current: (call, render) =>
-    `(SELECT seq FROM sqlite_sequence WHERE name = mssqlite_name(${arg(call, render, 0)}))`,
+  ident_current: fixed('mssqlite_ident_current'),
   db_name: (call, render) =>
     call.args.length === 0 ?
       'mssqlite_db_name()' :

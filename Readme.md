@@ -67,7 +67,8 @@ isolated catalogs and three-part cross-database queries/procedure calls,
 database-wide ROWVERSION/TIMESTAMP generation with `@@DBTS`, automatic
 insert/update stamping, rollback gaps, and binary(8) wire metadata,
 TRY/CATCH with THROW/RAISERROR and `ERROR_*()` / `XACT_STATE()`,
-CREATE/ALTER/DROP TABLE with IDENTITY, constraints and foreign keys,
+CREATE/ALTER/DROP TABLE with database-owned IDENTITY allocation (signed custom
+seeds/increments, rollback gaps, IDENTITY_INSERT, trigger scope), constraints and foreign keys,
 indexes and views, DECLARE/SET variables, IF/WHILE control flow, nested
 transactions and savepoints, `sys.tables` / `sys.columns` /
 expanded `INFORMATION_SCHEMA` routine/view/constraint catalogs and live

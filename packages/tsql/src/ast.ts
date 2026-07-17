@@ -227,7 +227,7 @@ export type ColumnDefinition = {
   readonly name: string,
   readonly type: TypeName.t,
   readonly nullable?: boolean,
-  readonly identity?: { readonly seed: number, readonly increment: number },
+  readonly identity?: { readonly seed: string, readonly increment: string },
   readonly default_?: Expression,
   readonly primaryKey?: boolean,
   readonly unique?: boolean,
@@ -470,6 +470,11 @@ export type Statement =
       readonly kind: 'setOption',
       readonly options: readonly string[],
       readonly value: string
+    }
+  | {
+      readonly kind: 'setIdentityInsert',
+      readonly table: QualifiedName,
+      readonly enabled: boolean
     }
   | { readonly kind: 'if', readonly condition: Expression, readonly then: Statement, readonly else_?: Statement }
   | { readonly kind: 'while', readonly condition: Expression, readonly body: Statement }

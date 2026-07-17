@@ -100,8 +100,10 @@ rendered statement reports the variables it binds.
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,
   or the `mssqlite_add` UDF for dynamic dispatch when types are unknown.
-- **IDENTITY** — becomes `INTEGER PRIMARY KEY AUTOINCREMENT` (rowid alias;
-  ids never reused, like MSSQL). Non-PK identity columns are rejected.
+- **IDENTITY** — renders as an ordinary typed, non-null SQLite column;
+  primary-key constraints remain independent. The engine injects generated or
+  explicitly tracked values from its database-owned allocator, so non-key and
+  decimal identities do not depend on SQLite rowid.
 - **TOP / OFFSET-FETCH** — become `LIMIT` / `LIMIT ... OFFSET`.
 - **OUTPUT** — becomes `RETURNING` with the `inserted.` / `deleted.`
   qualifier stripped (INSERT and DELETE expose exactly those values;
@@ -114,11 +116,11 @@ rendered statement reports the variables it binds.
   window functions, …), transpile-time rewrites (`YEAR(d)` →
   `CAST(strftime('%Y', d) AS INTEGER)`, `CHOOSE` → `CASE`,
   `EOMONTH`, `DATEFROMPARTS`), catalog subqueries (`OBJECT_ID`,
-  `SCHEMA_NAME`, `DB_NAME(id)`, `IDENT_CURRENT`), or engine-registered
+  `SCHEMA_NAME`, `DB_NAME(id)`), or engine-registered
   `mssqlite_*` UDFs (`newid`, `dateadd`/`datediff`/`datepart`/`datename`,
   `substring`, `left`, `right`, `replicate`, `quotename`, `reverse`, `stuff`, `patindex`,
   `round`, `rand`, `datalength`, `isnumeric`, `isdate`,
-  `scope_identity`, `db_name`, `suser_sname`, `serverproperty`, …).
+  `scope_identity`, `ident_current`, `db_name`, `suser_sname`, `serverproperty`, …).
   See the engine package for the UDF implementations.
 - **CAST/CONVERT** — affinity casts, plus date/time renderings
   (`CAST(x AS date)` → `date(x)`) and CONVERT datetime styles

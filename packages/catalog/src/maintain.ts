@@ -218,7 +218,7 @@ const insertColumn =
       db.prepare(
         `INSERT INTO "sys.identity_columns_extra" (object_id, column_id, seed_value, increment_value)
           VALUES (?, ?, ?, ?)`
-      ).run(objectId, columnId, String(column.identity.seed), String(column.identity.increment))
+      ).run(objectId, columnId, column.identity.seed, column.identity.increment)
     }
     if (column.computed !== undefined) {
       db.prepare(
@@ -835,6 +835,46 @@ export const updateSequenceValue =
         SET current_value = ?, is_exhausted = ?, last_used_value = ?
         WHERE object_id = ?`
     ).run(current, exhausted ? 1 : 0, lastUsed, objectId)
+  }
+
+/** Persisted identity column joined to its table, schema and declared type. */
+export type IdentityRow = {
+  readonly object_id: number,
+  readonly column_id: number,
+  readonly schema_name: string,
+  readonly table_name: string,
+  readonly column_name: string,
+  readonly type_name: string,
+  readonly precision: number,
+  readonly scale: number,
+  readonly seed_value: string,
+  readonly increment_value: string,
+  readonly last_value: string | null
+}
+
+/** Returns every persisted identity definition for runtime hydration. */
+export const identityRows =
+  (db: DatabaseSync): IdentityRow[] =>
+    db.prepare(
+      `SELECT i.object_id, i.column_id, s.name AS schema_name,
+        o.name AS table_name, c.name AS column_name, t.name AS type_name,
+        c.precision, c.scale, i.seed_value, i.increment_value, i.last_value
+      FROM "sys.identity_columns_extra" i
+      JOIN "sys.objects" o ON o.object_id = i.object_id
+      JOIN "sys.schemas" s ON s.schema_id = o.schema_id
+      JOIN "sys.columns" c
+        ON c.object_id = i.object_id AND c.column_id = i.column_id
+      JOIN "sys.types" t ON t.user_type_id = c.user_type_id
+      WHERE o.type = 'U'`
+    ).all() as unknown as IdentityRow[]
+
+/** Persists one identity column's last generated or accepted explicit value. */
+export const updateIdentityValue =
+  (db: DatabaseSync, objectId: number, columnId: number, last: string | null): void => {
+    db.prepare(
+      `UPDATE "sys.identity_columns_extra" SET last_value = ?
+        WHERE object_id = ? AND column_id = ?`
+    ).run(last, objectId, columnId)
   }
 
 /** Registers columns added by ALTER TABLE ADD. */

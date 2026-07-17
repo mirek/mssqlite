@@ -32,6 +32,8 @@ no query interception.
     sys.objects type `FN` / `IF`, and triggers use table-parented type `TR`;
     `createSequence` / `alterSequence` / `dropSequence` maintain `SO` objects
     and lossless counter state behind `sys.sequences`;
+    `identityRows` hydrates database-owned IDENTITY definitions and
+    `updateIdentityValue` persists rollback-independent `last_value` state;
     rowversion/TIMESTAMP columns use type id 189 and the database-wide counter
     persists as decimal text in the singleton `sys.rowversion_state` table;
     computed columns populate `is_computed` plus definition/persistence rows

@@ -414,7 +414,7 @@ test('create table with constraints', () => {
       {
         name: 'id',
         type: { name: 'int' },
-        identity: { seed: 1, increment: 1 },
+        identity: { seed: '1', increment: '1' },
         nullable: false,
         primaryKey: true
       },
@@ -583,6 +583,11 @@ test('declare and set', () => {
     options: [ 'transaction isolation level' ],
     value: 'read committed'
   })
+  expect(parseStatement('SET IDENTITY_INSERT archive.events ON')).toEqual({
+    kind: 'setIdentityInsert',
+    table: [ 'archive', 'events' ],
+    enabled: true
+  })
 })
 
 test('cursor lifecycle and fetch orientations parse', () => {
@@ -632,7 +637,7 @@ test('table variable declarations and DML references', () => {
       kind: 'table',
       name: '@items',
       columns: [
-        { name: 'id', identity: { seed: 1, increment: 1 }, primaryKey: true },
+        { name: 'id', identity: { seed: '1', increment: '1' }, primaryKey: true },
         { name: 'name', type: { name: 'nvarchar', args: [ 50 ] }, nullable: false },
         { name: 'qty', default_: { kind: 'number', value: '1' } }
       ],

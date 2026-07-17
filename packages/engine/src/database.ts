@@ -6,6 +6,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { MssqlError } from './error.ts'
 import { registerFunctions } from './udf.ts'
 import { loadSequences } from './sequence.ts'
+import { loadIdentities } from './identity.ts'
 import {
   hydrateDatabaseState,
   syncSession,
@@ -63,6 +64,7 @@ const openState =
       functions: new Map(),
       triggers: new Map(),
       sequences: loadSequences(db),
+      identities: loadIdentities(db),
       rowversion: {
         current: BigInt(Catalog.rowversionValue(db)),
         dirty: false

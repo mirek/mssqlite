@@ -1,4 +1,5 @@
 import * as Catalog from '@mssqlite/catalog'
+import * as Identity from './identity.ts'
 import { Collation, DataType, TypeInfo } from '@mssqlite/tds'
 import { MssqlError } from './error.ts'
 import { sequenceKey } from './sequence.ts'
@@ -795,6 +796,7 @@ const spRename =
     try {
       const result = Catalog.rename(session.db, oldName, newName, kind)
       updateRenamedRegistry(session, result)
+      Identity.reloadIdentities(session.databaseState)
     } catch (error) {
       throw new MssqlError(error instanceof Error ? error.message : String(error), 15248, 16)
     }

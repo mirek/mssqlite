@@ -259,9 +259,10 @@ AT TIME ZONE, ALTER TABLE ALTER COLUMN.
 ### Compatibility audit findings
 
 The live TDS audit at commit `bcad53b` found additional semantic gaps now
-tracked in [`TODO.md`](../../../TODO.md): IDENTITY allocation ignores custom
-seed/increment and reuses rolled-back values, unique
-keys permit repeated NULLs, and SELECT INTO loses expression types. It also
+tracked in [`todo/`](../../../todo): unique keys permit repeated NULLs, and
+SELECT INTO loses expression types. IDENTITY allocation findings from that
+audit are implemented with database-owned counters, custom signed definitions,
+rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
 confirmed missing VALUES-derived tables, general APPLY lowering, strict
 OPENJSON paths, and SQL Server's MERGE validation rules. Treat the individual
 `todo/*.md` briefs as the executable scope and ground-truth checklist.

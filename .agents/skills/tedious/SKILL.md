@@ -171,6 +171,10 @@ connection.execSql(request)
   through ordinary `execSql`, asserting `columnMetadata` as well as values.
   Open a second tedious connection to prove session rows are server-wide; the
   querying connection should see its own request 0 as `running`/`SELECT`.
+- IDENTITY e2e tests should use a non-1 seed/increment, assert generated values
+  plus `@@IDENTITY` / `SCOPE_IDENTITY()` / `IDENT_CURRENT`, and verify explicit
+  input fails with tedious error number 544. Open a second connection when
+  checking session-local IDENTITY_INSERT behavior.
 - tedious parameter types worth covering: `TYPES.Int`, `TYPES.BigInt`
   (arrives as string), `TYPES.NVarChar` (PLP when long), `TYPES.Bit`,
   `TYPES.Float`, `TYPES.DateTime` / `TYPES.DateTime2`,
