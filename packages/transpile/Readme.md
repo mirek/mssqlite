@@ -110,6 +110,10 @@ rendered statement reports the variables it binds.
   empty arrays, and wrapper removal. JSON_QUERY and nested FOR JSON values
   are tagged with `json()` to avoid double encoding. AUTO joins beyond one
   root/child level are explicitly deferred.
+- **Scalar JSON** — ISJSON, JSON_VALUE and JSON_QUERY render engine UDFs rather
+  than JSON1 extraction. JSON_VALUE/JSON_QUERY carry `nvarchar(4000)` hints so
+  scalar, fragment and NULL results retain SQL Server wire metadata; the engine
+  owns strict/lax validation and source-slice preservation.
 - **Collation** — char/text columns get `COLLATE NOCASE`, approximating the
   default `SQL_Latin1_General_CP1_CI_AS` case-insensitive comparisons.
 - **`+`** — resolved by static type inference: numeric `+`, textual `||`,

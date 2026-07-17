@@ -264,6 +264,11 @@ test('function mappings', () => {
   expect(scalarOf('DATEDIFF(dd, a, b)')).toBe('mssqlite_datediff(\'day\', "a", "b")')
   expect(scalarOf('YEAR(d)')).toBe('CAST(strftime(\'%Y\', "d") AS INTEGER)')
   expect(scalarOf('EOMONTH(d)')).toBe('date("d", \'start of month\', \'+1 month\', \'-1 day\')')
+  expect(scalarOf('ISJSON(x)')).toBe('mssqlite_isjson("x")')
+  expect(scalarOf('JSON_VALUE(x, \'$.a\')'))
+    .toBe('mssqlite_json_value("x", \'$.a\')')
+  expect(scalarOf('JSON_QUERY(x, \'$.a\')'))
+    .toBe('mssqlite_json_query("x", \'$.a\')')
   expect(scalarOf('STRING_AGG(x, \',\')')).toBe('group_concat("x", \',\')')
   expect(scalarOf('CEILING(x)')).toBe('ceiling("x")')
   expect(scalarOf('SQUARE(x)')).toBe('power("x", 2)')
@@ -280,6 +285,12 @@ test('function mappings', () => {
     .toBe('mssqlite_avg(mssqlite_cast_integer("x", \'int\', 0, 0, \'\')) OVER (ORDER BY "x")')
   expect(statement(parseStatement('SELECT COUNT_BIG(*) AS value')).columns)
     .toEqual([ { name: 'value', type: { name: 'bigint', args: [] }, nullable: false } ])
+  expect(statement(parseStatement(`
+    SELECT JSON_VALUE('{}', '$.a') AS value, JSON_QUERY('{}') AS fragment
+  `)).columns).toEqual([
+    { name: 'value', type: { name: 'nvarchar', args: [ 4000 ] }, nullable: true },
+    { name: 'fragment', type: { name: 'nvarchar', args: [ 4000 ] }, nullable: true }
+  ])
 })
 
 test('window functions', () => {

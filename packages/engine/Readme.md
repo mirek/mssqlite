@@ -75,6 +75,12 @@ const items = executeBatch(s, `
 - **FOR JSON PATH / AUTO** — rendered queries return one SQL Server-named
   `nvarchar(max)` column. PATH supports dotted nesting and nested JSON
   subqueries; AUTO supports a single source or one root/child join level.
+- **Scalar JSON** — a recursive source-spanned parser backs one-argument
+  ISJSON, JSON_VALUE and JSON_QUERY. Scalar values remain nvarchar lexical
+  text, strings decode escapes, object/array scalar requests become NULL in
+  lax mode, and JSON_QUERY preserves the selected fragment's whitespace.
+  Strict/malformed/oversize failures retain SQL Server JSON error numbers and
+  both extraction functions expose `nvarchar(4000)` metadata.
 - **IF/ELSE, WHILE, BEGIN…END, BREAK, CONTINUE, RETURN** — interpreted with
   proper signal propagation. Cooperative execution checks cancellation before
   statements and on every loop iteration, so unbounded interpreted loops do

@@ -134,6 +134,12 @@ export const typeOf =
         if (name === 'datetimefromparts') {
           return { name: 'datetime', args: [] }
         }
+        if (name === 'json_value' || name === 'json_query') {
+          return { name: 'nvarchar', args: [ 4000 ] }
+        }
+        if (name === 'isjson') {
+          return { name: 'int', args: [] }
+        }
         if (name === 'count') {
           return { name: 'int', args: [] }
         }

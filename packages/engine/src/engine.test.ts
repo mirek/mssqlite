@@ -2276,6 +2276,51 @@ test('for json returns one nvarchar max value with nested path objects', () => {
   })
 })
 
+test('JSON scalar functions preserve SQL Server values, paths and metadata', () => {
+  const s = open()
+  const values = rowsOf(executeBatch(s, `
+    SELECT
+      ISJSON(NULL) AS null_json,
+      ISJSON('42') AS number_json,
+      ISJSON('true') AS boolean_json,
+      ISJSON('[]') AS array_json,
+      ISJSON('{}') AS object_json,
+      JSON_VALUE(N'{"n":1.20e+2,"b":true,"s":"a\\u0062","o":{},"a":[1,2]}', '$.n') AS number_value,
+      JSON_VALUE(N'{"n":1.20e+2,"b":true,"s":"a\\u0062","o":{},"a":[1,2]}', '$.b') AS boolean_value,
+      JSON_VALUE(N'{"n":1.20e+2,"b":true,"s":"a\\u0062","o":{},"a":[1,2]}', '$.s') AS string_value,
+      JSON_VALUE(N'{"n":1.20e+2,"b":true,"s":"a\\u0062","o":{},"a":[1,2]}', '$.o') AS object_value,
+      JSON_VALUE(N'{"n":1.20e+2,"b":true,"s":"a\\u0062","o":{},"a":[1,2]}', '$.a[1]') AS array_value,
+      JSON_QUERY(N'{"a": { "b": 1 }}', '$.a') AS query_value
+  `))
+  expect(values.rows).toEqual([ [
+    null, 0, 0, 1, 1, '1.20e+2', 'true', 'ab', null, '2', '{ "b": 1 }'
+  ] ])
+  expect(values.columns.slice(5).map(column => [ column.typeInfo.type, column.typeInfo.maxLength ]))
+    .toEqual(Array.from({ length: 6 }, () => [ DataType.DataType.nvarchar, 8000 ]))
+
+  expect(rowsOf(executeBatch(s, `
+    SELECT JSON_VALUE(
+      N'{"value":"' + REPLICATE(N'x', 4001) + N'"}', '$.value') AS value
+  `)).rows).toEqual([ [ null ] ])
+  expect(() => executeBatch(s, `
+    SELECT JSON_VALUE(N'{"value":"' + REPLICATE(N'x', 4001) + N'"}', 'strict $.value')
+  `)).toThrowError(expect.objectContaining({ number: 13625, state: 1 }) as Error)
+  expect(() => executeBatch(s, 'SELECT JSON_VALUE(N\'{bad}\', \'$.a\')'))
+    .toThrowError(expect.objectContaining({ number: 13609, state: 1 }) as Error)
+  expect(() => executeBatch(s, 'SELECT JSON_VALUE(N\'{"a":{}}\', \'strict $.a\')'))
+    .toThrowError(expect.objectContaining({ number: 13623, state: 2 }) as Error)
+  expect(() => executeBatch(s, 'SELECT JSON_QUERY(N\'{"a":1}\', \'strict $.a\')'))
+    .toThrowError(expect.objectContaining({ number: 13624, state: 2 }) as Error)
+  expect(rowsOf(executeBatch(s, `
+    BEGIN TRY
+      SELECT JSON_VALUE(N'{"a":1}', 'strict $.missing')
+    END TRY
+    BEGIN CATCH
+      SELECT ERROR_NUMBER() AS number
+    END CATCH
+  `)).rows).toEqual([ [ 13608 ] ])
+})
+
 test('newid produces guids, rand in range', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT NEWID() AS g, RAND() AS r'))
