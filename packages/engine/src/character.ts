@@ -64,7 +64,7 @@ const decoded =
 
 const converted =
   (family_: Family, value: Exclude<Value, null>, maximum: number): string => {
-    const bytes = encoded(family_, text(value))
+    const bytes = value instanceof Uint8Array ? value : encoded(family_, text(value))
     const unicode = family_.startsWith('n')
     const limit = maximum < 0 ? bytes.byteLength : maximum * (unicode ? 2 : 1)
     const result = decoded(family_, bytes.slice(0, limit))
@@ -95,7 +95,7 @@ export const store =
       return value
     }
     const maximum = width(type, 1)
-    const bytes = encoded(family_, text(value))
+    const bytes = value instanceof Uint8Array ? value : encoded(family_, text(value))
     const maximumBytes = maximum * (family_.startsWith('n') ? 2 : 1)
     if (maximum >= 0 && bytes.byteLength > maximumBytes) {
       throw new MssqlError(

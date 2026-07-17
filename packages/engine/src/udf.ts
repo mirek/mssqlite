@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dateadd, datediff, datename, datepart, eomonth } from './date-functions.ts'
 import * as Character from './character.ts'
+import * as Implicit from './implicit.ts'
 import * as DecimalExact from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
 import { nextSequenceValue } from './sequence.ts'
@@ -238,41 +239,10 @@ const serverProperties =
     isxtpsupported: 0
   })
 
-const integerBounds: Record<string, readonly [ bigint, bigint ]> = {
-  tinyint: [ 0n, 255n ],
-  smallint: [ -32768n, 32767n ],
-  int: [ -2147483648n, 2147483647n ],
-  integer: [ -2147483648n, 2147483647n ],
-  bigint: [ -9223372036854775808n, 9223372036854775807n ]
-}
-
 const castInteger =
   (value: Argument, type: Argument, try_: Argument): Argument => {
-    if (value === null) {
-      return null
-    }
     try {
-      let integer: bigint
-      if (typeof value === 'bigint') {
-        integer = value
-      } else if (typeof value === 'number' && Number.isFinite(value)) {
-        integer = BigInt(Math.trunc(value))
-      } else if (typeof value === 'string' && /^[+-]?\d+$/.test(value.trim())) {
-        integer = BigInt(value.trim())
-      } else {
-        throw new MssqlError(
-          `Conversion failed when converting the value '${String(value)}' to data type ${text(type)}.`,
-          245, 16, 1, { statementTerminating: true })
-      }
-      const [ minimum, maximum ] = integerBounds[text(type).toLowerCase()] ?? integerBounds['bigint'] as
-        readonly [ bigint, bigint ]
-      if (integer < minimum || integer > maximum) {
-        throw new MssqlError('Arithmetic overflow error converting expression to data type int.',
-          8115, 16, 1, { statementTerminating: true })
-      }
-      return integer >= Number.MIN_SAFE_INTEGER && integer <= Number.MAX_SAFE_INTEGER ?
-        Number(integer) :
-        integer
+      return Implicit.integer(value, text(type).toLowerCase()) as Argument
     } catch (error) {
       if (Number(try_) !== 0) {
         return null
@@ -514,6 +484,19 @@ export const registerFunctions =
         value,
         { name: text(name), args: [ Number(width) < 0 ? 'max' : Number(width) ] },
         text(column)) as Argument)
+    define('mssqlite_implicit_bit', value => Implicit.bit(value) as Argument)
+    define('mssqlite_implicit_real', (value, target) =>
+      Implicit.real(value, text(target)) as Argument)
+    define('mssqlite_implicit_temporal', (value, target) =>
+      Implicit.temporal(value, text(target)) as Argument)
+    define('mssqlite_implicit_guid', value => Implicit.guid(value) as Argument)
+    define('mssqlite_implicit_binary_integer', (value, target) =>
+      Implicit.binaryInteger(value, text(target)) as Argument)
+    define('mssqlite_implicit_binary_concat', (left, right) =>
+      Implicit.binaryConcat(left, right) as Argument)
+    define('mssqlite_implicit_error', (number, message) => {
+      throw new MssqlError(text(message), Number(number), 16, 1, { statementTerminating: true })
+    }, { deterministic: false })
     define('mssqlite_string_split', (value, separator) => {
       if (value === null || separator === null || value === '') {
         return '[]'

@@ -81,6 +81,12 @@ The language pipeline lives in three packages:
   fixed-scale strings with scaled-BigInt casts and arithmetic, SQL Server
   operator precision/scale formulas (including the precision-38 reduction
   rules), half-away-from-zero rounding, and 8115/8134 errors.
+- Mixed known types use the SQL Server precedence table before evaluation.
+  Arithmetic, comparisons, BETWEEN, IN, simple and result CASE, set operations,
+  multi-row VALUES, and DML/MERGE target assignments share that coercion path.
+  Declared columns, variables, procedure parameters, and RPC TYPE_INFO all
+  participate; invalid conversions preserve 245/241/8114/8169/8115 and
+  incompatible pairs raise 206/402 instead of inheriting SQLite affinity.
 - String boundary functions use dedicated UDFs where SQLite differs:
   SUBSTRING starts before one by shortening the returned prefix, negative
   LEFT/RIGHT/SUBSTRING lengths raise 536, negative REPLICATE/SPACE counts
@@ -253,9 +259,8 @@ AT TIME ZONE, ALTER TABLE ALTER COLUMN.
 ### Compatibility audit findings
 
 The live TDS audit at commit `bcad53b` found additional semantic gaps now
-tracked in [`TODO.md`](../../../TODO.md): mixed-type comparisons do not
-consistently apply T-SQL precedence, IDENTITY
-allocation ignores custom seed/increment and reuses rolled-back values, unique
+tracked in [`TODO.md`](../../../TODO.md): IDENTITY allocation ignores custom
+seed/increment and reuses rolled-back values, unique
 keys permit repeated NULLs, and SELECT INTO loses expression types. It also
 confirmed missing VALUES-derived tables, general APPLY lowering, strict
 OPENJSON paths, and SQL Server's MERGE validation rules. Treat the individual

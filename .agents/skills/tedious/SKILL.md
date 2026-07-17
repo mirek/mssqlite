@@ -62,6 +62,12 @@ ground truth. Use `System.Data.SqlClient` (or `Microsoft.Data.SqlClient`) with
 The repository's `server/mars.test.ts` independently drives exact PRELOGIN,
 SMP, and TDS bytes so automated tests do not depend on a .NET installation.
 
+RPC parameter TYPE_INFO is semantically significant, not only a decoder hint:
+the server maps it to the scoped variable's T-SQL declaration so mixed-type
+predicates and assignments use SQL Server precedence. E2E tests should include
+a typed character parameter compared with a numeric expression and assert both
+the successful result and error 245 for invalid numeric text.
+
 ## Request API and events
 
 ```ts

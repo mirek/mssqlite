@@ -144,7 +144,7 @@ test('opaque special types reject representation loss and unsupported operators'
     .toThrow(/native binary serialization/)
   executeBatch(s, 'INSERT INTO opaque_errors VALUES (N\'<x/>\', 0x01)')
   expect(() => executeBatch(s, 'SELECT * FROM opaque_errors WHERE x = x'))
-    .toThrow(/not supported for xml values/)
+    .toThrowError(expect.objectContaining({ number: 402 }) as Error)
   expect(() => executeBatch(s, 'SELECT * FROM opaque_errors WHERE g = g'))
     .toThrow(/not supported for udt values/)
 })
@@ -857,6 +857,201 @@ test('conversion failures continue while TRY_CAST returns NULL', () => {
   })
   const rows = failure?.items.filter((item): item is Rows => item.kind === 'rows') ?? []
   expect(rows.map(item => item.rows)).toEqual([ [ [ 7 ] ], [ [ null ] ] ])
+})
+
+test('implicit conversion applies type precedence across expression contexts', () => {
+  // Values, errors and result shapes below were checked against SQL Server 2025
+  // 17.0.4065.4 (RTM-CU7) before being recorded as compatibility vectors.
+  const s = open()
+  const projected = rowsOf(executeBatch(s, `
+    SELECT
+      '1' + 2 AS arithmetic_value,
+      CASE WHEN 1 = '1' THEN 1 ELSE 0 END AS comparison_value,
+      CASE CAST(1 AS int) WHEN CAST('1' AS varchar(1)) THEN 7 ELSE 0 END AS case_value,
+      IIF(CAST(2 AS int) IN (CAST('1' AS varchar(1)), CAST('2' AS varchar(1))), 1, 0) AS in_value,
+      IIF(CAST(2 AS int) BETWEEN CAST('1' AS varchar(1)) AND CAST('3' AS varchar(1)), 1, 0) AS between_value
+  `))
+  expect(projected.rows).toEqual([ [ 3, 1, 7, 1, 1 ] ])
+  expect(projected.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.intN,
+    maxLength: 4
+  })
+
+  const matrix = rowsOf(executeBatch(s, `
+    SELECT
+      IIF(CAST(1 AS int) = CAST('1' AS varchar(1)), 1, 0),
+      IIF(CAST('1' AS varchar(1)) = CAST(1 AS int), 1, 0),
+      IIF(CAST(1 AS bit) = CAST('1' AS varchar(1)), 1, 0),
+      IIF(CAST('1' AS varchar(1)) = CAST(1 AS bit), 1, 0),
+      IIF(CAST(0x31 AS varbinary(1)) = CAST('1' AS varchar(1)), 1, 0),
+      IIF(CAST('1' AS varchar(1)) = CAST(0x31 AS varbinary(1)), 1, 0),
+      IIF(CAST(0x00000001 AS varbinary(4)) = CAST(1 AS int), 1, 0),
+      IIF(CAST(1 AS int) = CAST(0x00000001 AS varbinary(4)), 1, 0),
+      IIF(CAST('2026-07-17' AS date) = CAST('2026-07-17' AS varchar(10)), 1, 0),
+      IIF(CAST('2026-07-17' AS varchar(10)) = CAST('2026-07-17' AS date), 1, 0),
+      IIF(CAST('12:34:56' AS time) = CAST('12:34:56' AS varchar(8)), 1, 0),
+      IIF(CAST('12:34:56' AS varchar(8)) = CAST('12:34:56' AS time), 1, 0),
+      IIF(CAST('2026-07-17' AS date) = CAST('2026-07-17 00:00:00' AS datetime), 1, 0),
+      IIF(CAST('2026-07-17 00:00:00' AS datetime) = CAST('2026-07-17' AS date), 1, 0),
+      IIF(CAST('00112233-4455-6677-8899-aabbccddeeff' AS uniqueidentifier) =
+        CAST('00112233-4455-6677-8899-aabbccddeeff' AS varchar(36)), 1, 0),
+      IIF(CAST('00112233-4455-6677-8899-aabbccddeeff' AS varchar(36)) =
+        CAST('00112233-4455-6677-8899-aabbccddeeff' AS uniqueidentifier), 1, 0),
+      IIF(CAST(NULL AS varchar(1)) = CAST(1 AS int), 1, 0),
+      IIF(CAST(1 AS int) = CAST(NULL AS varchar(1)), 1, 0)
+  `))
+  expect(matrix.rows).toEqual([ [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 ] ])
+
+  const numeric = rowsOf(executeBatch(s, `
+    SELECT
+      CAST(1.5 AS decimal(4,1)) + CAST('2.5' AS varchar(3)) AS decimal_value,
+      CAST(1.5 AS float) + CAST('2.5' AS varchar(3)) AS float_value
+  `))
+  expect(numeric.rows).toEqual([ [ '4.0', 4 ] ])
+  expect(numeric.columns).toMatchObject([
+    { typeInfo: { type: DataType.DataType.decimalN, precision: 5, scale: 1 } },
+    { typeInfo: { type: DataType.DataType.floatN, maxLength: 8 } }
+  ])
+
+  expect(rowsOf(executeBatch(s, 'SELECT CAST(0x3180 AS varchar(2))')).rows)
+    .toEqual([ [ '1€' ] ])
+  const binary = rowsOf(executeBatch(s, `
+    SELECT CAST(0x01 AS varbinary(1)) + CAST(0x02 AS varbinary(1)) AS value
+  `))
+  expect(binary.rows).toEqual([ [ Uint8Array.from([ 1, 2 ]) ] ])
+  expect(binary.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.bigVarbinary,
+    maxLength: 2
+  })
+  const set = rowsOf(executeBatch(s, `
+    SELECT CAST(1 AS int) AS value
+    UNION ALL
+    SELECT CAST('2' AS varchar(1))
+  `))
+  expect(set.rows).toEqual([ [ 1 ], [ 2 ] ])
+  expect(set.columns[0]?.typeInfo).toMatchObject({
+    type: DataType.DataType.intN,
+    maxLength: 4
+  })
+  expect(() => executeBatch(s, `
+    SELECT CAST(1 AS int)
+    UNION ALL
+    SELECT CAST('x' AS varchar(1))
+  `)).toThrowError(expect.objectContaining({ number: 245 }) as Error)
+
+  executeBatch(s, `
+    CREATE TABLE implicit_numbers (
+      id int PRIMARY KEY,
+      number int CHECK (number > '0'),
+      text_value varchar(3)
+    )
+    INSERT INTO implicit_numbers VALUES (1, 1, '1'), (2, 2, '2')
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT a.id
+    FROM implicit_numbers a
+    JOIN implicit_numbers b ON a.number = b.text_value
+    WHERE a.number = '2'
+  `)).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeBatch(s, `
+    SELECT CASE WHEN 2 IN (SELECT text_value FROM implicit_numbers) THEN 1 ELSE 0 END
+  `)).rows).toEqual([ [ 1 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE implicit_assignments (
+      integer_value int,
+      bit_value bit,
+      float_value float,
+      date_value date,
+      guid_value uniqueidentifier
+    )
+    INSERT INTO implicit_assignments VALUES (
+      '2', '1', '2.5', '2026-07-17', '00112233-4455-6677-8899-aabbccddeeff'
+    )
+  `)
+  expect(rowsOf(executeBatch(s, `
+    SELECT integer_value, bit_value, float_value, date_value, guid_value
+    FROM implicit_assignments
+  `)).rows).toEqual([ [
+    2, 1, 2.5, '2026-07-17', '00112233-4455-6677-8899-AABBCCDDEEFF'
+  ] ])
+  expect(() => executeBatch(s, 'INSERT INTO implicit_assignments (integer_value) VALUES (\'x\')'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  executeBatch(s, 'CREATE TABLE implicit_constructor (value varchar(10))')
+  expect(() => executeBatch(s, 'INSERT INTO implicit_constructor VALUES (1), (\'x\')'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) FROM implicit_constructor')).rows)
+    .toEqual([ [ 0 ] ])
+  executeBatch(s, 'CREATE TABLE implicit_date_constructor (value varchar(10))')
+  expect(() => executeBatch(s, `
+    INSERT INTO implicit_date_constructor VALUES
+      (CAST('2026-07-17' AS date)), (CAST('x' AS varchar(1)))
+  `)).toThrowError(expect.objectContaining({ number: 241 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT COUNT(*) FROM implicit_date_constructor')).rows)
+    .toEqual([ [ 0 ] ])
+
+  executeBatch(s, `
+    CREATE TABLE implicit_merge_source (id varchar(3), value varchar(3))
+    INSERT INTO implicit_merge_source VALUES ('2', '3')
+    MERGE implicit_numbers AS target
+    USING implicit_merge_source AS source ON target.id = source.id
+    WHEN MATCHED AND target.number = '2' THEN
+      UPDATE SET number = source.value;
+  `)
+  expect(rowsOf(executeBatch(s, 'SELECT number FROM implicit_numbers WHERE id = 2')).rows)
+    .toEqual([ [ 3 ] ])
+  executeBatch(s, 'UPDATE implicit_merge_source SET value = \'x\'')
+  expect(() => executeBatch(s, `
+    MERGE implicit_numbers AS target
+    USING implicit_merge_source AS source ON target.id = source.id
+    WHEN MATCHED THEN UPDATE SET number = source.value;
+  `)).toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  expect(rowsOf(executeBatch(s, 'SELECT number FROM implicit_numbers WHERE id = 2')).rows)
+    .toEqual([ [ 3 ] ])
+
+  executeBatch(s, `
+    CREATE PROCEDURE implicit_parameter @value varchar(3)
+    AS SELECT CASE WHEN @value = 2 THEN 1 ELSE 0 END AS matched
+  `)
+  expect(rowsOf(executeBatch(s, 'EXEC implicit_parameter \'2\'')).rows).toEqual([ [ 1 ] ])
+
+  executeBatch(s, `
+    CREATE PROCEDURE implicit_integer_parameter @value int
+    AS SELECT @value AS value
+  `)
+  expect(rowsOf(executeBatch(s, 'EXEC implicit_integer_parameter \'2\'')).rows).toEqual([ [ 2 ] ])
+  expect(rowsOf(executeSql(s, 'SELECT CASE WHEN @value = 2 THEN 1 ELSE 0 END', [ {
+    name: '@value', value: '2', type: { name: 'varchar', args: [ 3 ] }
+  } ]).items).rows).toEqual([ [ 1 ] ])
+
+  expect(() => executeBatch(s, 'SELECT CASE WHEN 1 = \'x\' THEN 1 ELSE 0 END'))
+    .toThrowError(expect.objectContaining({ number: 245 }) as Error)
+  for (const [ sql, number ] of [
+    [ 'SELECT IIF(CAST(1 AS bit) = CAST(\'x\' AS varchar(1)), 1, 0)', 245 ],
+    [ 'SELECT IIF(CAST(1 AS float) = CAST(\'x\' AS varchar(1)), 1, 0)', 8114 ],
+    [ 'SELECT IIF(CAST(\'2026-07-17\' AS date) = CAST(\'x\' AS varchar(1)), 1, 0)', 241 ],
+    [ `SELECT IIF(
+        CAST('00112233-4455-6677-8899-aabbccddeeff' AS uniqueidentifier) =
+        CAST('x' AS varchar(1)), 1, 0)`, 8169 ],
+    [ 'SELECT IIF(CAST(\'1900-01-02\' AS date) = CAST(1 AS int), 1, 0)', 206 ],
+    [ `SELECT IIF(CAST('12:34:56' AS time) =
+        CAST('1900-01-01 12:34:56' AS datetime), 1, 0)`, 402 ],
+    [ `SELECT IIF(CAST('1900-01-01 12:34:56' AS datetime) =
+        CAST('12:34:56' AS time), 1, 0)`, 402 ],
+    [ 'SELECT IIF(CAST(\'<x/>\' AS xml) = CAST(\'<x/>\' AS varchar(4)), 1, 0)', 402 ],
+    [ 'SELECT IIF(CAST(\'<x/>\' AS varchar(4)) = CAST(\'<x/>\' AS xml), 1, 0)', 402 ],
+    [ 'SELECT CAST(\'3\' AS varchar(1)) - CAST(\'2\' AS varchar(1))', 402 ],
+    [ 'SELECT CAST(1 AS bit) + CAST(1 AS bit)', 402 ],
+    [ 'SELECT CASE WHEN 1 = 0 THEN CAST(7 AS int) ELSE CAST(\'x\' AS varchar(1)) END', 245 ],
+    [ 'SELECT CAST(1 AS float) UNION ALL SELECT CAST(\'x\' AS varchar(1))', 8114 ],
+    [ `SELECT CAST('2026-07-17' AS date)
+        UNION ALL SELECT CAST('x' AS varchar(1))`, 241 ],
+    [ `SELECT CAST('00112233-4455-6677-8899-aabbccddeeff' AS uniqueidentifier)
+        UNION ALL SELECT CAST('x' AS varchar(1))`, 8169 ]
+  ] as const) {
+    expect(() => executeBatch(s, sql))
+      .toThrowError(expect.objectContaining({ number }) as Error)
+  }
 })
 
 test('divide by zero is catchable, continues, and evaluates operands once', () => {

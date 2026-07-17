@@ -106,6 +106,12 @@ const items = executeBatch(s, `
   int/bigint overflow. SUM checks int width, or bigint width when its argument
   is explicitly cast. With both ARITHABORT and ANSI_WARNINGS OFF failures return
   NULL; otherwise they follow TRY/CATCH, continuation, and XACT_ABORT rules.
+- **Implicit conversion** — declared column, variable, procedure, and RPC
+  parameter types participate in T-SQL precedence. The same strict conversion
+  path is applied to predicates, CASE/IN/BETWEEN, set operations, VALUES, and
+  INSERT/UPDATE/MERGE assignments; conversion failures retain 245/241/8114/
+  8169/8115 and incompatible operands raise 206/402 before SQLite affinity can
+  change the comparison.
 - **DDL** — executes the transpiled SQLite and updates the catalog in the
   same step. TRUNCATE resets `sqlite_sequence` (identity restarts).
 - **Databases** — CREATE/DROP DATABASE owns an independent in-memory store or

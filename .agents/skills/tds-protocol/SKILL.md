@@ -81,6 +81,10 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
   bit table, clients don't validate these strictly.
 - tedious addresses `sp_executesql` by **name**, not ProcID — servers
   must accept both `NameLenProcID` forms.
+- RPC parameter TYPE_INFO must survive decoding as the engine variable's
+  declared T-SQL type. Using only the decoded JS value loses data-type
+  precedence (for example VarChar `'2'` compared with Int `2`) and can silently
+  inherit SQLite's mixed-storage-class comparison.
 - Clients tolerate a missing FEATUREEXTACK even when Login7 carried
   FeatureExt options.
 - money is genuinely split high-int32-then-low-uint32 — not a plain

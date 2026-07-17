@@ -94,3 +94,7 @@ Character coercion callbacks return TEXT after Windows-1252 or UTF-16LE
 length enforcement. Storage callbacks throw `MssqlError` 2628 synchronously;
 node:sqlite propagates it to the engine's statement rollback and TRY/CATCH
 path rather than converting it into a SQLite constraint error.
+Implicit integer, bit, float, temporal, GUID, and binary callbacks likewise
+run before SQLite affinity or storage-class comparison. Their synchronous
+`MssqlError` values preserve SQL Server conversion/incompatibility numbers and
+participate in the same statement rollback and TRY/CATCH path.

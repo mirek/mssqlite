@@ -194,7 +194,8 @@ test('plus resolves to add, concat or dynamic dispatch', () => {
   // strings but numerically adds a string/number mix, which mssqlite_add does.
   expect(scalarOf('name + \'x\'')).toBe('mssqlite_add("name", \'x\')')
   // A literal number + literal string is numeric addition in T-SQL, not concat.
-  expect(scalarOf('3 + \'5\'')).toBe('mssqlite_add(3, \'5\')')
+  expect(scalarOf('3 + \'5\'')).toBe(
+    'mssqlite_arithmetic(\'+\', 3, mssqlite_cast_integer(\'5\', \'int\', 0), 32)')
   expect(scalarOf('a + b')).toBe('mssqlite_add("a", "b")')
   expect(scalarOf('LEN(a) + 1')).toBe(
     'mssqlite_arithmetic(\'+\', length(rtrim("a")), 1, 32)')

@@ -175,6 +175,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
   that evaluate operands once and raise SQL Server 8134/8115 (or NULL only under
   ARITHABORT OFF + ANSI_WARNINGS OFF). A custom SUM aggregate checks int/bigint
   accumulator widths instead of waiting for SQLite's signed-64-bit overflow.
+- SQLite compares mixed storage classes by its own class ordering and numeric
+  affinity may convert invalid text to zero. mssqlite therefore infers the
+  higher-precedence T-SQL type before rendering predicates, CASE/IN/BETWEEN,
+  compound SELECTs, and VALUES, then calls strict conversion UDFs. Target DML
+  and MERGE assignments use the same category conversions before storage.
 - Current engine deviation from the bootstrap recipe above: single shared
   connection per server with plain `BEGIN` (sync API, single process) —
   revisit WAL + IMMEDIATE if a multi-connection engine lands.

@@ -438,16 +438,94 @@ const onBulkFragment =
     }
   }
 
+const parameterType =
+  (typeInfo: Rpc.Parameter['typeInfo']): Parameter['type'] => {
+    const length = typeInfo.maxLength === 0xffff ? 'max' : typeInfo.maxLength
+    switch (typeInfo.type) {
+      case DataType.DataType.int1:
+        return { name: 'tinyint', args: [] }
+      case DataType.DataType.int2:
+        return { name: 'smallint', args: [] }
+      case DataType.DataType.int4:
+        return { name: 'int', args: [] }
+      case DataType.DataType.int8:
+        return { name: 'bigint', args: [] }
+      case DataType.DataType.intN:
+        return {
+          name: typeInfo.maxLength === 1 ? 'tinyint' : typeInfo.maxLength === 2 ? 'smallint' :
+            typeInfo.maxLength === 8 ? 'bigint' : 'int',
+          args: []
+        }
+      case DataType.DataType.bit:
+      case DataType.DataType.bitN:
+        return { name: 'bit', args: [] }
+      case DataType.DataType.float4:
+        return { name: 'real', args: [] }
+      case DataType.DataType.float8:
+        return { name: 'float', args: [] }
+      case DataType.DataType.floatN:
+        return { name: typeInfo.maxLength === 4 ? 'real' : 'float', args: [] }
+      case DataType.DataType.decimalN:
+      case DataType.DataType.numericN:
+        return { name: 'decimal', args: [ typeInfo.precision ?? 18, typeInfo.scale ?? 0 ] }
+      case DataType.DataType.money4:
+        return { name: 'smallmoney', args: [] }
+      case DataType.DataType.money:
+      case DataType.DataType.moneyN:
+        return { name: typeInfo.maxLength === 4 ? 'smallmoney' : 'money', args: [] }
+      case DataType.DataType.datetime4:
+        return { name: 'smalldatetime', args: [] }
+      case DataType.DataType.datetime:
+      case DataType.DataType.datetimeN:
+        return { name: typeInfo.maxLength === 4 ? 'smalldatetime' : 'datetime', args: [] }
+      case DataType.DataType.dateN:
+        return { name: 'date', args: [] }
+      case DataType.DataType.timeN:
+        return { name: 'time', args: [ typeInfo.scale ?? 7 ] }
+      case DataType.DataType.datetime2N:
+        return { name: 'datetime2', args: [ typeInfo.scale ?? 7 ] }
+      case DataType.DataType.datetimeOffsetN:
+        return { name: 'datetimeoffset', args: [ typeInfo.scale ?? 7 ] }
+      case DataType.DataType.guid:
+        return { name: 'uniqueidentifier', args: [] }
+      case DataType.DataType.bigVarchar:
+        return { name: 'varchar', args: [ length ?? 1 ] }
+      case DataType.DataType.bigChar:
+        return { name: 'char', args: [ length ?? 1 ] }
+      case DataType.DataType.nvarchar:
+        return { name: 'nvarchar', args: [ length === 'max' ? 'max' : (length ?? 2) / 2 ] }
+      case DataType.DataType.nchar:
+        return { name: 'nchar', args: [ length === 'max' ? 'max' : (length ?? 2) / 2 ] }
+      case DataType.DataType.bigVarbinary:
+        return { name: 'varbinary', args: [ length ?? 1 ] }
+      case DataType.DataType.bigBinary:
+        return { name: 'binary', args: [ length ?? 1 ] }
+      case DataType.DataType.text:
+        return { name: 'text', args: [] }
+      case DataType.DataType.ntext:
+        return { name: 'ntext', args: [] }
+      case DataType.DataType.image:
+        return { name: 'image', args: [] }
+      case DataType.DataType.xml:
+        return { name: 'xml', args: [] }
+      case DataType.DataType.sqlVariant:
+        return { name: 'sql_variant', args: [] }
+      default:
+        return undefined
+    }
+  }
+
 const parameterValues =
   (parameters: readonly Rpc.Parameter[]): Parameter[] =>
-    parameters.map((parameter, index) => ({
-      name: parameter.name === '' ? `@p${index + 1}` : parameter.name,
-      value: parameter.value as Value,
-      output: (parameter.status & Rpc.ParameterStatus.byRefValue) !== 0,
-      ...parameter.typeInfo.type === DataType.DataType.datetimeOffsetN ? {
-        type: { name: 'datetimeoffset', args: [ parameter.typeInfo.scale ?? 7 ] }
-      } : {}
-    }))
+    parameters.map((parameter, index) => {
+      const type = parameterType(parameter.typeInfo)
+      return {
+        name: parameter.name === '' ? `@p${index + 1}` : parameter.name,
+        value: parameter.value as Value,
+        output: (parameter.status & Rpc.ParameterStatus.byRefValue) !== 0,
+        ...type === undefined ? {} : { type }
+      }
+    })
 
 const onRpc =
   async (

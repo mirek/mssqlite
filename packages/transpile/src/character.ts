@@ -1,5 +1,6 @@
 import * as Context from './context.ts'
 import * as Collation from './collation.ts'
+import * as Implicit from './implicit.ts'
 import * as Quote from './quote.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
@@ -92,10 +93,13 @@ export const typeOf =
       case 'collate':
         return typeOf(ctx, value.expression)
       case 'binaryOp':
-        return value.operator === '+' ? preferred(
-          [ typeOf(ctx, value.left), typeOf(ctx, value.right) ]
-            .filter((type): type is TypeName.t => type !== undefined)
-        ) : undefined
+        if (value.operator !== '+') {
+          return undefined
+        }
+        {
+          const result = Implicit.typeOf(ctx, value)
+          return result === undefined ? undefined : normalize(result, 1)
+        }
       case 'case': {
         const types = [
           ...value.whens.map(when => typeOf(ctx, when.then)),

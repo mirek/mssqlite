@@ -1,4 +1,5 @@
 import * as Context from './context.ts'
+import * as Implicit from './implicit.ts'
 import type { Ast, TypeName } from '@mssqlite/tsql'
 import type { ColumnHint } from './table-function.ts'
 
@@ -7,7 +8,8 @@ export type DecimalType = {
   readonly scale: number
 }
 
-const declared =
+/** @returns declared decimal shape, including money aliases. */
+export const shapeOf =
   (type: TypeName.t): DecimalType | undefined => {
     switch (type.name) {
       case 'decimal':
@@ -100,18 +102,20 @@ export const numericType =
             { precision: 10, scale: 0 } : { precision: 19, scale: 0 }
       case 'cast':
       case 'convert':
-        return declared(value.type) ?? integer(value.type)
+        return shapeOf(value.type) ?? integer(value.type)
       case 'column': {
         const type = Context.columnType(ctx, value.name)
-        return type === undefined ? undefined : declared(type) ?? integer(type)
+        return type === undefined ? undefined : shapeOf(type) ?? integer(type)
       }
       case 'unary':
         return numericType(ctx, value.operand)
       case 'collate':
         return numericType(ctx, value.expression)
       case 'binaryOp': {
-        const left = numericType(ctx, value.left)
-        const right = numericType(ctx, value.right)
+        const common = Implicit.typeOf(ctx, value)
+        const commonShape = common === undefined ? undefined : shapeOf(common)
+        const left = numericType(ctx, value.left) ?? commonShape
+        const right = numericType(ctx, value.right) ?? commonShape
         if (left === undefined || right === undefined ||
           ![ '+', '-', '*', '/', '%' ].includes(value.operator)) {
           return undefined
@@ -138,14 +142,14 @@ export const numericType =
 export const typeOf =
   (ctx: Context.t, value: Ast.Expression): DecimalType | undefined => {
     if (value.kind === 'cast' || value.kind === 'convert') {
-      return declared(value.type)
+      return shapeOf(value.type)
     }
     if (value.kind === 'number' && (value.value.includes('.') || /e/i.test(value.value))) {
       return literal(value.value)
     }
     if (value.kind === 'column') {
       const type = Context.columnType(ctx, value.name)
-      return type === undefined ? undefined : declared(type)
+      return type === undefined ? undefined : shapeOf(type)
     }
     if (value.kind === 'unary') {
       return typeOf(ctx, value.operand)
@@ -186,7 +190,7 @@ const hintType =
       case 'column':
         return Context.columnType(ctx, value.name)
       default:
-        return undefined
+        return Implicit.typeOf(ctx, value)
     }
   }
 

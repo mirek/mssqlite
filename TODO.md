@@ -6,7 +6,6 @@ work is complete.
 
 ## Semantics and type fidelity
 
-- [Implicit type conversions](todo/implicit-type-conversions.md) — Apply T-SQL precedence consistently to mixed-type operators and predicates.
 - [IDENTITY semantics](todo/identity-semantics.md) — Honor seed/increment, explicit-insert protection, and rollback-independent allocation.
 - [Unique NULL semantics](todo/unique-null-semantics.md) — Treat repeated NULL-containing keys as duplicates in unique constraints and indexes.
 - [SELECT INTO type preservation](todo/select-into-type-preservation.md) — Preserve expression type, width, nullability, and eligible identity properties.

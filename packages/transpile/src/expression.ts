@@ -3,6 +3,7 @@ import * as Collation from './collation.ts'
 import * as Character from './character.ts'
 import * as Decimal from './decimal.ts'
 import * as DateTimeOffset from './datetimeoffset.ts'
+import * as Implicit from './implicit.ts'
 import * as Quote from './quote.ts'
 import * as Type from './type.ts'
 import call, { convertStyle } from './functions.ts'
@@ -24,6 +25,29 @@ const subquery =
     selectRender === undefined ?
       unsupported('Select renderer not wired.') :
       selectRender(ctx, select)
+
+const firstProjectionType =
+  (ctx: Context.t, select: Ast.Select): TypeName.t | undefined =>
+    Context.withSourceTypes(ctx, select.from, () => {
+      const item = select.items[0]
+      return item?.kind === 'expression' ? Implicit.typeOf(ctx, item.expression) : undefined
+    })
+
+const convertedProjection =
+  (ctx: Context.t, select: Ast.Select, target: TypeName.t | undefined): Ast.Select => {
+    const item = select.items[0]
+    const source = firstProjectionType(ctx, select)
+    if (target === undefined || source === undefined || item?.kind !== 'expression') {
+      return select
+    }
+    return {
+      ...select,
+      items: [
+        { ...item, expression: Implicit.coerce(item.expression, source, target) },
+        ...select.items.slice(1)
+      ]
+    }
+  }
 
 const numberSourceType =
   (value: string): TypeName.t => {
@@ -108,6 +132,20 @@ const cast =
     }
   }
 
+const implicitCast =
+  (ctx: Context.t, value: Ast.Expression, target: TypeName.t): string => {
+    const source = Implicit.typeOf(ctx, value)
+    const rendered = expression(ctx, value)
+    if (source === undefined || Implicit.hasType(ctx, value, target)) {
+      return rendered
+    }
+    return expression(ctx, Implicit.coerce(value, source, target))
+  }
+
+const coerced =
+  (ctx: Context.t, value: Ast.Expression, target: TypeName.t | undefined): string =>
+    target === undefined || value.kind === 'null' ? expression(ctx, value) : implicitCast(ctx, value, target)
+
 const opaqueCategory =
   (ctx: Context.t, value: Ast.Expression): Type.Category | undefined => {
     const type = value.kind === 'column' ? Context.columnType(ctx, value.name) :
@@ -120,10 +158,23 @@ const binaryOp =
   (ctx: Context.t, expression_: Ast.Expression & { kind: 'binaryOp' }): string => {
     const opaque = opaqueCategory(ctx, expression_.left) ?? opaqueCategory(ctx, expression_.right)
     if (opaque !== undefined) {
+      if (opaque === 'xml') {
+        const left = Implicit.typeOf(ctx, expression_.left)?.name ?? 'xml'
+        const right = Implicit.typeOf(ctx, expression_.right)?.name ?? 'xml'
+        const message = `The data types ${left} and ${right} are incompatible in the ` +
+          `${expression_.operator === '=' ? 'equal to' : expression_.operator} operator.`
+        return `mssqlite_implicit_error(402, ${Quote.string(message)})`
+      }
       return unsupported(`Operator '${expression_.operator}' is not supported for ${opaque} values.`)
     }
-    const left = expression(ctx, expression_.left)
-    const right = expression(ctx, expression_.right)
+    const common = Implicit.common(ctx, [ expression_.left, expression_.right ])
+    const originalLeftNumeric = Decimal.numericType(ctx, expression_.left)
+    const originalRightNumeric = Decimal.numericType(ctx, expression_.right)
+    const exactPair = originalLeftNumeric !== undefined && originalRightNumeric !== undefined &&
+      (Decimal.typeOf(ctx, expression_.left) !== undefined ||
+        Decimal.typeOf(ctx, expression_.right) !== undefined)
+    const left = exactPair ? expression(ctx, expression_.left) : coerced(ctx, expression_.left, common)
+    const right = exactPair ? expression(ctx, expression_.right) : coerced(ctx, expression_.right, common)
     const leftOffset = DateTimeOffset.scaleOf(ctx, expression_.left)
     const rightOffset = DateTimeOffset.scaleOf(ctx, expression_.right)
     if ((leftOffset !== undefined || rightOffset !== undefined) &&
@@ -135,8 +186,10 @@ const binaryOp =
         expression_.operator
       return `(${DateTimeOffset.key(a)} ${operator} ${DateTimeOffset.key(b)})`
     }
-    const leftCollation = Collation.ofExpression(ctx, expression_.left)
-    const rightCollation = Collation.ofExpression(ctx, expression_.right)
+    const textual = (common !== undefined && [ 'text', 'ntext' ].includes(Type.category(common) ?? '')) ||
+      expression_.left.kind === 'collate' || expression_.right.kind === 'collate'
+    const leftCollation = textual ? Collation.ofExpression(ctx, expression_.left) : undefined
+    const rightCollation = textual ? Collation.ofExpression(ctx, expression_.right) : undefined
     if (leftCollation !== undefined && rightCollation !== undefined &&
       leftCollation !== rightCollation &&
       expression_.left.kind !== 'collate' && expression_.right.kind !== 'collate') {
@@ -152,8 +205,9 @@ const binaryOp =
       return `(${Collation.expressionKey(left, collation)} ${operator} ` +
         `${Collation.expressionKey(right, collation)})`
     }
-    const leftNumeric = Decimal.numericType(ctx, expression_.left)
-    const rightNumeric = Decimal.numericType(ctx, expression_.right)
+    const commonDecimal = common === undefined ? undefined : Decimal.shapeOf(common)
+    const leftNumeric = originalLeftNumeric ?? commonDecimal
+    const rightNumeric = originalRightNumeric ?? commonDecimal
     const decimal = Decimal.typeOf(ctx, expression_.left) !== undefined ||
       Decimal.typeOf(ctx, expression_.right) !== undefined
     if (decimal && leftNumeric !== undefined && rightNumeric !== undefined) {
@@ -171,9 +225,33 @@ const binaryOp =
           `${rightNumeric.scale}) ${operator} 0)`
       }
     }
+    const arithmetic = [ '+', '-', '*', '/', '%' ].includes(expression_.operator)
+    const commonCategory = common === undefined ? undefined : Type.category(common)
+    if (arithmetic && expression_.operator === '+' && commonCategory === 'blob') {
+      return `mssqlite_implicit_binary_concat(${left}, ${right})`
+    }
+    if (arithmetic && commonCategory !== undefined &&
+      ![ 'integer', 'real', 'decimal' ].includes(commonCategory) &&
+      !(expression_.operator === '+' && [ 'text', 'ntext' ].includes(commonCategory))) {
+      const leftType = Implicit.typeOf(ctx, expression_.left)?.name ?? common?.name ?? 'unknown'
+      const rightType = Implicit.typeOf(ctx, expression_.right)?.name ?? common?.name ?? 'unknown'
+      const operator = {
+        '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '%': 'modulo'
+      }[expression_.operator] ?? expression_.operator
+      const message = `The data types ${leftType} and ${rightType} are incompatible in the ${operator} operator.`
+      return `mssqlite_implicit_error(402, ${Quote.string(message)})`
+    }
     const width = Math.max(integerWidth(expression_.left), integerWidth(expression_.right))
     switch (expression_.operator) {
       case '+': {
+        const category = common === undefined ? undefined : Type.category(common)
+        if (category === 'text' || category === 'ntext') {
+          return `(${left} || ${right})`
+        }
+        if ([ 'integer', 'real', 'bit' ].includes(category ?? '')) {
+          const fn = ctx.generated ? 'mssqlite_generated_arithmetic' : 'mssqlite_arithmetic'
+          return `${fn}('+', ${left}, ${right}, ${width})`
+        }
         const leftType = infer(expression_.left)
         const rightType = infer(expression_.right)
         // T-SQL concatenates only when both sides are text; a text/number mix
@@ -335,16 +413,22 @@ export const expression =
       case 'convert':
         return cast(ctx, expression_)
       case 'case': {
+        const resultType = Implicit.common(ctx, [
+          ...expression_.whens.map(when => when.then),
+          ...expression_.else_ === undefined ? [] : [ expression_.else_ ]
+        ])
+        const comparisonType = expression_.operand === undefined ? undefined :
+          Implicit.common(ctx, [ expression_.operand, ...expression_.whens.map(when => when.when) ])
         const operand = expression_.operand === undefined ?
           '' :
-          ` ${expression(ctx, expression_.operand)}`
+          ` ${coerced(ctx, expression_.operand, comparisonType)}`
         const whens = expression_.whens
           .map(({ when, then }) =>
-            `WHEN ${expression(ctx, when)} THEN ${expression(ctx, then)}`)
+            `WHEN ${coerced(ctx, when, comparisonType)} THEN ${coerced(ctx, then, resultType)}`)
           .join(' ')
         const else_ = expression_.else_ === undefined ?
           '' :
-          ` ELSE ${expression(ctx, expression_.else_)}`
+          ` ELSE ${coerced(ctx, expression_.else_, resultType)}`
         return `(CASE${operand} ${whens}${else_} END)`
       }
       case 'in': {
@@ -352,6 +436,12 @@ export const expression =
         if (opaque !== undefined) {
           return unsupported(`Operator 'IN' is not supported for ${opaque} values.`)
         }
+        const leftType = Implicit.typeOf(ctx, expression_.expression)
+        const rightType = Array.isArray(expression_.values) ? undefined :
+          firstProjectionType(ctx, expression_.values as Ast.Select)
+        const common = Array.isArray(expression_.values) ?
+          Implicit.common(ctx, [ expression_.expression, ...expression_.values ]) :
+          Implicit.commonTypes([ leftType, rightType ].filter((type): type is TypeName.t => type !== undefined))
         const offsetScale = DateTimeOffset.scaleOf(ctx, expression_.expression) ??
           (Array.isArray(expression_.values) ? expression_.values
             .map(value => DateTimeOffset.scaleOf(ctx, value))
@@ -366,7 +456,9 @@ export const expression =
           const values = expression_.values.map(offsetKey).join(', ')
           return `(${offsetKey(expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
         }
-        const collation = Collation.ofExpression(ctx, expression_.expression)
+        const collation = common !== undefined &&
+          [ 'text', 'ntext' ].includes(Type.category(common) ?? '') ?
+          Collation.ofExpression(ctx, expression_.expression) : undefined
         if (collation !== undefined && Array.isArray(expression_.values)) {
           const left = Collation.expressionKey(expression(ctx, expression_.expression), collation)
           const values = expression_.values.map(value =>
@@ -374,9 +466,10 @@ export const expression =
           return `(${left} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
         }
         const values = Array.isArray(expression_.values) ?
-          expression_.values.map(value => expression(ctx, value)).join(', ') :
-          subquery(ctx, expression_.values as Ast.Select)
-        return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
+          expression_.values.map(value => coerced(ctx, value, common)).join(', ') :
+          subquery(ctx, convertedProjection(ctx, expression_.values as Ast.Select, common))
+        return `(${coerced(ctx, expression_.expression, common)} ` +
+          `${expression_.negated ? 'NOT IN' : 'IN'} (${values}))`
       }
       case 'like': {
         const opaque = opaqueCategory(ctx, expression_.expression)
@@ -412,8 +505,10 @@ export const expression =
           return `(${offsetKey(expression_.expression)} ${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
             `${offsetKey(expression_.low)} AND ${offsetKey(expression_.high)})`
         }
-        return `(${expression(ctx, expression_.expression)} ${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
-          `${expression(ctx, expression_.low)} AND ${expression(ctx, expression_.high)})`
+        const common = Implicit.common(ctx, [ expression_.expression, expression_.low, expression_.high ])
+        return `(${coerced(ctx, expression_.expression, common)} ` +
+          `${expression_.negated ? 'NOT BETWEEN' : 'BETWEEN'} ` +
+          `${coerced(ctx, expression_.low, common)} AND ${coerced(ctx, expression_.high, common)})`
       }
       case 'isNull':
         return `(${expression(ctx, expression_.expression)} IS ${expression_.negated ? 'NOT ' : ''}NULL)`

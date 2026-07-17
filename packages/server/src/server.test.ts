@@ -781,6 +781,36 @@ test('character widths and fixed families cross the tedious boundary', async () 
   expect(parameter.columns).toMatchObject([ { type: 'VarChar', length: 3 } ])
 })
 
+test('implicit type precedence crosses predicates, RPC parameters and result metadata', async () => {
+  const result = await query(`
+    SELECT
+      '1' + 2 AS arithmetic_value,
+      CASE WHEN 1 = '1' THEN 1 ELSE 0 END AS comparison_value,
+      CAST(1.5 AS decimal(4,1)) + CAST('2.5' AS varchar(3)) AS decimal_value,
+      CAST(1.5 AS float) + CAST('2.5' AS varchar(3)) AS float_value,
+      CAST(0x01 AS varbinary(1)) + CAST(0x02 AS varbinary(1)) AS binary_value
+  `)
+  expect(result.rows).toEqual([ {
+    arithmetic_value: 3,
+    comparison_value: 1,
+    decimal_value: 4,
+    float_value: 4,
+    binary_value: Buffer.from([ 1, 2 ])
+  } ])
+  expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
+    [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'DecimalN', 5 ], [ 'FloatN', 8 ], [ 'VarBinary', 2 ]
+  ])
+
+  const parameter = await query(
+    'SELECT CASE WHEN @value = 2 THEN 1 ELSE 0 END AS matched',
+    [ { name: 'value', type: TYPES.VarChar, value: '2' } ])
+  expect(parameter.rows).toEqual([ { matched: 1 } ])
+  await expect(query(
+    'SELECT CASE WHEN @value = 2 THEN 1 ELSE 0 END AS matched',
+    [ { name: 'value', type: TYPES.VarChar, value: 'x' } ]))
+    .rejects.toMatchObject({ number: 245 })
+})
+
 test('transactions via tedious api', async () => {
   await new Promise<void>((resolve, reject) => {
     connection.beginTransaction(error => error ? reject(error) : resolve())
