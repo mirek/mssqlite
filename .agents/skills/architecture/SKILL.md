@@ -21,7 +21,11 @@ the engine:
 
 ## Request lifecycle
 
-1. **Socket bytes → messages** — `Tds.Message.push` reassembles packets
+1. **Socket bytes → messages** — cleartext PRELOGIN first negotiates
+   encryption. During a TDS 7.4 TLS handshake, `server/tls-transport.ts`
+   bridges Node's `TLSSocket` records through PRELOGIN packet wrappers; after
+   the final wrapped server record drains, both directions switch to raw TLS
+   carrying ordinary TDS packets. `Tds.Message.push` then reassembles packets
    (pure incremental state) into `{ type, payload }` messages.
 2. **Dispatch by packet type** (`server/connection.ts`) — prelogin,
    login7, SQL batch, RPC, transaction manager, attention.
@@ -42,6 +46,12 @@ the engine:
 
 ## Key decisions
 
+- **TLS is full-session or absent** — supplying `listen({ tls: { key, cert } })`
+  requires encryption by default and advertises `ENCRYPT_REQ`; optional mode
+  encrypts TLS-capable clients but accepts explicit `ENCRYPT_NOT_SUP` as
+  plaintext. Omitting TLS is the deliberate local-development mode and
+  advertises `ENCRYPT_NOT_SUP`. Login-only TDS 7.x encryption and TLS-first
+  TDS 8.0 are not implemented.
 - **Name flattening** (`transpile/quote.ts`) — database qualifiers and
   `dbo` drop (`master.dbo.users` → `"users"`); `sys` /
   `INFORMATION_SCHEMA` become flat lowercase names (`"sys.tables"`) that
@@ -277,8 +287,8 @@ the engine:
 See [TODO.md](../../../TODO.md) for the prioritized implementation briefs
 toward broader SQL Server compatibility.
 
-- No TLS — prelogin answers `ENCRYPT_NOT_SUP`; clients must connect with
-  `encrypt: false`. No MARS, no SSPI/FedAuth (any credentials accepted).
+- No login-only TDS 7.x encryption or TLS-first TDS 8.0. No MARS, no
+  SSPI/FedAuth (any credentials accepted).
 - Cursor variables, positioned updates, and live KEYSET/DYNAMIC visibility are
   unsupported. Sequence DECIMAL/NUMERIC precision is capped at 18, cache options
   are metadata-only, same-row duplicate NEXT VALUE references are not coalesced,
@@ -293,8 +303,6 @@ toward broader SQL Server compatibility.
   Server statement-vs-batch cases will be added as their operations land.
   Checked integer width inference for uncast columns currently follows SUM(int) and
   treats scalar columns of unknown declared width conservatively.
-- Duplicate column names in one result set collapse (rows read as
-  objects; `returnArrays` lands in newer node:sqlite).
 - `USE db` switches the session label only — one database per server.
 - DECIMAL/NUMERIC values use canonical fixed-scale strings and SQLite TEXT
   storage. The transpiler derives SQL Server precision/scale, routes casts,

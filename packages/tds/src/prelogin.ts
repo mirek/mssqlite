@@ -21,6 +21,40 @@ export const Encryption = {
   required: 0x03
 } as const
 
+export type ServerEncryption =
+  | 'unsupported'
+  | 'optional'
+  | 'required'
+
+export type Negotiation = {
+  readonly response: number,
+  readonly tls: boolean
+}
+
+const negotiations: Readonly<
+Record<ServerEncryption, Readonly<Partial<Record<number, Negotiation>>>>
+> = {
+  unsupported: {
+    [Encryption.off]: { response: Encryption.notSupported, tls: false },
+    [Encryption.notSupported]: { response: Encryption.notSupported, tls: false }
+  },
+  optional: {
+    [Encryption.off]: { response: Encryption.on, tls: true },
+    [Encryption.on]: { response: Encryption.on, tls: true },
+    [Encryption.notSupported]: { response: Encryption.notSupported, tls: false },
+    [Encryption.required]: { response: Encryption.on, tls: true }
+  },
+  required: {
+    [Encryption.on]: { response: Encryption.required, tls: true },
+    [Encryption.required]: { response: Encryption.required, tls: true }
+  }
+}
+
+/** Resolves the supported full-session subset of the MS-TDS encryption matrix. */
+export const negotiateEncryption =
+  (client: number, server: ServerEncryption): Negotiation | undefined =>
+    negotiations[server][client]
+
 /** Decoded PreLogin message. */
 export type Prelogin = {
   readonly version?: { major: number, minor: number, build: number, subBuild: number },

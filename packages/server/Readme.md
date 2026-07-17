@@ -22,8 +22,8 @@ const server = await listen({ path: 'data.db', port: 1433 })
 await server.close()
 ```
 
-Connect with any TDS 7.4 client — encryption must be disabled (the server
-answers `ENCRYPT_NOT_SUP` in prelogin):
+The command-line entry point deliberately starts a plaintext local-development
+server. Connect with encryption disabled:
 
 ```ts
 import { Connection } from 'tedious'
@@ -35,10 +35,38 @@ const connection = new Connection({
 })
 ```
 
+Embedded servers can require full-session TLS. Supplying TLS configuration is
+secure by default: the server advertises `ENCRYPT_REQ`, requires a TLS-capable
+client, and uses TLS 1.2 or newer.
+
+```ts
+import { readFile } from 'node:fs/promises'
+import { listen } from '@mssqlite/server'
+
+const server = await listen({
+  path: 'data.db',
+  port: 1433,
+  tls: {
+    key: await readFile('server-key.pem'),
+    cert: await readFile('server-cert.pem')
+  }
+})
+```
+
+Modern `tedious` defaults then work unchanged; use
+`trustServerCertificate: true` only for an explicitly trusted self-signed
+development certificate. `tls.mode: 'optional'` permits clients that send
+`ENCRYPT_NOT_SUP` to remain plaintext while encrypting every TLS-capable
+client. Omitting `tls` advertises `ENCRYPT_NOT_SUP` and is the explicit
+plaintext development mode. `requestClientCertificate` and
+`rejectUnauthorized` pass client-certificate policy to Node TLS.
+
 ## Protocol support
 
-- **Handshake** — PRELOGIN (version, encryption NOT_SUP, MARS off),
-  LOGIN7 decode (any credentials accepted), login response with ENVCHANGE
+- **Handshake** — PRELOGIN (version, OFF/ON/NOT_SUP/REQ encryption
+  negotiation, MARS off), TDS 7.4 TLS handshake records wrapped in PRELOGIN
+  packets, then full-session encrypted transport; LOGIN7 decode (any
+  credentials accepted), login response with ENVCHANGE
   database/collation/language/packet size and LOGINACK (TDS 7.4,
   "SQL Server 2019" 15.0.2000).
 - **SQL batch (0x01)** — full T-SQL batches through the engine;

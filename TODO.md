@@ -4,17 +4,8 @@ Open work toward broader SQL Server compatibility. Each linked file is a
 self-contained implementation brief; delete it and its index entry when the
 work is complete.
 
-## Query and DML surface
-
-
-## Semantics and type fidelity
-
-- [Opaque special types](todo/opaque-special-types.md) — Accept and round-trip initially opaque SQL Server special types.
-- [Duplicate result column names](todo/duplicate-result-column-names.md) — Preserve every value when result-set labels collide.
-
 ## Protocol and operational surface
 
-- [TLS](todo/tls.md) — Negotiate TDS encryption and wrap connections in TLS.
 - [System stored procedures](todo/system-stored-procedures.md) — Implement common metadata and administration procedures used by tools.
 - [Catalog coverage](todo/catalog-coverage.md) — Fill high-value `INFORMATION_SCHEMA` and `sys` metadata gaps.
 - [Multiple databases](todo/multiple-databases.md) — Design and implement database-scoped catalogs over SQLite attachments.
