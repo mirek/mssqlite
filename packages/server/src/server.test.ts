@@ -727,6 +727,28 @@ test('arithmetic errors are catchable over tedious', async () => {
   expect(caught.rows).toEqual([ { number: 8115 } ])
 })
 
+test('string function edge cases cross the tedious boundary', async () => {
+  const values = await query(`
+    SELECT
+      SUBSTRING('abcdef', -1, 3) AS substring_value,
+      REPLICATE('x', -1) AS replicate_value,
+      SPACE(-1) AS space_value,
+      QUOTENAME('a"b', '"') AS quoted,
+      QUOTENAME(REPLICATE('x', 129)) AS overlong
+  `)
+  expect(values.rows).toEqual([ {
+    substring_value: 'a',
+    replicate_value: null,
+    space_value: null,
+    quoted: '"a""b"',
+    overlong: null
+  } ])
+  await expect(query('SELECT LEFT(\'abcdef\', -1) AS value'))
+    .rejects.toMatchObject({ number: 536 })
+  await expect(query('SELECT RIGHT(\'abcdef\', -1) AS value'))
+    .rejects.toMatchObject({ number: 536 })
+})
+
 test('transactions via tedious api', async () => {
   await new Promise<void>((resolve, reject) => {
     connection.beginTransaction(error => error ? reject(error) : resolve())

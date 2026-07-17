@@ -1247,6 +1247,51 @@ test('date and string udfs through full pipeline', () => {
   ])
 })
 
+test('string udf edge cases match SQL Server values and errors', () => {
+  const s = open()
+  const values = rowsOf(executeBatch(s, `
+    SELECT
+      SUBSTRING('abcdef', -1, 3) AS substring_value,
+      SUBSTRING('abcdef', 0, 3) AS substring_zero,
+      REPLICATE('x', -1) AS replicate_value,
+      SPACE(-1) AS space_value,
+      QUOTENAME('a"b', '"') AS double_quote,
+      QUOTENAME('a]b', '[') AS left_bracket_quote,
+      QUOTENAME('a]b', ']') AS right_bracket_quote,
+      QUOTENAME('a)b', '(') AS parenthesis_quote,
+      QUOTENAME('a)b', ')') AS right_parenthesis_quote,
+      QUOTENAME('a>b', '<') AS angle_quote,
+      QUOTENAME('a>b', '>') AS right_angle_quote,
+      QUOTENAME('a}b', '{') AS brace_quote,
+      QUOTENAME('a}b', '}') AS right_brace_quote,
+      QUOTENAME('a''b', '''') AS single_quote,
+      QUOTENAME('a\`b', '\`') AS backtick_quote,
+      QUOTENAME('x', '!') AS invalid_quote,
+      QUOTENAME(REPLICATE('x', 129)) AS overlong,
+      SUBSTRING(NULL, 1, 1) AS null_substring,
+      LEFT(NULL, 1) AS null_left,
+      RIGHT(NULL, 1) AS null_right,
+      REPLICATE(NULL, 2) AS null_replicate,
+      SPACE(NULL) AS null_space,
+      QUOTENAME(NULL) AS null_quotename
+  `))
+  expect(values.rows).toEqual([ [
+    'a', 'ab', null, null, '"a""b"', '[a]]b]', '[a]]b]', '(a))b)', '(a))b)',
+    '<a>>b>', '<a>>b>', '{a}}b}', '{a}}b}', '\'a\'\'b\'', '`a``b`', null, null,
+    null, null, null, null, null, null
+  ] ])
+
+  for (const sql of [
+    'SELECT LEFT(\'abcdef\', -1)',
+    'SELECT RIGHT(\'abcdef\', -1)',
+    'SELECT SUBSTRING(\'abcdef\', 1, -1)'
+  ]) {
+    expect(() => executeBatch(s, sql)).toThrowError(
+      expect.objectContaining({ number: 536 }) as Error
+    )
+  }
+})
+
 test('table-valued functions return rows and metadata through the engine', () => {
   const s = open()
   const split = rowsOf(executeBatch(s, `

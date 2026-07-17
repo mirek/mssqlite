@@ -180,3 +180,11 @@ and engine ([`packages/engine`](../../../packages/engine)) rely on:
 - File-format internals, recovery, atomic-commit byte-level details, the source code organization.
 - Tcl bindings, the CLI shell, build/compile instructions.
 - Historical version notes and release logs.
+
+## Differential backlog
+
+Native SQLite shortcuts that still leak through the T-SQL compatibility
+boundary are tracked in [TODO.md](../../../TODO.md). The current SQL Server
+2025 differentials cover text width/collation, UNIQUE NULLs, LIKE classes,
+date/JSON validation, numeric casts/aggregates, scalar function contracts,
+and result metadata.

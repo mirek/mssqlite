@@ -283,6 +283,10 @@ the engine:
   Session-dependent UDFs (`db_name`, `scope_identity`, …) read
   `server.current`, set at batch entry — valid because execution is
   synchronous and single-threaded.
+  String boundary UDFs keep SQL Server's one-based SUBSTRING rules, reject
+  negative LEFT/RIGHT/SUBSTRING lengths with error 536, return NULL for
+  negative REPLICATE/SPACE counts, and enforce QUOTENAME's delimiter and
+  128-character contracts.
 - **Catalog functions become subqueries** — `OBJECT_ID('t')` →
   `(SELECT object_id FROM "sys.objects" WHERE …)`; UDFs cannot re-enter
   the database connection.
@@ -422,8 +426,10 @@ the engine:
 
 ## Known limitations (v1)
 
-There are currently no open implementation briefs in
-[TODO.md](../../../TODO.md).
+Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
+The current differential backlog includes scalar function edge cases,
+character-width and collation behavior, date/JSON validation, aggregate and
+CAST semantics, UNIQUE NULL handling, LIKE classes, and static result metadata.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

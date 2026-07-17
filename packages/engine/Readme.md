@@ -213,7 +213,8 @@ engine consumers still receive the existing `Rows.rows` array shape.
 
 `registerFunctions` defines the `mssqlite_*` functions:
 `add` (dynamic +), checked integer and exact scaled-decimal arithmetic,
-decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `right`, `replicate`, `reverse`,
+decimal cast/comparison/order and SUM/AVG/MIN/MAX, `newid`, `rand`, `substring`, `left`, `right`,
+`replicate`, `quotename`, `reverse`,
 `stuff`, `charindex`, `patindex` (LIKE-pattern search), `translate`,
 `datalength`, `round` (negative digits, truncate flag), `isnumeric`,
 `isdate`, `name`, `dateadd`/`datediff`/`datepart`/`datename`/`eomonth`

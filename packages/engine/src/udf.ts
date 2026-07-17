@@ -17,6 +17,84 @@ const text =
   (value: Argument): string =>
     typeof value === 'string' ? value : String(value ?? '')
 
+const integerArgument =
+  (value: Argument): number =>
+    Math.trunc(Number(value))
+
+const invalidStringLength =
+  (name: string): MssqlError =>
+    new MssqlError(
+      `Invalid length parameter passed to the ${name.toUpperCase()} function.`,
+      536, 16, 1, { statementTerminating: true })
+
+const substring =
+  (value: Argument, start: Argument, length: Argument): Argument => {
+    if (value === null || start === null || length === null) {
+      return null
+    }
+    const count = integerArgument(length)
+    if (count < 0) {
+      throw invalidStringLength('substring')
+    }
+    const at = integerArgument(start)
+    const available = at < 1 ? Math.max(0, at + count - 1) : count
+    const offset = Math.max(0, at - 1)
+    return text(value).slice(offset, offset + available)
+  }
+
+const leftString =
+  (value: Argument, length: Argument): Argument => {
+    if (value === null || length === null) {
+      return null
+    }
+    const count = integerArgument(length)
+    if (count < 0) {
+      throw invalidStringLength('left')
+    }
+    return text(value).slice(0, count)
+  }
+
+const rightString =
+  (value: Argument, length: Argument): Argument => {
+    if (value === null || length === null) {
+      return null
+    }
+    const count = integerArgument(length)
+    if (count < 0) {
+      throw invalidStringLength('right')
+    }
+    return count === 0 ? '' : text(value).slice(-count)
+  }
+
+const quotePairs: Readonly<Record<string, readonly [ string, string ]>> = {
+  '\'': [ '\'', '\'' ],
+  '[': [ '[', ']' ],
+  ']': [ '[', ']' ],
+  '"': [ '"', '"' ],
+  '(': [ '(', ')' ],
+  ')': [ '(', ')' ],
+  '<': [ '<', '>' ],
+  '>': [ '<', '>' ],
+  '{': [ '{', '}' ],
+  '}': [ '{', '}' ],
+  '`': [ '`', '`' ]
+}
+
+const quotename =
+  (value: Argument, quote?: Argument): Argument => {
+    if (value === null || quote === null) {
+      return null
+    }
+    const source = text(value)
+    const delimiter = quote === undefined ? '[' : text(quote)
+    const pair = quotePairs[delimiter]
+    if (source.length > 128 || delimiter.length !== 1 || pair === undefined) {
+      return null
+    }
+    const [ open, close ] = pair
+    return open + source.replaceAll(close, close + close) + close
+  }
+
 const decimalArgument =
   (value: Argument): string | number | bigint | null =>
     value instanceof Uint8Array ? text(value) : value
@@ -452,14 +530,14 @@ export const registerFunctions =
       const value = nextSequenceValue(server, text(name))
       return typeof value === 'boolean' ? Number(value) : value
     }, { deterministic: false })
-    define('mssqlite_right', (value, count) =>
-      value === null || count === null ?
-        null :
-        Number(count) <= 0 ? '' : text(value).slice(-Number(count)))
+    define('mssqlite_substring', substring)
+    define('mssqlite_left', leftString)
+    define('mssqlite_right', rightString)
     define('mssqlite_replicate', (value, count) =>
       value === null || count === null ?
         null :
-        text(value).repeat(Math.max(0, Number(count))))
+        integerArgument(count) < 0 ? null : text(value).repeat(integerArgument(count)))
+    define('mssqlite_quotename', quotename, { varargs: true })
     define('mssqlite_reverse', value =>
       value === null ? null : [ ...text(value) ].reverse().join(''))
     define('mssqlite_stuff', (value, start, length, replacement) => {

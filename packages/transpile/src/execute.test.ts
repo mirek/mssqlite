@@ -17,6 +17,15 @@ const database =
         operator === '/' ? a / b : a % b
     })
     db.function('mssqlite_decimal_cast', (value, _precision, _scale, _try) => value)
+    db.function('mssqlite_substring', (value, start, length) => {
+      const source = String(value)
+      const at = Number(start)
+      const count = Number(length)
+      const available = at < 1 ? Math.max(0, at + count - 1) : count
+      return source.slice(Math.max(0, at - 1), Math.max(0, at - 1) + available)
+    })
+    db.function('mssqlite_left', (value, length) =>
+      String(value).slice(0, Number(length)))
     db.aggregate<number>('mssqlite_sum', {
       start: 0,
       step: (sum, value) => sum + Number(value ?? 0)

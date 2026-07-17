@@ -104,13 +104,13 @@ operator results carry SQL Server-derived precision/scale hints to TDS.
   pseudo-table (`deleted` in INSERT, `inserted` in DELETE) is rejected,
   as is `$action` outside a MERGE statement.
 - **Functions** — built-ins map to native SQLite (`isnull` → `ifnull`,
-  `substring` → `substr`, `string_agg` → `group_concat`, `ceiling`, `power`,
+  `string_agg` → `group_concat`, `ceiling`, `power`,
   window functions, …), transpile-time rewrites (`YEAR(d)` →
-  `CAST(strftime('%Y', d) AS INTEGER)`, `CHOOSE` → `CASE`, `QUOTENAME`,
+  `CAST(strftime('%Y', d) AS INTEGER)`, `CHOOSE` → `CASE`,
   `EOMONTH`, `DATEFROMPARTS`), catalog subqueries (`OBJECT_ID`,
   `SCHEMA_NAME`, `DB_NAME(id)`, `IDENT_CURRENT`), or engine-registered
   `mssqlite_*` UDFs (`newid`, `dateadd`/`datediff`/`datepart`/`datename`,
-  `charindex(3)`, `right`, `replicate`, `reverse`, `stuff`, `patindex`,
+  `substring`, `left`, `right`, `replicate`, `quotename`, `reverse`, `stuff`, `patindex`,
   `round`, `rand`, `datalength`, `isnumeric`, `isdate`,
   `scope_identity`, `db_name`, `suser_sname`, `serverproperty`, …).
   See the engine package for the UDF implementations.
