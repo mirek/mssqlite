@@ -36,8 +36,31 @@ export const corpus: readonly Case[] = [
     `
   },
   {
+    name: 'system scalar result metadata',
+    sourceTodo: 'scalar-result-metadata',
+    todo: 'fixed-integer-result-metadata',
+    query: `
+      SELECT @@TRANCOUNT AS transaction_count,
+        XACT_STATE() AS transaction_state
+    `,
+    differences: [
+      ...fixedInt(0),
+      difference(
+        '/execution/results/0/columns/0/nullable',
+        true, false,
+        '@@TRANCOUNT is a non-null fixed int on SQL Server.'
+      ),
+      difference(
+        '/execution/results/0/columns/1/length',
+        4, 2,
+        'XACT_STATE() uses the nullable smallint-width integer family on SQL Server.'
+      )
+    ]
+  },
+  {
     name: 'implicit type conversions',
     sourceTodo: 'implicit-type-conversions',
+    todo: 'fixed-integer-result-metadata',
     query: `
       SELECT '1' + 2 AS arithmetic_value,
         CASE WHEN 1 = '1' THEN 1 ELSE 0 END AS comparison_value
@@ -47,6 +70,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'string comparison padding',
     sourceTodo: 'string-comparison-padding',
+    todo: 'fixed-integer-result-metadata',
     query: 'SELECT CASE WHEN \'a\' = \'a \' THEN 1 ELSE 0 END AS equal',
     differences: fixedInt(0)
   },
@@ -60,8 +84,20 @@ export const corpus: readonly Case[] = [
     `
   },
   {
+    name: 'ordered result token stream',
+    sourceTodo: 'tds-order-token',
+    todo: 'order-token-fidelity',
+    query: `
+      SELECT value
+      FROM (VALUES (2), (1)) AS source(value)
+      ORDER BY value
+    `,
+    differences: fixedInt(0)
+  },
+  {
     name: 'derived table apply',
     sourceTodo: 'apply-derived-tables',
+    todo: 'fixed-integer-result-metadata',
     query: `
       SELECT p.id, q.n
       FROM (SELECT 1 AS id UNION ALL SELECT 2) AS p
@@ -89,6 +125,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'alter table alter column',
     sourceTodo: 'alter-table-alter-column',
+    todo: 'rpc-completion-token-fidelity',
     setup: `
       DROP TABLE IF EXISTS differential_alter_probe;
       CREATE TABLE differential_alter_probe (value INT);
@@ -127,6 +164,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'identity seed and increment',
     sourceTodo: 'identity-semantics',
+    todo: 'fixed-integer-result-metadata',
     setup: `
       DROP TABLE IF EXISTS differential_identity_probe;
       CREATE TABLE differential_identity_probe (
@@ -155,6 +193,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'character width values',
     sourceTodo: 'character-width-enforcement',
+    todo: 'character-cast-width-metadata',
     query: `
       SELECT CAST('abcdefghijklmnopqrstuvwxyz1234567890' AS VARCHAR) AS cast_value,
         ISNULL(CAST(NULL AS VARCHAR(3)), 'abcdef') AS isnull_value
@@ -178,6 +217,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'merge semicolon validation',
     sourceTodo: 'merge-validation',
+    todo: 'runtime-error-stream-fidelity',
     setup: `
       DROP TABLE IF EXISTS differential_merge_probe;
       CREATE TABLE differential_merge_probe (id INT PRIMARY KEY, value INT);
@@ -199,6 +239,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'openjson strict missing path',
     sourceTodo: 'openjson-strict-paths',
+    todo: 'runtime-error-stream-fidelity',
     query: `
       SELECT [key], value
       FROM OPENJSON(N'{"x":1}', 'strict $.missing')
@@ -243,6 +284,7 @@ export const corpus: readonly Case[] = [
   {
     name: 'select into type preservation',
     sourceTodo: 'select-into-type-preservation',
+    todo: 'catalog-result-metadata',
     setup: 'DROP TABLE IF EXISTS differential_into_probe',
     query: `
       SELECT 1 AS id, CAST('x' AS VARCHAR(5)) AS value

@@ -8,6 +8,7 @@ import { corpus } from './corpus.ts'
 import * as Docker from './docker.ts'
 import { execute, successful } from './execute.ts'
 import { reproduction } from './reproduction.ts'
+import { trace, type Trace } from './trace.ts'
 import type { CaseResult } from './types.ts'
 
 type Running = {
@@ -16,6 +17,8 @@ type Running = {
   readonly sqlAdmin: Connection,
   readonly sqlServer: Connection,
   readonly mssqlite: Connection,
+  readonly sqlServerTrace: Trace,
+  readonly mssqliteTrace: Trace,
   readonly database: string
 }
 
@@ -63,25 +66,31 @@ const start =
     let sqlServer: Connection | undefined
     let local: Listening | undefined
     let mssqlite: Connection | undefined
+    const sqlServerTrace = trace()
+    const mssqliteTrace = trace()
     try {
       sqlAdmin = await waitForSqlServer(container)
       const database = `mssqlite_differential_${process.pid}`
       const created = await execute(sqlAdmin,
         `CREATE DATABASE [${database}] COLLATE SQL_Latin1_General_CP1_CI_AS`)
       successful(created, 'SQL Server database creation failed')
-      sqlServer = await connect(endpoint(container.port, database, container.password))
+      sqlServer = await connect(
+        endpoint(container.port, database, container.password), sqlServerTrace)
       local = await listen({
         path: ':memory:',
         port: 0,
         databaseName: database,
         authentication: { type: 'insecure' }
       })
-      mssqlite = await connect(endpoint(local.port, database, 'secret'))
+      mssqlite = await connect(endpoint(local.port, database, 'secret'), mssqliteTrace)
       for (const connection of [ sqlServer, mssqlite ]) {
         const initialized = await execute(connection, 'SET NOCOUNT OFF; SET XACT_ABORT OFF')
         successful(initialized, 'session initialization failed')
       }
-      return { container, local, sqlAdmin, sqlServer, mssqlite, database }
+      return {
+        container, local, sqlAdmin, sqlServer, mssqlite,
+        sqlServerTrace, mssqliteTrace, database
+      }
     } catch (error) {
       if (mssqlite !== undefined) {
         await closeConnection(mssqlite)
@@ -123,12 +132,20 @@ export const run =
     try {
       const results: CaseResult[] = []
       for (const value of corpus) {
+        const mssqliteMark = running.mssqliteTrace.mark()
         const mssqlite = await capture(running.mssqlite, value)
+        const mssqliteCommunication = running.mssqliteTrace.since(mssqliteMark)
+        const sqlServerMark = running.sqlServerTrace.mark()
         const sqlServer = await capture(running.sqlServer, value)
+        const sqlServerCommunication = running.sqlServerTrace.since(sqlServerMark)
         results.push({
           case: value,
           mssqlite,
           sqlServer,
+          communication: {
+            mssqlite: mssqliteCommunication,
+            sqlServer: sqlServerCommunication
+          },
           comparison: snapshots(mssqlite, sqlServer, value.differences),
           reproduction: reproduction(value)
         })

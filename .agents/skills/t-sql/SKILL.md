@@ -309,8 +309,8 @@ specific compatibility error 40000 rather than becoming parser error 102.
 
 ### Compatibility audit findings
 
-The live TDS audit at commit `bcad53b` found additional semantic gaps now
-tracked in [`todo/`](../../../todo). Unique constraints and explicit unique
+The live TDS audit at commit `bcad53b` found additional semantic gaps tracked
+in [`todo/`](../../../todo). Unique constraints and explicit unique
 indexes now treat repeated NULL-containing tuples as duplicates, preserving
 collation keys and reporting 2627/2601 by origin. SELECT INTO now derives exact
 expression/source types, nullability, collation, and eligible identity before
@@ -319,5 +319,6 @@ audit are implemented with database-owned counters, custom signed definitions,
 rollback gaps, session IDENTITY_INSERT, and trigger-aware scope. It also
 confirmed general APPLY lowering; strict OPENJSON paths, VALUES-derived tables,
 and the audited MERGE terminator and arm validation rules are now implemented.
-Treat the individual
-`todo/*.md` briefs as the executable scope and ground-truth checklist.
+The remaining result-metadata, completion-token, and runtime error-stream
+differences are indexed by [TODO.md](../../../TODO.md). Treat those individual
+briefs as the executable scope and ground-truth checklist.

@@ -6,6 +6,16 @@ It compares result-set boundaries, ordered rows, complete column metadata,
 DONE row counts, error number/state/class/line, transaction state, and
 post-error connection reuse.
 
+Each case also records the packet headers and decoded response-token diagnostics
+emitted by the same tedious connection in
+`communication.{mssqlite,sqlServer}.diagnostics`. The adjacent `tokens` arrays
+provide a compact machine-readable token sequence. This is a client-side,
+post-decryption trace, so SQL Server's login-only TLS does not obscure the
+application stream. Packet data and decoded outgoing payloads are deliberately
+disabled: traces retain framing and token sequencing without persisting LOGIN7
+credentials. Individual diagnostic entries are capped at 8 KiB to keep a
+hostile or very large value from making the artifact unbounded.
+
 The default `pnpm test` runs only the package's container-free unit tests.
 Run the live suite from the repository root:
 

@@ -1,4 +1,5 @@
 import { Connection } from 'tedious'
+import type { Trace } from './trace.ts'
 
 export type Endpoint = {
   readonly host: string,
@@ -10,7 +11,7 @@ export type Endpoint = {
 
 /** Opens the tedious configuration shared by both comparison targets. */
 export const connect =
-  (endpoint: Endpoint): Promise<Connection> =>
+  (endpoint: Endpoint, trace?: Trace): Promise<Connection> =>
     new Promise((resolve, reject) => {
       const connection = new Connection({
         server: endpoint.host,
@@ -26,9 +27,18 @@ export const connect =
           useColumnNames: false,
           rowCollectionOnRequestCompletion: false,
           connectTimeout: 5000,
-          requestTimeout: 15000
+          requestTimeout: 15000,
+          debug: {
+            data: false,
+            payload: false,
+            packet: trace !== undefined,
+            token: trace !== undefined
+          }
         }
       })
+      if (trace !== undefined) {
+        connection.on('debug', trace.record)
+      }
       connection.connect(error => error === undefined ? resolve(connection) : reject(error))
     })
 
