@@ -386,6 +386,36 @@ test('select constants', async () => {
   expect(result.rowCount).toBe(1)
 })
 
+test('fixed and nullable integer metadata crosses TDS at every width for empty results', async () => {
+  const result = await query(`
+    CREATE TABLE wire_integer_metadata (
+      fixed_tiny tinyint NOT NULL, nullable_tiny tinyint NULL,
+      fixed_small smallint NOT NULL, nullable_small smallint NULL,
+      fixed_int int NOT NULL, nullable_int int NULL,
+      fixed_big bigint NOT NULL, nullable_big bigint NULL
+    )
+    SELECT * FROM wire_integer_metadata WHERE 1 = 0
+  `, [], true)
+  expect(result.rows).toEqual([])
+  expect(result.columns.map(column => [
+    column.type, column.length, column.nullable
+  ])).toEqual([
+    [ 'TinyInt', undefined, false ], [ 'IntN', 1, true ],
+    [ 'SmallInt', undefined, false ], [ 'IntN', 2, true ],
+    [ 'Int', undefined, false ], [ 'IntN', 4, true ],
+    [ 'BigInt', undefined, false ], [ 'IntN', 8, true ]
+  ])
+
+  const system = await query(`
+    SELECT @@TRANCOUNT AS transaction_count, XACT_STATE() AS transaction_state
+  `, [], true)
+  expect(system.columns.map(column => [
+    column.type, column.length, column.nullable
+  ])).toEqual([
+    [ 'Int', undefined, false ], [ 'IntN', 2, true ]
+  ])
+})
+
 test('duplicate result labels retain every value for tedious column arrays', async () => {
   await query(`
     CREATE TABLE wire_duplicate_left (id INT, value INT)
@@ -1100,12 +1130,12 @@ test('select into preserves stored types and eligible identity over tedious', as
     decimal_value: 1.25
   } ])
   expect(stored.columns.map(column => [ column.type, column.length ])).toEqual([
-    [ 'IntN', 4 ], [ 'VarChar', 5 ], [ 'NVarChar', 2 ], [ 'BitN', 1 ], [ 'DecimalN', 5 ]
+    [ 'Int', undefined ], [ 'VarChar', 5 ], [ 'NVarChar', 2 ], [ 'BitN', 1 ], [ 'DecimalN', 5 ]
   ])
   const identity = await query('SELECT id, value FROM wire_select_identity ORDER BY id')
   expect(identity.rows).toEqual([ { id: 4, value: 'one' }, { id: 6, value: 'two' } ])
   expect(identity.columns.map(column => [ column.type, column.length ])).toEqual([
-    [ 'IntN', 4 ], [ 'VarChar', 6 ]
+    [ 'Int', undefined ], [ 'VarChar', 6 ]
   ])
 })
 
@@ -1119,7 +1149,7 @@ test('alter column rebuilds values and exposes changed metadata over tedious', a
   `)
   expect(result.rows).toEqual([ { id: '7', label: 'seven' } ])
   expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
-    [ 'IntN', 8 ], [ 'VarChar', 10 ]
+    [ 'BigInt', undefined ], [ 'VarChar', 10 ]
   ])
 })
 
@@ -1239,7 +1269,7 @@ test('implicit type precedence crosses predicates, RPC parameters and result met
     binary_value: Buffer.from([ 1, 2 ])
   } ])
   expect(result.columns.map(column => [ column.type, column.length ])).toEqual([
-    [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'DecimalN', 5 ], [ 'FloatN', 8 ], [ 'VarBinary', 2 ]
+    [ 'IntN', 4 ], [ 'Int', undefined ], [ 'DecimalN', 5 ], [ 'FloatN', 8 ], [ 'VarBinary', 2 ]
   ])
 
   const parameter = await query(
@@ -1470,7 +1500,7 @@ test('apply correlation and null extension over the wire', async () => {
     { id: 2, n: 3, count_: 0, note: null }
   ])
   expect(derived.columns.map(column => [ column.type, column.length ])).toEqual([
-    [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'NVarChar', 40 ]
+    [ 'Int', undefined ], [ 'IntN', 4 ], [ 'IntN', 4 ], [ 'NVarChar', 40 ]
   ])
 })
 
@@ -1526,7 +1556,7 @@ test('pivot and unpivot values and metadata over the wire', async () => {
     { id: 2, quarter: 'Q3', amount: 30 }
   ])
   expect(unpivot.columns.map(column => [ column.name, column.type ])).toEqual([
-    [ 'id', 'IntN' ], [ 'quarter', 'NVarChar' ], [ 'amount', 'IntN' ]
+    [ 'id', 'IntN' ], [ 'quarter', 'NVarChar' ], [ 'amount', 'Int' ]
   ])
 })
 
@@ -1557,8 +1587,8 @@ test('grouping sets values and metadata over the wire', async () => {
     { name: 'region', type: 'NVarChar', length: 20 },
     { name: 'product', type: 'NVarChar', length: 20 },
     { name: 'total', type: 'IntN', length: 4 },
-    { name: 'gr', type: 'IntN', length: 1 },
-    { name: 'gp', type: 'IntN', length: 1 }
+    { name: 'gr', type: 'TinyInt', length: undefined },
+    { name: 'gp', type: 'TinyInt', length: undefined }
   ])
 })
 

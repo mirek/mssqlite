@@ -23,6 +23,17 @@ test('intN round trips', () => {
   expect(roundTrip(TypeInfo.intN(4), null)).toBeNull()
 })
 
+test('fixed integers encode without a value-length prefix and round trip', () => {
+  expect(TypeInfo.encode(TypeInfo.fixedInt(1))).toEqual(Hex.of('30'))
+  expect(TypeInfo.encode(TypeInfo.fixedInt(2))).toEqual(Hex.of('34'))
+  expect(TypeInfo.encode(TypeInfo.fixedInt(4))).toEqual(Hex.of('38'))
+  expect(TypeInfo.encode(TypeInfo.fixedInt(8))).toEqual(Hex.of('7f'))
+  expect(Value.encode(TypeInfo.fixedInt(1), 255)).toEqual(Hex.of('ff'))
+  expect(Value.encode(TypeInfo.fixedInt(2), -32768)).toEqual(Hex.of('00 80'))
+  expect(Value.encode(TypeInfo.fixedInt(4), 2147483647)).toEqual(Hex.of('ff ff ff 7f'))
+  expect(roundTrip(TypeInfo.fixedInt(8), 9007199254740993n)).toBe(9007199254740993n)
+})
+
 test('bitN round trips', () => {
   expect(roundTrip(TypeInfo.bitN(), true)).toBe(true)
   expect(roundTrip(TypeInfo.bitN(), false)).toBe(false)
@@ -141,6 +152,7 @@ test('dates encode from Date objects', () => {
 
 test('type info encode/decode round trips', () => {
   const infos: TypeInfo.t[] = [
+    TypeInfo.fixedInt(4),
     TypeInfo.intN(4),
     TypeInfo.bitN(),
     TypeInfo.floatN(8),

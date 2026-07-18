@@ -322,3 +322,8 @@ and the audited MERGE terminator and arm validation rules are now implemented.
 The remaining result-metadata, completion-token, and runtime error-stream
 differences are indexed by [TODO.md](../../../TODO.md). Treat those individual
 briefs as the executable scope and ground-truth checklist.
+
+Result inference preserves integer nullability through catalog and scalar
+projections: proven non-null tinyint/smallint/int/bigint results use fixed TDS
+integer families, nullable results retain INTN, `@@TRANCOUNT` is non-null int,
+and `XACT_STATE()` advertises nullable smallint width.

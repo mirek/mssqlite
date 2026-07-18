@@ -100,13 +100,13 @@ export const typeInfoOfCatalogRow =
   (row: ColumnRow): TypeInfo.t => {
     switch (row.system_type_id) {
       case 48:
-        return TypeInfo.intN(1)
+        return row.is_nullable === 0 ? TypeInfo.fixedInt(1) : TypeInfo.intN(1)
       case 52:
-        return TypeInfo.intN(2)
+        return row.is_nullable === 0 ? TypeInfo.fixedInt(2) : TypeInfo.intN(2)
       case 56:
-        return TypeInfo.intN(4)
+        return row.is_nullable === 0 ? TypeInfo.fixedInt(4) : TypeInfo.intN(4)
       case 127:
-        return TypeInfo.intN(8)
+        return row.is_nullable === 0 ? TypeInfo.fixedInt(8) : TypeInfo.intN(8)
       case 104:
         return TypeInfo.bitN()
       case 59:
@@ -299,6 +299,24 @@ const hintedColumn =
     }
   }
 
+const withObservedNull =
+  (column: Column, values: readonly Value[]): Column => {
+    if (!values.includes(null)) {
+      return column
+    }
+    const width = ({
+      [DataType.DataType.int1]: 1,
+      [DataType.DataType.int2]: 2,
+      [DataType.DataType.int4]: 4,
+      [DataType.DataType.int8]: 8
+    } as const)[column.typeInfo.type]
+    return width === undefined ? { ...column, nullable: true } : {
+      ...column,
+      typeInfo: TypeInfo.intN(width),
+      nullable: true
+    }
+  }
+
 /**
  * @returns TDS column metadata for a prepared statement's result — catalog
  * lookups when the column maps to a table column, value shape otherwise.
@@ -314,26 +332,26 @@ export const columnsOf =
     const sources = statement.columns() as unknown as SourceColumn[]
     const variables = [ ...tableVariables ]
     return sources.map((source, index) => {
+      const values = rows.map(row => row[index] ?? null)
       const hinted = hints[index] === undefined ? undefined : hintedColumn(hints[index])
       if (hinted !== undefined) {
-        return { ...hinted, name: source.name }
+        return withObservedNull({ ...hinted, name: source.name }, values)
       }
       if (source.table !== null && source.column !== null) {
         const row = catalogColumn(db, source.table, source.column)
         if (row !== undefined) {
-          return {
+          return withObservedNull({
             name: source.name,
             typeInfo: typeInfoOfCatalogRow(row),
             nullable: row.is_nullable !== 0,
             userType: row.user_type_id
-          }
+          }, values)
         }
         const variable = tableVariableColumn(variables, source.table, source.column)
         if (variable !== undefined) {
-          return { ...variable, name: source.name }
+          return withObservedNull({ ...variable, name: source.name }, values)
         }
       }
-      const values = rows.map(row => row[index] ?? null)
       return {
         name: source.name,
         typeInfo: typeInfoOfValues(values),

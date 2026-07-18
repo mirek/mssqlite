@@ -434,7 +434,11 @@ one tedious capture path; no production package depends on it.
   then persisted in `sys.columns` for stable empty-result and TDS metadata.
   Fully inferred scalar projections use `Implicit.projectionHints` before the
   older expression-family fallbacks, so every item is described independently
-  with exact type arguments, nullability, and inherited collation. The engine
+  with exact type arguments, nullability, and inherited collation. Proven
+  non-null integer projections and catalog columns use fixed INT1/INT2/INT4/
+  INT8 TYPE_INFO, while nullable results retain width-specific INTN metadata.
+  `@@TRANCOUNT` is a fixed non-null int and `XACT_STATE()` uses SQL Server's
+  nullable smallint-width INTN descriptor. The engine
   merges declared scalar-UDF returns with per-item descriptors for mixed UDF
   results. SQL batch, sp_executesql, prepared RPC, procedure, cursor, and UDF
   execution therefore feed the same descriptors into `Metadata.columnsOf`.
