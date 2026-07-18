@@ -40,6 +40,10 @@ This spec is implemented in [`packages/tds`](../../../packages/tds)
 | Collation, GUID, decimal, date/time wire formats | `collation.ts`, `guid.ts`, `decimal.ts`, `date-time.ts` |
 | Server tokens (COLMETADATA, ROW, DONE*, ERROR/INFO, LOGINACK, ENVCHANGE, RETURNSTATUS, RETURNVALUE, FEATUREEXTACK) | `token/*` |
 
+The live differential packet/token trace records an open ORDER-token gap for
+ordered result sets; see
+[`todo/order-token-fidelity.md`](../../../todo/order-token-fidelity.md).
+
 ### Notes discovered implementing
 
 - mssqlite implements the full-session TDS 7.x encryption matrix, not

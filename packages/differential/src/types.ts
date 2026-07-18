@@ -53,6 +53,16 @@ export type Snapshot = {
   readonly session: SessionState
 }
 
+export type CommunicationStream = {
+  readonly diagnostics: readonly string[],
+  readonly tokens: readonly string[]
+}
+
+export type Communication = {
+  readonly mssqlite: CommunicationStream,
+  readonly sqlServer: CommunicationStream
+}
+
 export type ExpectedDifference = {
   readonly path: string,
   readonly mssqlite: unknown,
@@ -63,6 +73,7 @@ export type ExpectedDifference = {
 export type Case = {
   readonly name: string,
   readonly sourceTodo: string,
+  readonly todo?: string,
   readonly setup?: string,
   readonly query: string,
   readonly cleanup?: string,
@@ -84,6 +95,7 @@ export type CaseResult = {
   readonly case: Case,
   readonly mssqlite: Snapshot,
   readonly sqlServer: Snapshot,
+  readonly communication: Communication,
   readonly comparison: Comparison,
   readonly reproduction: string
 }

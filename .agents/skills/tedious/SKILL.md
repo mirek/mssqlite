@@ -120,6 +120,9 @@ connection.execSql(request)
   path against mssqlite and SQL Server 2025. It records every
   `columnMetadata`, ordered row/result set, DONE/DONEINPROC/DONEPROC count,
   stable error fields, transaction state, and a follow-up reuse probe.
+  The artifact also records tedious's post-decryption packet headers and
+  decoded response-token diagnostics per case. Packet data/payload diagnostics
+  stay disabled so LOGIN7 secrets are never persisted.
   Intentional differences must name an exact JSON-pointer path and both values;
   run the container-backed suite only with `pnpm test:differential`.
 - Listen on port 0 and read the assigned port

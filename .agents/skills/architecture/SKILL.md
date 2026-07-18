@@ -544,9 +544,10 @@ one tedious capture path; no production package depends on it.
 ## Known limitations (v1)
 
 Open implementation briefs are indexed in [TODO.md](../../../TODO.md).
-The completed compatibility audit is guarded by the opt-in
-`pnpm test:differential` corpus; declared path-and-value differences are
-checked for both unexpected drift and stale expectations.
+The compatibility audit is guarded by the opt-in `pnpm test:differential`
+corpus; declared path-and-value differences are checked for both unexpected
+drift and stale expectations. Its artifact also retains bounded client-side
+packet/token traces for both endpoints without recording LOGIN7 payload bytes.
 
 - No login-only TDS 7.x encryption or TLS-first TDS 8.0. SSPI/FedAuth are not
   implemented; authenticated mode supports configured SQL logins.

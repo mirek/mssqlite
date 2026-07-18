@@ -75,6 +75,11 @@ This spec is implemented in [`packages/catalog`](../../../packages/catalog):
   request before parsing so it can observe itself, completion returns the
   session to `sleeping`, and socket close deletes both rows.
 - Not yet populated: extended properties.
+- The live differential audit still finds result-descriptor gaps even where
+  catalog values are correct: selected sysname fields can surface as
+  nvarchar(max), and `sys.columns.max_length` can surface as nullable int rather
+  than non-null smallint. The open acceptance brief is
+  [`todo/catalog-result-metadata.md`](../../../todo/catalog-result-metadata.md).
 
 ### Implemented high-value view contracts
 
