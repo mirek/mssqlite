@@ -26,10 +26,52 @@ test('select constants with metadata', () => {
   const s = open()
   const result = rowsOf(executeBatch(s, 'SELECT 1 AS n, \'x\' AS t, 1.5 AS f, NULL AS z'))
   expect(result.columns.map(column => column.name)).toEqual([ 'n', 't', 'f', 'z' ])
-  expect(result.columns[0]?.typeInfo.type).toBe(DataType.DataType.intN)
+  expect(result.columns[0]?.typeInfo.type).toBe(DataType.DataType.int4)
   expect(result.columns[1]?.typeInfo.type).toBe(DataType.DataType.bigVarchar)
   expect(result.columns[2]?.typeInfo.type).toBe(DataType.DataType.decimalN)
   expect(result.rows).toEqual([ [ 1, 'x', '1.5', null ] ])
+})
+
+test('fixed and nullable integer metadata retains every width for rows and empty results', () => {
+  const s = open()
+  executeBatch(s, `
+    CREATE TABLE integer_metadata (
+      fixed_tiny tinyint NOT NULL, nullable_tiny tinyint NULL,
+      fixed_small smallint NOT NULL, nullable_small smallint NULL,
+      fixed_int int NOT NULL, nullable_int int NULL,
+      fixed_big bigint NOT NULL, nullable_big bigint NULL
+    )
+    INSERT integer_metadata VALUES (1, 1, 2, 2, 3, 3, 4, 4)
+  `)
+  for (const predicate of [ '1 = 1', '1 = 0' ]) {
+    const result = rowsOf(executeBatch(s, `SELECT * FROM integer_metadata WHERE ${predicate}`))
+    expect(result.columns.map(column => [
+      column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+    ])).toEqual([
+      [ DataType.DataType.int1, undefined, false ],
+      [ DataType.DataType.intN, 1, true ],
+      [ DataType.DataType.int2, undefined, false ],
+      [ DataType.DataType.intN, 2, true ],
+      [ DataType.DataType.int4, undefined, false ],
+      [ DataType.DataType.intN, 4, true ],
+      [ DataType.DataType.int8, undefined, false ],
+      [ DataType.DataType.intN, 8, true ]
+    ])
+  }
+
+  const expressions = rowsOf(executeBatch(s, `
+    SELECT 1 AS literal_value, @@TRANCOUNT AS transaction_count,
+      XACT_STATE() AS transaction_state,
+      CASE WHEN 1 = '1' THEN 1 ELSE 0 END AS comparison_value
+  `))
+  expect(expressions.columns.map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.int4, undefined, false ],
+    [ DataType.DataType.int4, undefined, false ],
+    [ DataType.DataType.intN, 2, true ],
+    [ DataType.DataType.int4, undefined, false ]
+  ])
 })
 
 test('scalar projections retain exact SQL types, widths, scales and nullability', () => {
@@ -52,7 +94,7 @@ test('scalar projections retain exact SQL types, widths, scales and nullability'
     column.typeInfo.precision, column.typeInfo.scale, column.nullable
   ])).toEqual([
     [ DataType.DataType.intN, 4, undefined, undefined, true ],
-    [ DataType.DataType.intN, 4, undefined, undefined, false ],
+    [ DataType.DataType.int4, undefined, undefined, undefined, false ],
     [ DataType.DataType.decimalN, 9, 10, 0, false ],
     [ DataType.DataType.decimalN, 5, 3, 2, false ],
     [ DataType.DataType.nvarchar, 4, undefined, undefined, false ],
@@ -189,9 +231,9 @@ test('duplicate result labels preserve positional values and origin metadata', (
   `))
   expect(star.columns.map(column => column.name)).toEqual([ 'id', 'value', 'id', 'value' ])
   expect(star.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ])).toEqual([
+    [ DataType.DataType.int4, undefined ],
     [ DataType.DataType.intN, 4 ],
-    [ DataType.DataType.intN, 4 ],
-    [ DataType.DataType.intN, 8 ],
+    [ DataType.DataType.int8, undefined ],
     [ DataType.DataType.nvarchar, 40 ]
   ])
   expect(star.rows).toEqual([ [ 1, 10, 1, 'right' ] ])
@@ -212,7 +254,7 @@ test('duplicate result labels preserve positional values and origin metadata', (
   `))
   expect(empty.rows).toEqual([])
   expect(empty.columns.map(column => [ column.name, column.typeInfo.type ])).toEqual([
-    [ 'duplicate', DataType.DataType.intN ],
+    [ 'duplicate', DataType.DataType.int4 ],
     [ 'duplicate', DataType.DataType.nvarchar ]
   ])
 })
@@ -230,7 +272,7 @@ test('create, insert, select round trip with catalog metadata', () => {
   expect(insert[0]).toMatchObject({ kind: 'count', rowCount: 2 })
   const result = rowsOf(executeBatch(s, 'SELECT id, name, age FROM users ORDER BY id'))
   expect(result.columns[0]).toMatchObject({
-    typeInfo: { type: DataType.DataType.intN, maxLength: 4 },
+    typeInfo: { type: DataType.DataType.int4 },
     nullable: false
   })
   expect(result.columns[1]).toMatchObject({
@@ -1040,7 +1082,9 @@ test('table variables support DML, constraints and declared metadata', () => {
   `)
   const result = rowsOf(items)
   expect(result.rows).toEqual([ [ 1, 'apple!', 3 ] ])
-  expect(result.columns[0]).toMatchObject({ nullable: false, typeInfo: { maxLength: 4 } })
+  expect(result.columns[0]).toMatchObject({
+    nullable: false, typeInfo: { type: DataType.DataType.int4 }
+  })
   expect(result.columns[1]).toMatchObject({ nullable: false, typeInfo: { maxLength: 40 } })
   expect(s.lastIdentity).toBe(2)
 })
@@ -1880,7 +1924,7 @@ test('integer AVG truncates and COUNT_BIG retains bigint width', () => {
     ORDER BY subtotal, grp
   `))
   expect(grouped.rows).toEqual([ [ 1, 1, 3, 0 ], [ 2, null, 1, 0 ], [ null, 1, 4, 1 ] ])
-  expect(grouped.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 4, 8, 1 ])
+  expect(grouped.columns.map(column => column.typeInfo.maxLength)).toEqual([ 4, 4, undefined, undefined ])
 
   executeBatch(s, `
     CREATE TABLE integer_average_overflow (value int)
@@ -2409,7 +2453,7 @@ test('character widths govern casts, assignment, storage, defaults and metadata'
         collation: Collation.ofName('Latin1_General_100_BIN2')
       }
     },
-    { typeInfo: { type: DataType.DataType.intN, maxLength: 4 } }
+    { typeInfo: { type: DataType.DataType.int4 } }
   ])
 
   const nullCast = rowsOf(executeBatch(s, 'SELECT CAST(NULL AS varchar(3)) AS value'))
@@ -2593,7 +2637,7 @@ test('table-valued functions return rows and metadata through the engine', () =>
   expect(split.rows).toEqual([ [ 'a', 1 ], [ '', 2 ], [ 'b', 3 ] ])
   expect(split.columns).toMatchObject([
     { name: 'value', typeInfo: { type: DataType.DataType.nvarchar, maxLength: 8 } },
-    { name: 'ordinal', typeInfo: { type: DataType.DataType.intN, maxLength: 8 } }
+    { name: 'ordinal', typeInfo: { type: DataType.DataType.int8 } }
   ])
   const emptySplit = rowsOf(executeBatch(s, 'SELECT * FROM STRING_SPLIT(NULL, \',\', 1)'))
   expect(emptySplit.rows).toEqual([])
@@ -2625,7 +2669,7 @@ test('table-valued functions return rows and metadata through the engine', () =>
   const series = rowsOf(executeBatch(s, 'SELECT value FROM GENERATE_SERIES(5, 1, -2)'))
   expect(series.rows).toEqual([ [ 5 ], [ 3 ], [ 1 ] ])
   expect(series.columns[0]).toMatchObject({
-    typeInfo: { type: DataType.DataType.intN, maxLength: 4 }
+    typeInfo: { type: DataType.DataType.int4 }
   })
   expect(rowsOf(executeBatch(s, 'SELECT * FROM GENERATE_SERIES(NULL, 3)')).rows).toEqual([])
 })
@@ -2807,7 +2851,7 @@ test('derived apply supports lateral cardinality, aggregates, nesting, stars and
   expect(scalar.rows).toEqual([ [ 1, 2 ], [ 2, 3 ] ])
   expect(scalar.columns.map(column => [ column.typeInfo.type, column.typeInfo.maxLength ]))
     .toEqual([
-      [ DataType.DataType.intN, 4 ], [ DataType.DataType.intN, 4 ]
+      [ DataType.DataType.int4, undefined ], [ DataType.DataType.intN, 4 ]
     ])
   expect(rowsOf(executeBatch(s, `
     SELECT p.id, c.sequence, c.amount
@@ -2974,7 +3018,7 @@ test('pivot and unpivot expose generated values and metadata', () => {
     [ 1, 'Q1', 10 ], [ 1, 'Q2', 20 ], [ 2, 'Q2', 25 ], [ 2, 'Q3', 30 ]
   ])
   expect(unpivot.columns.map(column => column.name)).toEqual([ 'id', 'quarter', 'amount' ])
-  expect(unpivot.columns[2]?.typeInfo.type).toBe(DataType.DataType.intN)
+  expect(unpivot.columns[2]?.typeInfo.type).toBe(DataType.DataType.int4)
 
   executeBatch(s, 'CREATE TABLE transform_mixed (id INT, a INT, b REAL)')
   expect(() => executeBatch(s, `
@@ -3011,8 +3055,8 @@ test('grouping sets preserve subtotal indicators and metadata', () => {
     [ 'region', DataType.DataType.nvarchar, 20 ],
     [ 'product', DataType.DataType.nvarchar, 20 ],
     [ 'total', DataType.DataType.intN, 4 ],
-    [ 'gr', DataType.DataType.intN, 1 ],
-    [ 'gp', DataType.DataType.intN, 1 ]
+    [ 'gr', DataType.DataType.int1, undefined ],
+    [ 'gp', DataType.DataType.int1, undefined ]
   ])
 })
 
@@ -4503,6 +4547,12 @@ test('merge output returns $action with inserted and deleted images', () => {
   `))
   expect(result.columns.map(column => column.name))
     .toEqual([ '$action', 'old_sku', 'old_price', 'new_sku', 'new_price' ])
+  expect([ result.columns[2], result.columns[4] ].map(column => [
+    column.typeInfo.type, column.typeInfo.maxLength, column.nullable
+  ])).toEqual([
+    [ DataType.DataType.intN, 4, true ],
+    [ DataType.DataType.intN, 4, true ]
+  ])
   const sorted = [ ...result.rows ].sort((a, b) => String(a[0]).localeCompare(String(b[0])))
   expect(sorted).toEqual([
     [ 'DELETE', 'b', 200, null, null ],

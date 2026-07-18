@@ -116,6 +116,8 @@ export const typeOf =
       case 'cast':
       case 'convert':
         return { ...value.type, name: canonical(value.type.name) }
+      case 'variable':
+        return value.name.toLowerCase() === '@@trancount' ? { name: 'int', args: [] } : undefined
       case 'column': {
         const type = Context.columnType(ctx, value.name)
         return type === undefined ? undefined : { ...type, name: canonical(type.name) }
@@ -172,9 +174,12 @@ export const typeOf =
           'datediff', 'datepart', 'year', 'month', 'day', 'isdate',
           'len', 'charindex', 'patindex', 'ascii', 'unicode', 'isnumeric',
           'db_id', 'object_id', 'schema_id', 'type_id',
-          'error_number', 'error_severity', 'error_state', 'error_line', 'xact_state', 'isjson'
+          'error_number', 'error_severity', 'error_state', 'error_line', 'isjson'
         ].includes(name ?? '')) {
           return { name: 'int', args: [] }
+        }
+        if (name === 'xact_state') {
+          return { name: 'smallint', args: [] }
         }
         if (name === 'datalength') {
           const input = value.args[0] === undefined ? undefined : typeOf(ctx, value.args[0])
@@ -543,6 +548,8 @@ const nullable =
         return false
       case 'column':
         return Context.columnNullable(ctx, value.name) ?? true
+      case 'variable':
+        return value.name.toLowerCase() !== '@@trancount'
       case 'call': {
         const name = value.name[value.name.length - 1]?.toLowerCase()
         return ![ 'count', 'count_big' ].includes(name ?? '')
@@ -579,6 +586,8 @@ const selectIntoNullable =
         return false
       case 'column':
         return Context.columnNullable(ctx, value.name) ?? true
+      case 'variable':
+        return value.name.toLowerCase() !== '@@trancount'
       case 'collate':
         return selectIntoNullable(ctx, value.expression)
       case 'cast':

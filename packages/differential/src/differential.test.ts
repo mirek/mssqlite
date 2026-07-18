@@ -65,7 +65,6 @@ test('corpus has stable unique cases and standalone reproductions', () => {
   expect(new Set(corpus.flatMap(value => value.todo ?? []))).toEqual(new Set([
     'catalog-result-metadata',
     'character-cast-width-metadata',
-    'fixed-integer-result-metadata',
     'order-token-fidelity',
     'rpc-completion-token-fidelity',
     'runtime-error-stream-fidelity'

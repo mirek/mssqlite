@@ -117,6 +117,9 @@ ordered result sets; see
   from BIGVARCHAR (0xA7) and NVARCHAR (0xE7). Unicode TYPE_INFO lengths are
   encoded in bytes, so nchar(n)/nvarchar(n) advertise 2n while values retain
   their character width.
+- Proven non-null tinyint, smallint, int, and bigint result columns use fixed
+  INT1/INT2/INT4/INT8 TYPE_INFO with no metadata or row-value length prefix.
+  Nullable results continue to use width-specific INTN.
 - FOR XML text mode uses the magic result-column name with NVARCHAR(MAX)
   TYPE_INFO and PLP values. FOR XML TYPE uses the unnamed XML TYPE_INFO and
   XML PLP codec. Both paths stream values beyond 8 KiB through ordinary

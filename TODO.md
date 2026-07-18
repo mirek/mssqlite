@@ -1,9 +1,8 @@
 # TODO
 
-The live differential corpus currently preserves six actionable compatibility
+The live differential corpus currently preserves five actionable compatibility
 briefs:
 
-- [Fixed integer result metadata](todo/fixed-integer-result-metadata.md)
 - [Character CAST width metadata](todo/character-cast-width-metadata.md)
 - [Catalog result metadata](todo/catalog-result-metadata.md)
 - [ORDER token fidelity](todo/order-token-fidelity.md)

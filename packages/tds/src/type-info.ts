@@ -42,6 +42,18 @@ export const intN =
   (maxLength: 1 | 2 | 4 | 8 = 4): TypeInfo =>
     ({ type: DataType.DataType.intN, maxLength })
 
+/** @returns fixed non-null integer — tinyint(1), smallint(2), int(4), bigint(8). */
+export const fixedInt =
+  (maxLength: 1 | 2 | 4 | 8 = 4): TypeInfo =>
+    ({
+      type: {
+        1: DataType.DataType.int1,
+        2: DataType.DataType.int2,
+        4: DataType.DataType.int4,
+        8: DataType.DataType.int8
+      }[maxLength]
+    })
+
 /** @returns nullable bit. */
 export const bitN =
   (): TypeInfo =>

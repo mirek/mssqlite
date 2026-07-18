@@ -684,7 +684,8 @@ export const executeMerge =
       if (output !== undefined && outputRendered !== undefined) {
         // Assembled inside the transaction — OUTPUT INTO writes must roll
         // back with the merge if they fail.
-        emitOutput(session, output, query(session, outputRendered.sql, outputRendered.variables), items)
+        emitOutput(session, output, query(
+          session, outputRendered.sql, outputRendered.variables, outputRendered.columns), items)
       }
       if (implicit) {
         session.db.exec('COMMIT')

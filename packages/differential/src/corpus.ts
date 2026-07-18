@@ -8,20 +8,6 @@ const difference =
     reason: string
   ): ExpectedDifference => ({ path, mssqlite, sqlServer, reason })
 
-const fixedInt =
-  (column: number): readonly ExpectedDifference[] => [
-    difference(
-      '/execution/results/0/columns/' + column + '/type',
-      'IntN', 'Int',
-      'mssqlite still uses nullable-family integer TYPE_INFO for this inferred expression.'
-    ),
-    difference(
-      '/execution/results/0/columns/' + column + '/length',
-      4, null,
-      'IntN carries a width byte while fixed INT TYPE_INFO does not.'
-    )
-  ]
-
 const missing = { kind: 'missing' }
 
 /** Reproductions from the compatibility TODO briefs present when this suite was proposed. */
@@ -38,41 +24,23 @@ export const corpus: readonly Case[] = [
   {
     name: 'system scalar result metadata',
     sourceTodo: 'scalar-result-metadata',
-    todo: 'fixed-integer-result-metadata',
     query: `
       SELECT @@TRANCOUNT AS transaction_count,
         XACT_STATE() AS transaction_state
-    `,
-    differences: [
-      ...fixedInt(0),
-      difference(
-        '/execution/results/0/columns/0/nullable',
-        true, false,
-        '@@TRANCOUNT is a non-null fixed int on SQL Server.'
-      ),
-      difference(
-        '/execution/results/0/columns/1/length',
-        4, 2,
-        'XACT_STATE() uses the nullable smallint-width integer family on SQL Server.'
-      )
-    ]
+    `
   },
   {
     name: 'implicit type conversions',
     sourceTodo: 'implicit-type-conversions',
-    todo: 'fixed-integer-result-metadata',
     query: `
       SELECT '1' + 2 AS arithmetic_value,
         CASE WHEN 1 = '1' THEN 1 ELSE 0 END AS comparison_value
-    `,
-    differences: fixedInt(1)
+    `
   },
   {
     name: 'string comparison padding',
     sourceTodo: 'string-comparison-padding',
-    todo: 'fixed-integer-result-metadata',
-    query: 'SELECT CASE WHEN \'a\' = \'a \' THEN 1 ELSE 0 END AS equal',
-    differences: fixedInt(0)
+    query: 'SELECT CASE WHEN \'a\' = \'a \' THEN 1 ELSE 0 END AS equal'
   },
   {
     name: 'table value constructor source',
@@ -91,19 +59,16 @@ export const corpus: readonly Case[] = [
       SELECT value
       FROM (VALUES (2), (1)) AS source(value)
       ORDER BY value
-    `,
-    differences: fixedInt(0)
+    `
   },
   {
     name: 'derived table apply',
     sourceTodo: 'apply-derived-tables',
-    todo: 'fixed-integer-result-metadata',
     query: `
       SELECT p.id, q.n
       FROM (SELECT 1 AS id UNION ALL SELECT 2) AS p
       CROSS APPLY (SELECT p.id + 1 AS n) AS q
-    `,
-    differences: fixedInt(0)
+    `
   },
   {
     name: 'for xml path',
@@ -164,7 +129,6 @@ export const corpus: readonly Case[] = [
   {
     name: 'identity seed and increment',
     sourceTodo: 'identity-semantics',
-    todo: 'fixed-integer-result-metadata',
     setup: `
       DROP TABLE IF EXISTS differential_identity_probe;
       CREATE TABLE differential_identity_probe (
@@ -174,8 +138,7 @@ export const corpus: readonly Case[] = [
       INSERT INTO differential_identity_probe (value) VALUES (1), (2);
     `,
     query: 'SELECT id FROM differential_identity_probe ORDER BY id',
-    cleanup: 'DROP TABLE IF EXISTS differential_identity_probe',
-    differences: fixedInt(0)
+    cleanup: 'DROP TABLE IF EXISTS differential_identity_probe'
   },
   {
     name: 'identity explicit value error',
